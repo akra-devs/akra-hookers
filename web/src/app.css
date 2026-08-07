@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+:root { color: #e8edf2; background: #101418; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+.app-shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+.rail { padding: 32px 24px; border-right: 1px solid #2a3742; background: #141b21; }
+h1, h2, p { margin: 0; }
+h1 { margin-top: 8px; font-size: 24px; }
+h2 { font-size: 20px; }
+.eyebrow { color: #72d0a4; font: 700 11px ui-monospace, monospace; letter-spacing: .12em; }
+.muted { color: #91a1ad; margin-top: 12px; }
+.provider-control { display: grid; gap: 10px; margin-top: 36px; }
+.provider-control label { display: flex; align-items: center; justify-content: space-between; color: #e8edf2; }
+.provider-control small { color: #91a1ad; line-height: 1.4; }
+.canvas-panel { position: relative; min-height: 100vh; }
+.canvas-panel header { height: 88px; display: flex; align-items: center; justify-content: space-between; padding: 0 28px; border-bottom: 1px solid #2a3742; }
+button { border: 1px solid #3b4d59; border-radius: 8px; background: #182027; color: #e8edf2; padding: 8px 12px; }
+.react-flow { height: calc(100vh - 88px); background: #101418; }
+.empty-state { position: absolute; top: 50%; left: 50%; display: grid; gap: 8px; width: min(360px, calc(100% - 48px)); transform: translate(-50%, -30%); padding: 20px; border: 1px solid #2a3742; border-radius: 12px; background: #182027; color: #91a1ad; }
+.empty-state strong { color: #e8edf2; }

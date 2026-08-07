@@ -1,0 +1,17 @@
+[workspace]
+members = [
+  "crates/akra-core",
+  "crates/akra-store",
+  "crates/akra-git",
+  "crates/akra-adapters",
+  "crates/akra-app",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

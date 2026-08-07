@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "fixture-session",
+  "turn_id": "fixture-turn",
+  "cwd": "C:\\dev\\fixture-project",
+  "model": "gpt-5.6",
+  "prompt": "add a health check"
+}
