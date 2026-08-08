@@ -35,3 +35,21 @@ fn linked_worktrees_share_project_identity() {
         linked_identity.worktree_path()
     );
 }
+
+#[test]
+fn non_git_directory_displays_itself_and_not_its_parent() {
+    let root = TempDir::new().expect("temp root");
+    let client_a = root.path().join("client-a");
+    let client_b = root.path().join("client-b");
+    std::fs::create_dir(&client_a).expect("client A directory");
+    std::fs::create_dir(&client_b).expect("client B directory");
+
+    let client_a_identity = ProjectIdentity::from_cwd(&client_a).expect("client A identity");
+    let client_b_identity = ProjectIdentity::from_cwd(&client_b).expect("client B identity");
+
+    assert_eq!(
+        client_a_identity.display_path(),
+        client_a.canonicalize().expect("canonical client A")
+    );
+    assert_ne!(client_a_identity.key(), client_b_identity.key());
+}

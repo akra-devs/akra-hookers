@@ -18,12 +18,17 @@ pub struct ProjectIdentity {
 impl ProjectIdentity {
     pub fn from_cwd(cwd: &Path) -> Result<Self, IdentityError> {
         let worktree_path = cwd.canonicalize().map_err(IdentityError::Canonicalize)?;
-        let common_dir = git_common_dir(&worktree_path).unwrap_or_else(|| worktree_path.clone());
-        let key = hex::encode(Sha256::digest(common_dir.to_string_lossy().as_bytes()));
-        let display_path = common_dir
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| worktree_path.clone());
+        let (key_path, display_path) = match git_common_dir(&worktree_path) {
+            Some(common_dir) => (
+                common_dir.clone(),
+                common_dir
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| worktree_path.clone()),
+            ),
+            None => (worktree_path.clone(), worktree_path.clone()),
+        };
+        let key = hex::encode(Sha256::digest(key_path.to_string_lossy().as_bytes()));
         Ok(Self {
             key,
             display_path,

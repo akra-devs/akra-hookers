@@ -9,6 +9,7 @@ use axum::{
 };
 use serde::Deserialize;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 #[derive(Deserialize)]
@@ -45,13 +46,19 @@ struct ActivityQuery {
 pub struct CodexLifecycleControl {
     lifecycle: Arc<akra_adapters::codex::CodexHookLifecycle>,
     command: Arc<str>,
+    capture_gate: crate::capture_gate::CaptureGate,
 }
 
 impl CodexLifecycleControl {
-    pub fn new(lifecycle: Arc<akra_adapters::codex::CodexHookLifecycle>, command: String) -> Self {
+    pub fn new(
+        lifecycle: Arc<akra_adapters::codex::CodexHookLifecycle>,
+        command: String,
+        capture_gate: crate::capture_gate::CaptureGate,
+    ) -> Self {
         Self {
             lifecycle,
             command: Arc::from(command),
+            capture_gate,
         }
     }
 }
@@ -60,10 +67,18 @@ impl CodexLifecycleControl {
 struct AppState {
     store: Arc<akra_store::ActivityStore>,
     codex: Option<CodexLifecycleControl>,
+    provider_toggle_lock: Arc<Mutex<()>>,
 }
 
 pub fn app(token: &'static str, store: Arc<akra_store::ActivityStore>) -> Router {
-    router(token, AppState { store, codex: None })
+    router(
+        token,
+        AppState {
+            store,
+            codex: None,
+            provider_toggle_lock: Arc::new(Mutex::new(())),
+        },
+    )
 }
 
 pub fn app_with_codex_lifecycle(
@@ -71,12 +86,14 @@ pub fn app_with_codex_lifecycle(
     store: Arc<akra_store::ActivityStore>,
     lifecycle: Arc<akra_adapters::codex::CodexHookLifecycle>,
     command: String,
+    capture_gate: crate::capture_gate::CaptureGate,
 ) -> Router {
     router(
         token,
         AppState {
             store,
-            codex: Some(CodexLifecycleControl::new(lifecycle, command)),
+            codex: Some(CodexLifecycleControl::new(lifecycle, command, capture_gate)),
+            provider_toggle_lock: Arc::new(Mutex::new(())),
         },
     )
 }
@@ -126,6 +143,7 @@ async fn ingest(
     State(state): State<AppState>,
     Json(payload): Json<IngressPayload>,
 ) -> Result<StatusCode, StatusCode> {
+    let _transition = state.provider_toggle_lock.lock().await;
     let store = &state.store;
     if !store
         .provider_enabled("codex")
@@ -226,8 +244,24 @@ async fn toggle_provider(
     if provider != "codex" {
         return Err(StatusCode::NOT_FOUND);
     }
-    if let Some(codex) = state.codex {
-        update_global_codex_hook(codex, toggle.enabled).await?;
+    let _transition = state.provider_toggle_lock.lock().await;
+    let previous_enabled = state
+        .store
+        .provider_enabled(&provider)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(codex) = state.codex.clone() {
+        update_global_codex_capture(codex.clone(), toggle.enabled).await?;
+        if state
+            .store
+            .set_provider_enabled(&provider, toggle.enabled)
+            .await
+            .is_err()
+        {
+            let _ = update_global_codex_capture(codex, previous_enabled).await;
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        return Ok(StatusCode::NO_CONTENT);
     }
     state
         .store
@@ -244,6 +278,7 @@ async fn provider(
     if provider != "codex" {
         return Err(StatusCode::NOT_FOUND);
     }
+    let _transition = state.provider_toggle_lock.lock().await;
     if let Some(codex) = state.codex {
         let enabled = global_codex_hook_enabled(codex).await?;
         return Ok(Json(akra_store::ProviderIntegration { provider, enabled }));
@@ -290,18 +325,37 @@ async fn update_canvas_position(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn update_global_codex_hook(
+async fn update_global_codex_capture(
     control: CodexLifecycleControl,
     enabled: bool,
 ) -> Result<(), StatusCode> {
     let lifecycle = Arc::clone(&control.lifecycle);
     let command = Arc::clone(&control.command);
+    let capture_gate = control.capture_gate;
     tokio::task::spawn_blocking(move || {
+        let previously_enabled = lifecycle.is_enabled().map_err(|error| error.to_string())?;
         if enabled {
-            lifecycle.enable(&command)
+            if !previously_enabled {
+                lifecycle
+                    .enable(&command)
+                    .map_err(|error| error.to_string())?;
+            }
+            if let Err(error) = capture_gate.set_enabled(true) {
+                if !previously_enabled {
+                    let _ = lifecycle.disable();
+                }
+                return Err(error.to_string());
+            }
         } else {
-            lifecycle.disable()
+            capture_gate
+                .set_enabled(false)
+                .map_err(|error| error.to_string())?;
+            if previously_enabled && let Err(error) = lifecycle.disable() {
+                let _ = capture_gate.set_enabled(true);
+                return Err(error.to_string());
+            }
         }
+        Ok(())
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?

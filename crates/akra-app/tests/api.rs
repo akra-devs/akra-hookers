@@ -1,7 +1,10 @@
 use std::{fs, sync::Arc};
 
 use akra_adapters::codex::CodexHookLifecycle;
-use akra_app::http::{app, app_with_codex_lifecycle};
+use akra_app::{
+    capture_gate::CaptureGate,
+    http::{app, app_with_codex_lifecycle},
+};
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -429,20 +432,71 @@ async fn provider_toggle_synchronizes_the_global_codex_manifest() {
 
     let command = r#""C:\tools\akra-hookers.exe" capture --data-dir "C:\data""#;
     let lifecycle = Arc::new(CodexHookLifecycle::new(home.path()));
+    let capture_gate = CaptureGate::new(home.path());
     lifecycle.enable(command).expect("initial hook");
     let store = Arc::new(akra_store::ActivityStore::in_memory().await.expect("store"));
     store.migrate().await.expect("migration");
-    store
+    let first_activity = store
         .record("codex", "session", "turn", "project", "history survives")
         .await
         .expect("history");
-    assert_eq!(store.canvas_nodes().await.expect("canvas").len(), 1);
+    let second_activity = store
+        .record(
+            "codex",
+            "session",
+            "turn-2",
+            "project",
+            "connected history survives",
+        )
+        .await
+        .expect("connected history");
+    let initial_nodes = store.canvas_nodes().await.expect("canvas");
+    let first_node = initial_nodes
+        .iter()
+        .find(|node| node.activity_event_id == first_activity)
+        .expect("first canvas node")
+        .id;
+    let second_node = initial_nodes
+        .iter()
+        .find(|node| node.activity_event_id == second_activity)
+        .expect("second canvas node")
+        .id;
+    store
+        .update_canvas_position(first_node, 137.0, 251.0)
+        .await
+        .expect("position");
+    store
+        .create_canvas_edge(first_node, second_node)
+        .await
+        .expect("edge");
+    let expected_nodes = store
+        .canvas_nodes()
+        .await
+        .expect("canvas")
+        .into_iter()
+        .map(|node| {
+            (
+                node.id,
+                node.activity_event_id,
+                node.position_x,
+                node.position_y,
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected_edges = store
+        .canvas_edges()
+        .await
+        .expect("canvas edges")
+        .into_iter()
+        .map(|edge| (edge.id, edge.source_node_id, edge.target_node_id))
+        .collect::<Vec<_>>();
 
     let off = app_with_codex_lifecycle(
         "fixture-token",
         Arc::clone(&store),
         Arc::clone(&lifecycle),
         command.to_owned(),
+        capture_gate.clone(),
     )
     .oneshot(
         Request::builder()
@@ -456,8 +510,35 @@ async fn provider_toggle_synchronizes_the_global_codex_manifest() {
     .await
     .expect("response");
     assert_eq!(off.status(), StatusCode::NO_CONTENT);
-    assert_eq!(store.activity_count().await.expect("history"), 1);
-    assert_eq!(store.canvas_nodes().await.expect("canvas").len(), 1);
+    assert_eq!(store.activity_count().await.expect("history"), 2);
+    assert_eq!(
+        store
+            .canvas_nodes()
+            .await
+            .expect("canvas")
+            .into_iter()
+            .map(|node| {
+                (
+                    node.id,
+                    node.activity_event_id,
+                    node.position_x,
+                    node.position_y,
+                )
+            })
+            .collect::<Vec<_>>(),
+        expected_nodes
+    );
+    assert_eq!(
+        store
+            .canvas_edges()
+            .await
+            .expect("canvas edges")
+            .into_iter()
+            .map(|edge| (edge.id, edge.source_node_id, edge.target_node_id))
+            .collect::<Vec<_>>(),
+        expected_edges
+    );
+    assert!(!capture_gate.is_enabled().expect("capture gate off"));
 
     let after_off: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(codex_directory.join("hooks.json")).expect("manifest"),
@@ -471,6 +552,7 @@ async fn provider_toggle_synchronizes_the_global_codex_manifest() {
         Arc::clone(&store),
         lifecycle,
         command.to_owned(),
+        capture_gate.clone(),
     )
     .oneshot(
         Request::builder()
@@ -484,7 +566,34 @@ async fn provider_toggle_synchronizes_the_global_codex_manifest() {
     .await
     .expect("response");
     assert_eq!(on.status(), StatusCode::NO_CONTENT);
-    assert_eq!(store.canvas_nodes().await.expect("canvas").len(), 1);
+    assert_eq!(
+        store
+            .canvas_nodes()
+            .await
+            .expect("canvas")
+            .into_iter()
+            .map(|node| {
+                (
+                    node.id,
+                    node.activity_event_id,
+                    node.position_x,
+                    node.position_y,
+                )
+            })
+            .collect::<Vec<_>>(),
+        expected_nodes
+    );
+    assert_eq!(
+        store
+            .canvas_edges()
+            .await
+            .expect("canvas edges")
+            .into_iter()
+            .map(|edge| (edge.id, edge.source_node_id, edge.target_node_id))
+            .collect::<Vec<_>>(),
+        expected_edges
+    );
+    assert!(capture_gate.is_enabled().expect("capture gate on"));
 
     let after_on: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(codex_directory.join("hooks.json")).expect("manifest"),
@@ -508,4 +617,60 @@ fn manifest_commands(manifest: &serde_json::Value) -> Vec<&str> {
         .flat_map(|group| group["hooks"].as_array().expect("hook commands"))
         .map(|hook| hook["command"].as_str().expect("command"))
         .collect()
+}
+
+#[tokio::test]
+async fn concurrent_provider_toggles_keep_manifest_gate_and_store_aligned() {
+    let home = tempfile::TempDir::new().expect("temporary Codex home");
+    let lifecycle = Arc::new(CodexHookLifecycle::new(home.path()));
+    let capture_gate = CaptureGate::new(home.path());
+    let store = Arc::new(akra_store::ActivityStore::in_memory().await.expect("store"));
+    store.migrate().await.expect("migration");
+    let router = app_with_codex_lifecycle(
+        "fixture-token",
+        Arc::clone(&store),
+        Arc::clone(&lifecycle),
+        r#""C:\tools\akra-hookers.exe" capture --data-dir "C:\data""#.to_owned(),
+        capture_gate.clone(),
+    );
+
+    let mut toggles = tokio::task::JoinSet::new();
+    for enabled in (0..32).map(|index| index % 2 == 0) {
+        let router = router.clone();
+        toggles.spawn(async move {
+            router
+                .oneshot(
+                    Request::builder()
+                        .method("PATCH")
+                        .uri("/v1/providers/codex")
+                        .header("authorization", "Bearer fixture-token")
+                        .header("content-type", "application/json")
+                        .body(Body::from(format!(r#"{{"enabled":{enabled}}}"#)))
+                        .expect("request"),
+                )
+                .await
+                .expect("response")
+        });
+    }
+    while let Some(result) = toggles.join_next().await {
+        assert_eq!(
+            result.expect("toggle task").status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+
+    let enabled = store
+        .provider_enabled("codex")
+        .await
+        .expect("provider state");
+    assert_eq!(
+        lifecycle.is_enabled().expect("manifest state"),
+        enabled,
+        "global manifest must agree with the store"
+    );
+    assert_eq!(
+        capture_gate.is_enabled().expect("capture gate state"),
+        enabled,
+        "fast capture gate must agree with the store"
+    );
 }

@@ -59,8 +59,9 @@ cat codex-hook.json | cargo run -p akra-app -- capture
 cargo run -p akra-app -- disable
 ```
 
-런타임이 꺼져 있어도 `capture`는 SQLite를 열지 않고 payload를 spool에 안전하게 저장한 뒤 즉시 종료합니다.
-다음 `serve` 시작 시 SQLite로 복구됩니다.
+런타임이 꺼져 있어도 활성화된 `capture`는 SQLite를 열지 않고 payload를 spool에 안전하게 저장한 뒤 즉시 종료합니다.
+대시보드 또는 `disable`로 끈 뒤 늦게 호출된 기존 hook은 spool을 만들지 않고 즉시 종료합니다.
+이미 spool에 수락된 payload는 이후 `serve` 시작 시 SQLite로 복구됩니다.
 
 ## 개발 검증
 

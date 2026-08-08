@@ -92,6 +92,17 @@ impl ActivityStore {
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query(
+            "DELETE FROM projects
+             WHERE identity != '__legacy__'
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM activity_events
+                 WHERE activity_events.project_identity = projects.identity
+               )",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -119,7 +130,7 @@ impl ActivityStore {
         .bind(project_path)
         .execute(&self.pool)
         .await?;
-        sqlx::query(
+        let activity_insert = sqlx::query(
             "INSERT INTO activity_events (
                 provider, provider_session_id, provider_turn_id, project_identity, prompt
              ) VALUES (?, ?, ?, ?, ?)
@@ -142,16 +153,12 @@ impl ActivityStore {
         .bind(turn_id)
         .fetch_one(&self.pool)
         .await?;
-        sqlx::query(
-            "INSERT INTO canvas_nodes (activity_event_id)
-             SELECT ? WHERE NOT EXISTS (
-               SELECT 1 FROM canvas_nodes WHERE activity_event_id = ?
-             )",
-        )
-        .bind(id)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        if activity_insert.rows_affected() == 1 {
+            sqlx::query("INSERT INTO canvas_nodes (activity_event_id) VALUES (?)")
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(id)
     }
 
