@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::{fs, sync::Arc};
 
-use akra_app::http::app;
+use akra_adapters::codex::CodexHookLifecycle;
+use akra_app::http::{app, app_with_codex_lifecycle};
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -404,4 +405,104 @@ async fn provider_toggle_changes_future_capture_without_deleting_history() {
             .await
             .expect("provider status")
     );
+}
+
+#[tokio::test]
+async fn provider_toggle_synchronizes_the_global_codex_manifest() {
+    let home = tempfile::TempDir::new().expect("temporary Codex home");
+    let codex_directory = home.path().join(".codex");
+    fs::create_dir_all(&codex_directory).expect("Codex directory");
+    fs::write(
+        codex_directory.join("hooks.json"),
+        r#"{
+          "hooks": {
+            "UserPromptSubmit": [{
+              "hooks": [{
+                "type": "command",
+                "command": "third-party-hook"
+              }]
+            }]
+          }
+        }"#,
+    )
+    .expect("third-party hook");
+
+    let command = r#""C:\tools\akra-hookers.exe" capture --data-dir "C:\data""#;
+    let lifecycle = Arc::new(CodexHookLifecycle::new(home.path()));
+    lifecycle.enable(command).expect("initial hook");
+    let store = Arc::new(akra_store::ActivityStore::in_memory().await.expect("store"));
+    store.migrate().await.expect("migration");
+    store
+        .record("codex", "session", "turn", "project", "history survives")
+        .await
+        .expect("history");
+
+    let off = app_with_codex_lifecycle(
+        "fixture-token",
+        Arc::clone(&store),
+        Arc::clone(&lifecycle),
+        command.to_owned(),
+    )
+    .oneshot(
+        Request::builder()
+            .method("PATCH")
+            .uri("/v1/providers/codex")
+            .header("authorization", "Bearer fixture-token")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"enabled":false}"#))
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+    assert_eq!(off.status(), StatusCode::NO_CONTENT);
+    assert_eq!(store.activity_count().await.expect("history"), 1);
+
+    let after_off: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(codex_directory.join("hooks.json")).expect("manifest"),
+    )
+    .expect("manifest JSON");
+    let after_off_commands = manifest_commands(&after_off);
+    assert_eq!(after_off_commands, vec!["third-party-hook"]);
+
+    let on = app_with_codex_lifecycle(
+        "fixture-token",
+        Arc::clone(&store),
+        lifecycle,
+        command.to_owned(),
+    )
+    .oneshot(
+        Request::builder()
+            .method("PATCH")
+            .uri("/v1/providers/codex")
+            .header("authorization", "Bearer fixture-token")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"enabled":true}"#))
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+    assert_eq!(on.status(), StatusCode::NO_CONTENT);
+
+    let after_on: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(codex_directory.join("hooks.json")).expect("manifest"),
+    )
+    .expect("manifest JSON");
+    let after_on_commands = manifest_commands(&after_on);
+    assert_eq!(
+        after_on_commands,
+        vec!["third-party-hook", command],
+        "ON restores only one asynchronous akra hook"
+    );
+    let hooks = &after_on["hooks"]["UserPromptSubmit"];
+    assert_eq!(hooks[1]["hooks"][0]["async"], true);
+}
+
+fn manifest_commands(manifest: &serde_json::Value) -> Vec<&str> {
+    manifest["hooks"]["UserPromptSubmit"]
+        .as_array()
+        .expect("prompt submit groups")
+        .iter()
+        .flat_map(|group| group["hooks"].as_array().expect("hook commands"))
+        .map(|hook| hook["command"].as_str().expect("command"))
+        .collect()
 }

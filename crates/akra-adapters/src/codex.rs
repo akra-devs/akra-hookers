@@ -29,6 +29,13 @@ impl CodexHookLifecycle {
             .ok_or(CodexLifecycleError::MissingManifestParent)?;
         fs::create_dir_all(parent)?;
         let mut hooks = self.read_hooks()?;
+        for group in &mut hooks.hooks.user_prompt_submit {
+            group.hooks.retain(|hook| !hook.is_akra_hook());
+        }
+        hooks
+            .hooks
+            .user_prompt_submit
+            .retain(|group| !group.hooks.is_empty());
         hooks
             .hooks
             .user_prompt_submit

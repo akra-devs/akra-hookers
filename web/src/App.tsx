@@ -137,7 +137,7 @@ export function App() {
               }}
             />
           </label>
-          <small>Changes future capture only.</small>
+          <small>Installs or removes the global Codex capture hook.</small>
         </section>
         <section className="provider-control" aria-label="Project filter">
           <p className="eyebrow">PROJECT</p>

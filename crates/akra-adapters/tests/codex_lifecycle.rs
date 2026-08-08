@@ -76,6 +76,43 @@ fn enable_creates_missing_hooks_configuration() {
     );
 }
 
+#[test]
+fn enable_is_idempotent_for_dashboard_repeated_on_actions() {
+    let home = TempDir::new().expect("home directory");
+    let lifecycle = CodexHookLifecycle::new(home.path());
+
+    lifecycle
+        .enable(r#"C:\tools\akra-hookers.exe capture --data-dir C:\data"#)
+        .expect("first enable");
+    lifecycle
+        .enable(r#"C:\tools\akra-hookers.exe capture --data-dir C:\data"#)
+        .expect("second enable");
+
+    let hooks = read_hooks(&home.path().join(".codex").join("hooks.json"));
+    assert_eq!(
+        commands(&hooks),
+        vec![r#"C:\tools\akra-hookers.exe capture --data-dir C:\data"#]
+    );
+}
+
+#[test]
+fn enable_replaces_a_stale_managed_command_with_the_current_async_command() {
+    let home = TempDir::new().expect("home directory");
+    let lifecycle = CodexHookLifecycle::new(home.path());
+    let stale = r#"C:\old\akra-hookers.exe capture --data-dir C:\old-data"#;
+    let current = r#"C:\current\akra-hookers.exe capture --data-dir C:\current-data"#;
+
+    lifecycle.enable(stale).expect("stale hook");
+    lifecycle.enable(current).expect("current hook");
+
+    let hooks = read_hooks(&home.path().join(".codex").join("hooks.json"));
+    assert_eq!(commands(&hooks), vec![current]);
+    assert_eq!(
+        hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]["async"],
+        true
+    );
+}
+
 fn read_hooks(path: &Path) -> serde_json::Value {
     serde_json::from_str(&fs::read_to_string(path).expect("hooks")).expect("valid hooks json")
 }

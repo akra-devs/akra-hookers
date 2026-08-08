@@ -6,6 +6,7 @@
 - Git worktree는 같은 프로젝트로 묶습니다.
 - 활동 기록은 불변이며, 캔버스 노드·위치·연결은 자유롭게 이동하거나 삭제할 수 있습니다.
 - 대시보드에서 provider별 캡처를 켜고 끌 수 있습니다. 끄더라도 기존 기록과 실행 중인 에이전트에는 영향이 없습니다.
+- Codex 토글은 전역 `~/.codex/hooks.json`의 akra hook을 직접 등록하거나 제거합니다. 다른 hook은 유지됩니다.
 
 ## 개인정보와 범위
 
@@ -58,7 +59,8 @@ cat codex-hook.json | cargo run -p akra-app -- capture
 cargo run -p akra-app -- disable
 ```
 
-런타임이 꺼져 있어도 `capture`는 payload를 spool에 안전하게 저장합니다. 다음 `serve` 시작 시 SQLite로 복구됩니다.
+런타임이 꺼져 있어도 `capture`는 SQLite를 열지 않고 payload를 spool에 안전하게 저장한 뒤 즉시 종료합니다.
+다음 `serve` 시작 시 SQLite로 복구됩니다.
 
 ## 개발 검증
 
