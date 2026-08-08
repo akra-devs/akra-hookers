@@ -20,14 +20,16 @@
 ## 시작하기
 
 ```bash
-# Codex 훅 설치
+# Codex 전역 훅 설치 (~/.codex/hooks.json)
 cargo run -p akra-app -- setup
 
 # 로컬 런타임 시작
-cargo run -p akra-app -- serve --port 3000 --data-dir .akra-hookers
+cargo run -p akra-app -- serve --port 3000
 ```
 
 `serve` 출력의 `url`과 `token`을 이용해 대시보드를 실행합니다.
+`setup`, `capture`, `serve`는 기본적으로 같은 OS 사용자 데이터 디렉터리를 사용합니다.
+필요하면 모든 명령에 동일한 `--data-dir <경로>`를 지정할 수 있습니다.
 
 ```bash
 cd web
@@ -47,10 +49,10 @@ cargo run -p akra-app -- setup
 cargo run -p akra-app -- status
 
 # 로컬 런타임
-cargo run -p akra-app -- serve --port 3000 --data-dir .akra-hookers
+cargo run -p akra-app -- serve --port 3000
 
 # 훅 payload 수동 수집 (표준 입력)
-cat codex-hook.json | cargo run -p akra-app -- capture --data-dir .akra-hookers
+cat codex-hook.json | cargo run -p akra-app -- capture
 
 # Codex 캡처 비활성화
 cargo run -p akra-app -- disable

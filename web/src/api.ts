@@ -6,6 +6,16 @@ export type Activity = {
   prompt: string;
 };
 
+export type Project = {
+  identity: string;
+  display_path: string;
+};
+
+export type ProviderIntegration = {
+  provider: string;
+  enabled: boolean;
+};
+
 export type CanvasNode = {
   id: number;
   activity_event_id: number;
@@ -20,14 +30,16 @@ export type CanvasEdge = {
 };
 
 export type ApiClient = {
-  activities(): Promise<Activity[]>;
+  activities(project?: string): Promise<Activity[]>;
   canvas(): Promise<CanvasNode[]>;
+  clearCanvas(): Promise<void>;
   deleteCanvasNode(nodeId: number): Promise<void>;
   createCanvasEdge(sourceNodeId: number, targetNodeId: number): Promise<void>;
   edges(): Promise<CanvasEdge[]>;
   updateCanvasPosition(nodeId: number, position: { x: number; y: number }): Promise<void>;
   setProviderEnabled(provider: string, enabled: boolean): Promise<void>;
-  projects(): Promise<string[]>;
+  provider(provider: string): Promise<ProviderIntegration>;
+  projects(): Promise<Project[]>;
 };
 
 type Fetch = typeof fetch;
@@ -55,8 +67,11 @@ export function createApiClient(baseUrl: string, token: string, fetcher: Fetch =
   }
 
   return {
-    activities: () => get<Activity[]>("/v1/activities"),
+    activities: (project) => get<Activity[]>(
+      project ? `/v1/activities?project=${encodeURIComponent(project)}` : "/v1/activities",
+    ),
     canvas: () => get<CanvasNode[]>("/v1/canvas"),
+    clearCanvas: () => send("/v1/canvas", "DELETE"),
     edges: () => get<CanvasEdge[]>("/v1/canvas/edges"),
     createCanvasEdge: (sourceNodeId, targetNodeId) => send("/v1/canvas/edges", "POST", {
       source_node_id: sourceNodeId,
@@ -68,6 +83,7 @@ export function createApiClient(baseUrl: string, token: string, fetcher: Fetch =
       position_y: position.y,
     }),
     setProviderEnabled: (provider, enabled) => send(`/v1/providers/${provider}`, "PATCH", { enabled }),
-    projects: () => get<string[]>("/v1/projects"),
+    provider: (provider) => get<ProviderIntegration>(`/v1/providers/${provider}`),
+    projects: () => get<Project[]>("/v1/projects"),
   };
 }

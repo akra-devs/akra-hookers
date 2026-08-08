@@ -10,22 +10,24 @@ export type ActivityNodeData = {
 
 export function toCanvasNodes(
   activities: Activity[],
-  canvasNodes: CanvasNode[] = [],
+  canvasNodes: CanvasNode[],
 ): Node<ActivityNodeData>[] {
-  return activities.map((activity, index) => ({
-    id: `activity-${activity.id}`,
-    position: positionFor(activity.id, index, canvasNodes),
-    data: {
-      provider: activity.provider,
-      prompt: activity.prompt,
-      sessionId: activity.session_id,
-    },
-  }));
-}
-
-function positionFor(activityId: number, index: number, canvasNodes: CanvasNode[]) {
-  const canvasNode = canvasNodes.find((node) => node.activity_event_id === activityId);
-  return canvasNode
-    ? { x: canvasNode.position_x, y: canvasNode.position_y }
-    : { x: 64 + (index % 3) * 280, y: 64 + Math.floor(index / 3) * 180 };
+  const canvasByActivity = new Map(
+    canvasNodes.map((node) => [node.activity_event_id, node]),
+  );
+  return activities.flatMap((activity) => {
+    const canvasNode = canvasByActivity.get(activity.id);
+    if (!canvasNode) {
+      return [];
+    }
+    return [{
+      id: `activity-${activity.id}`,
+      position: { x: canvasNode.position_x, y: canvasNode.position_y },
+      data: {
+        provider: activity.provider,
+        prompt: activity.prompt,
+        sessionId: activity.session_id,
+      },
+    }];
+  });
 }

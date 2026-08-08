@@ -2,7 +2,8 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY,
-  identity TEXT NOT NULL UNIQUE
+  identity TEXT NOT NULL UNIQUE,
+  display_path TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS activity_events (
@@ -10,6 +11,7 @@ CREATE TABLE IF NOT EXISTS activity_events (
   provider TEXT NOT NULL,
   provider_session_id TEXT NOT NULL,
   provider_turn_id TEXT NOT NULL,
+  project_identity TEXT NOT NULL DEFAULT '',
   prompt TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(provider, provider_session_id, provider_turn_id)

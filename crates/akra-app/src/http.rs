@@ -1,14 +1,15 @@
 use axum::{
     Router,
     body::Body,
-    extract::{Json, Path, State},
-    http::{Request, StatusCode, header},
+    extract::{Json, Path, Query, State},
+    http::{Method, Request, StatusCode, header},
     middleware::{self, Next},
     response::Response,
     routing::{delete, get, post},
 };
 use serde::Deserialize;
 use std::sync::Arc;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 #[derive(Deserialize)]
 struct IngressPayload {
@@ -35,19 +36,24 @@ struct ProviderToggle {
     enabled: bool,
 }
 
+#[derive(Deserialize)]
+struct ActivityQuery {
+    project: Option<String>,
+}
+
 pub fn app(token: &'static str, store: Arc<akra_store::ActivityStore>) -> Router {
     Router::new()
         .route("/v1/ingest", post(ingest))
         .route("/v1/projects", get(projects))
         .route("/v1/activities", get(activities))
-        .route("/v1/canvas", get(canvas))
+        .route("/v1/canvas", get(canvas).delete(clear_canvas))
         .route(
             "/v1/canvas/edges",
             get(canvas_edges).post(create_canvas_edge),
         )
         .route(
             "/v1/providers/{provider}",
-            post(toggle_provider).patch(toggle_provider),
+            get(provider).post(toggle_provider).patch(toggle_provider),
         )
         .route(
             "/v1/canvas/{node_id}",
@@ -56,6 +62,23 @@ pub fn app(token: &'static str, store: Arc<akra_store::ActivityStore>) -> Router
         .layer(middleware::from_fn(move |request, next| {
             authorize(request, next, token)
         }))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::predicate(|origin, _request_parts| {
+                    origin.to_str().is_ok_and(|origin| {
+                        origin.starts_with("http://127.0.0.1:")
+                            || origin.starts_with("http://localhost:")
+                    })
+                }))
+                .allow_methods([
+                    Method::DELETE,
+                    Method::GET,
+                    Method::OPTIONS,
+                    Method::PATCH,
+                    Method::POST,
+                ])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+        )
         .with_state(store)
 }
 
@@ -85,9 +108,9 @@ async fn ingest(
 
 async fn projects(
     State(store): State<Arc<akra_store::ActivityStore>>,
-) -> Result<Json<Vec<String>>, StatusCode> {
+) -> Result<Json<Vec<akra_store::ProjectSummary>>, StatusCode> {
     store
-        .project_identities()
+        .projects()
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -95,9 +118,10 @@ async fn projects(
 
 async fn activities(
     State(store): State<Arc<akra_store::ActivityStore>>,
+    Query(query): Query<ActivityQuery>,
 ) -> Result<Json<Vec<akra_store::ActivitySummary>>, StatusCode> {
     store
-        .activities()
+        .activities_for_project(query.project.as_deref())
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -117,6 +141,20 @@ async fn create_canvas_edge(
     State(store): State<Arc<akra_store::ActivityStore>>,
     Json(edge): Json<CanvasEdge>,
 ) -> Result<StatusCode, StatusCode> {
+    if edge.source_node_id == edge.target_node_id {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    if !store
+        .canvas_node_exists(edge.source_node_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        || !store
+            .canvas_node_exists(edge.target_node_id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
     store
         .create_canvas_edge(edge.source_node_id, edge.target_node_id)
         .await
@@ -139,8 +177,35 @@ async fn toggle_provider(
     Path(provider): Path<String>,
     Json(toggle): Json<ProviderToggle>,
 ) -> Result<StatusCode, StatusCode> {
+    if provider != "codex" {
+        return Err(StatusCode::NOT_FOUND);
+    }
     store
         .set_provider_enabled(&provider, toggle.enabled)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn provider(
+    State(store): State<Arc<akra_store::ActivityStore>>,
+    Path(provider): Path<String>,
+) -> Result<Json<akra_store::ProviderIntegration>, StatusCode> {
+    if provider != "codex" {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    store
+        .provider(&provider)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn clear_canvas(
+    State(store): State<Arc<akra_store::ActivityStore>>,
+) -> Result<StatusCode, StatusCode> {
+    store
+        .clear_canvas()
         .await
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)

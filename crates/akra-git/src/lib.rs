@@ -11,6 +11,7 @@ use thiserror::Error;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectIdentity {
     key: String,
+    display_path: PathBuf,
     worktree_path: PathBuf,
 }
 
@@ -19,7 +20,15 @@ impl ProjectIdentity {
         let worktree_path = cwd.canonicalize().map_err(IdentityError::Canonicalize)?;
         let common_dir = git_common_dir(&worktree_path).unwrap_or_else(|| worktree_path.clone());
         let key = hex::encode(Sha256::digest(common_dir.to_string_lossy().as_bytes()));
-        Ok(Self { key, worktree_path })
+        let display_path = common_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| worktree_path.clone());
+        Ok(Self {
+            key,
+            display_path,
+            worktree_path,
+        })
     }
 
     pub fn key(&self) -> &str {
@@ -28,6 +37,10 @@ impl ProjectIdentity {
 
     pub fn worktree_path(&self) -> &Path {
         &self.worktree_path
+    }
+
+    pub fn display_path(&self) -> &Path {
+        &self.display_path
     }
 }
 

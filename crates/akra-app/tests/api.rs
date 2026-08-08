@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use akra_app::http::app;
 use axum::{
-    body::Body,
+    body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
 use tower::ServiceExt;
@@ -29,6 +29,129 @@ async fn rejects_ingest_without_bearer_capability() {
         .expect("response");
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn activity_queries_are_scoped_to_the_requested_project() {
+    let store = Arc::new(akra_store::ActivityStore::in_memory().await.expect("store"));
+    store.migrate().await.expect("migration");
+    let app = app("fixture-token", Arc::clone(&store));
+
+    for (turn_id, cwd, prompt) in [
+        ("one", "project-one", "first project"),
+        ("two", "project-two", "second project"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/ingest")
+                    .header("authorization", "Bearer fixture-token")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"session_id":"session","turn_id":"{turn_id}","cwd":"{cwd}","prompt":"{prompt}"}}"#
+                    )))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/activities?project=project-one")
+                .header("authorization", "Bearer fixture-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let activities: Vec<serde_json::Value> = serde_json::from_slice(&body).expect("JSON");
+
+    assert_eq!(activities.len(), 1);
+    assert_eq!(activities[0]["prompt"], "first project");
+}
+
+#[tokio::test]
+async fn permits_local_dashboard_cors_preflight() {
+    let response = test_app()
+        .await
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/v1/activities")
+                .header("origin", "http://127.0.0.1:5174")
+                .header("access-control-request-method", "GET")
+                .header("access-control-request-headers", "authorization")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert!(response.status().is_success());
+    assert_eq!(
+        response.headers().get("access-control-allow-origin"),
+        Some(&"http://127.0.0.1:5174".parse().expect("header"))
+    );
+}
+
+#[tokio::test]
+async fn rejects_canvas_edges_for_unknown_nodes_as_client_input() {
+    let response = test_app()
+        .await
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/canvas/edges")
+                .header("authorization", "Bearer fixture-token")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"source_node_id":99,"target_node_id":100}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn clearing_canvas_preserves_immutable_activities() {
+    let store = Arc::new(akra_store::ActivityStore::in_memory().await.expect("store"));
+    store.migrate().await.expect("migration");
+    let activity_id = store
+        .record("codex", "session", "turn", "project", "keep immutable")
+        .await
+        .expect("activity");
+    store
+        .create_canvas_node(activity_id)
+        .await
+        .expect("canvas node");
+
+    let response = app("fixture-token", Arc::clone(&store))
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v1/canvas")
+                .header("authorization", "Bearer fixture-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(store.activity_count().await.expect("activity count"), 1);
+    assert!(
+        store.canvas_nodes().await.expect("canvas nodes").is_empty(),
+        "canvas-only clear must not recreate or retain nodes"
+    );
 }
 
 #[tokio::test]
