@@ -40,6 +40,50 @@ async fn deleting_canvas_state_does_not_delete_activity() {
 }
 
 #[tokio::test]
+async fn duplicate_ingress_does_not_recreate_a_deleted_canvas_node() {
+    let store = ActivityStore::in_memory().await.expect("database opens");
+    store.migrate().await.expect("migrations apply");
+    let activity_id = store
+        .record(
+            "codex",
+            "session-cleared",
+            "turn-cleared",
+            "C:\\project",
+            "keep deleted",
+        )
+        .await
+        .expect("event records");
+    let node_id = store
+        .canvas_nodes()
+        .await
+        .expect("canvas nodes")
+        .into_iter()
+        .find(|node| node.activity_event_id == activity_id)
+        .expect("initial canvas node")
+        .id;
+    store
+        .delete_canvas_node(node_id)
+        .await
+        .expect("canvas node deletes");
+
+    store
+        .record(
+            "codex",
+            "session-cleared",
+            "turn-cleared",
+            "C:\\project",
+            "keep deleted",
+        )
+        .await
+        .expect("duplicate is accepted");
+
+    assert!(
+        store.canvas_nodes().await.expect("canvas nodes").is_empty(),
+        "duplicate delivery must not restore a deliberately deleted canvas node"
+    );
+}
+
+#[tokio::test]
 async fn canvas_positions_persist_independently_of_activity() {
     let store = ActivityStore::in_memory().await.expect("database opens");
     store.migrate().await.expect("migrations apply");

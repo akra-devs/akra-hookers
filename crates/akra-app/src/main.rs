@@ -44,6 +44,8 @@ enum Command {
     Disable {
         #[arg(long)]
         home: Option<std::path::PathBuf>,
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
     },
     /// Inspect normalized local project identity.
     Debug {
@@ -73,6 +75,9 @@ async fn main() {
             lifecycle
                 .enable(&akra_app::paths::hook_command(&executable, &data_dir))
                 .expect("Codex hook enable");
+            akra_app::capture_gate::CaptureGate::new(&data_dir)
+                .set_enabled(true)
+                .expect("capture gate enable");
             println!("codex=enabled");
         }
         Command::Status { home } => {
@@ -85,14 +90,24 @@ async fn main() {
             };
             println!("codex={status}");
         }
-        Command::Disable { home } => {
+        Command::Disable { home, data_dir } => {
             let home = home.unwrap_or_else(akra_app::paths::user_home);
+            let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
+            akra_app::capture_gate::CaptureGate::new(&data_dir)
+                .set_enabled(false)
+                .expect("capture gate disable");
             let lifecycle = akra_adapters::codex::CodexHookLifecycle::new(&home);
             lifecycle.disable().expect("Codex hook disable");
             println!("codex=disabled");
         }
         Command::Capture { data_dir } => {
             let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
+            if !akra_app::capture_gate::CaptureGate::new(&data_dir)
+                .is_enabled()
+                .unwrap_or(false)
+            {
+                return;
+            }
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input).expect("stdin");
             if let Err(error) = akra_adapters::codex::CodexAdapter::normalize(&input) {
@@ -112,6 +127,12 @@ async fn main() {
             let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
             let home = home.unwrap_or_else(akra_app::paths::user_home);
             std::fs::create_dir_all(&data_dir).expect("data directory");
+            let lifecycle =
+                std::sync::Arc::new(akra_adapters::codex::CodexHookLifecycle::new(&home));
+            let capture_gate = akra_app::capture_gate::CaptureGate::new(&data_dir);
+            capture_gate
+                .set_enabled(lifecycle.is_enabled().expect("Codex hook status"))
+                .expect("capture gate synchronization");
             let store = std::sync::Arc::new(
                 akra_store::ActivityStore::open(&data_dir.join("akra-hookers.sqlite"))
                     .await
@@ -134,16 +155,6 @@ async fn main() {
                         continue;
                     }
                 };
-                if !store
-                    .provider_enabled(event.provider().as_str())
-                    .await
-                    .expect("provider state")
-                {
-                    spool
-                        .acknowledge(item)
-                        .expect("disabled spool acknowledgement");
-                    continue;
-                }
                 match store
                     .record(
                         event.provider().as_str(),
@@ -164,8 +175,6 @@ async fn main() {
             let address = listener.local_addr().expect("address");
             let token = Box::leak(format!("akra-{}", Uuid::new_v4()).into_boxed_str());
             let executable = std::env::current_exe().expect("current executable");
-            let lifecycle =
-                std::sync::Arc::new(akra_adapters::codex::CodexHookLifecycle::new(&home));
             println!("ready url=http://{address} token={token}");
             axum::serve(
                 listener,
@@ -174,6 +183,7 @@ async fn main() {
                     store,
                     lifecycle,
                     akra_app::paths::hook_command(&executable, &data_dir),
+                    capture_gate,
                 ),
             )
             .await
