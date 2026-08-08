@@ -4,15 +4,18 @@ import { toCanvasNodes } from "./canvas";
 
 describe("toCanvasNodes", () => {
   it("creates a stable removable node per immutable activity", () => {
-    const nodes = toCanvasNodes([
-      {
-        id: 9,
-        provider: "codex",
-        session_id: "session",
-        turn_id: "turn",
-        prompt: "Add a health endpoint",
-      },
-    ]);
+    const nodes = toCanvasNodes(
+      [
+        {
+          id: 9,
+          provider: "codex",
+          session_id: "session",
+          turn_id: "turn",
+          prompt: "Add a health endpoint",
+        },
+      ],
+      [{ id: 3, activity_event_id: 9, position_x: 64, position_y: 64 }],
+    );
 
     expect(nodes).toMatchObject([
       {
@@ -30,5 +33,14 @@ describe("toCanvasNodes", () => {
     );
 
     expect(nodes[0]?.position).toEqual({ x: 120, y: 220 });
+  });
+
+  it("does not recreate an activity whose removable canvas node is absent", () => {
+    const nodes = toCanvasNodes(
+      [{ id: 9, provider: "codex", session_id: "s", turn_id: "t", prompt: "removed" }],
+      [],
+    );
+
+    expect(nodes).toEqual([]);
   });
 });

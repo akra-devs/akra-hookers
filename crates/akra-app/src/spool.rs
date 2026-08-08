@@ -3,14 +3,26 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub struct Spool {
     directory: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct SpoolItem {
+    path: PathBuf,
+    payload: Vec<u8>,
+}
+
+impl SpoolItem {
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
 }
 
 impl Spool {
@@ -22,18 +34,23 @@ impl Spool {
     }
 
     pub fn enqueue(&self, payload: &[u8]) -> Result<(), SpoolError> {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| SpoolError::ClockBeforeEpoch)?
-            .as_nanos();
-        let pending = self.directory.join(format!("{stamp}.pending"));
-        let temporary = self.directory.join(format!("{stamp}.tmp"));
+        let key = Uuid::new_v4();
+        let pending = self.directory.join(format!("{key}.pending"));
+        let temporary = self.directory.join(format!("{key}.tmp"));
         fs::write(&temporary, payload)?;
         fs::rename(temporary, pending)?;
         Ok(())
     }
 
     pub fn drain(&self) -> Result<Vec<Vec<u8>>, SpoolError> {
+        Ok(self
+            .pending()?
+            .into_iter()
+            .map(|item| item.payload)
+            .collect())
+    }
+
+    pub fn pending(&self) -> Result<Vec<SpoolItem>, SpoolError> {
         let mut paths = fs::read_dir(&self.directory)?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
@@ -44,12 +61,19 @@ impl Spool {
             .collect::<Vec<_>>();
         paths.sort();
 
-        let mut payloads = Vec::with_capacity(paths.len());
+        let mut items = Vec::with_capacity(paths.len());
         for path in paths {
-            payloads.push(fs::read(&path)?);
-            fs::remove_file(path)?;
+            items.push(SpoolItem {
+                payload: fs::read(&path)?,
+                path,
+            });
         }
-        Ok(payloads)
+        Ok(items)
+    }
+
+    pub fn acknowledge(&self, item: SpoolItem) -> Result<(), SpoolError> {
+        fs::remove_file(item.path)?;
+        Ok(())
     }
 }
 
@@ -57,6 +81,4 @@ impl Spool {
 pub enum SpoolError {
     #[error("filesystem operation failed: {0}")]
     Io(#[from] std::io::Error),
-    #[error("system clock is before Unix epoch")]
-    ClockBeforeEpoch,
 }

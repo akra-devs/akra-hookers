@@ -3,6 +3,7 @@
 use std::io::Read;
 
 use clap::{Parser, Subcommand};
+use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 #[command(name = "akra-hookers", about = "Local coding-agent activity map")]
@@ -15,30 +16,32 @@ struct Cli {
 enum Command {
     /// Configure all detected provider integrations.
     Setup {
-        #[arg(long, default_value = ".")]
-        home: std::path::PathBuf,
+        #[arg(long)]
+        home: Option<std::path::PathBuf>,
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
     },
     /// Run the localhost runtime.
     Serve {
         #[arg(long, default_value_t = 0)]
         port: u16,
-        #[arg(long, default_value = ".akra-hookers")]
-        data_dir: std::path::PathBuf,
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
     },
     /// Capture a provider prompt from standard input.
     Capture {
-        #[arg(long, default_value = ".akra-hookers")]
-        data_dir: std::path::PathBuf,
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
     },
     /// Report local runtime and provider status.
     Status {
-        #[arg(long, default_value = ".")]
-        home: std::path::PathBuf,
+        #[arg(long)]
+        home: Option<std::path::PathBuf>,
     },
     /// Disable akra-managed Codex prompt capture.
     Disable {
-        #[arg(long, default_value = ".")]
-        home: std::path::PathBuf,
+        #[arg(long)]
+        home: Option<std::path::PathBuf>,
     },
     /// Inspect normalized local project identity.
     Debug {
@@ -60,14 +63,18 @@ enum DebugCommand {
 async fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Command::Setup { home } => {
+        Command::Setup { home, data_dir } => {
+            let home = home.unwrap_or_else(akra_app::paths::user_home);
+            let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
             let lifecycle = akra_adapters::codex::CodexHookLifecycle::new(&home);
+            let executable = std::env::current_exe().expect("current executable");
             lifecycle
-                .enable("akra-hookers capture")
+                .enable(&akra_app::paths::hook_command(&executable, &data_dir))
                 .expect("Codex hook enable");
             println!("codex=enabled");
         }
         Command::Status { home } => {
+            let home = home.unwrap_or_else(akra_app::paths::user_home);
             let lifecycle = akra_adapters::codex::CodexHookLifecycle::new(&home);
             let status = if lifecycle.is_enabled().expect("Codex hook status") {
                 "enabled"
@@ -77,11 +84,13 @@ async fn main() {
             println!("codex={status}");
         }
         Command::Disable { home } => {
+            let home = home.unwrap_or_else(akra_app::paths::user_home);
             let lifecycle = akra_adapters::codex::CodexHookLifecycle::new(&home);
             lifecycle.disable().expect("Codex hook disable");
             println!("codex=disabled");
         }
         Command::Capture { data_dir } => {
+            let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input).expect("stdin");
             let event = match akra_adapters::codex::CodexAdapter::normalize(&input) {
@@ -91,20 +100,24 @@ async fn main() {
                     std::process::exit(2);
                 }
             };
+            let store = akra_store::ActivityStore::open(&data_dir.join("akra-hookers.sqlite"))
+                .await
+                .expect("store");
+            store.migrate().await.expect("migration");
+            if !store
+                .provider_enabled(event.provider().as_str())
+                .await
+                .expect("provider state")
+            {
+                return;
+            }
             akra_app::spool::Spool::open(&data_dir.join("spool"))
                 .expect("spool")
                 .enqueue(input.as_bytes())
                 .expect("spool enqueue");
-            println!(
-                "{}",
-                serde_json::json!({
-                    "provider": event.provider().as_str(),
-                    "prompt": event.prompt(),
-                    "status": "spooled"
-                })
-            );
         }
         Command::Serve { port, data_dir } => {
+            let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
             std::fs::create_dir_all(&data_dir).expect("data directory");
             let store = std::sync::Arc::new(
                 akra_store::ActivityStore::open(&data_dir.join("akra-hookers.sqlite"))
@@ -113,11 +126,32 @@ async fn main() {
             );
             store.migrate().await.expect("migration");
             let spool = akra_app::spool::Spool::open(&data_dir.join("spool")).expect("spool");
-            for payload in spool.drain().expect("spool drain") {
-                let input = String::from_utf8(payload).expect("spooled UTF-8");
-                let event = akra_adapters::codex::CodexAdapter::normalize(&input)
-                    .expect("valid spooled Codex payload");
-                store
+            for item in spool.pending().expect("spool pending") {
+                let input = match std::str::from_utf8(item.payload()) {
+                    Ok(input) => input,
+                    Err(error) => {
+                        eprintln!("retaining invalid spool payload: {error}");
+                        continue;
+                    }
+                };
+                let event = match akra_adapters::codex::CodexAdapter::normalize(input) {
+                    Ok(event) => event,
+                    Err(error) => {
+                        eprintln!("retaining invalid spool payload: {error}");
+                        continue;
+                    }
+                };
+                if !store
+                    .provider_enabled(event.provider().as_str())
+                    .await
+                    .expect("provider state")
+                {
+                    spool
+                        .acknowledge(item)
+                        .expect("disabled spool acknowledgement");
+                    continue;
+                }
+                match store
                     .record(
                         event.provider().as_str(),
                         event.session_id(),
@@ -126,22 +160,16 @@ async fn main() {
                         event.prompt(),
                     )
                     .await
-                    .expect("spool record");
+                {
+                    Ok(_) => spool.acknowledge(item).expect("spool acknowledgement"),
+                    Err(error) => eprintln!("retaining spool payload after store error: {error}"),
+                }
             }
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
                 .await
                 .expect("listener");
             let address = listener.local_addr().expect("address");
-            let token = Box::leak(
-                format!(
-                    "akra-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .expect("clock")
-                        .as_nanos()
-                )
-                .into_boxed_str(),
-            );
+            let token = Box::leak(format!("akra-{}", Uuid::new_v4()).into_boxed_str());
             println!("ready url=http://{address} token={token}");
             axum::serve(listener, akra_app::http::app(token, store))
                 .await
