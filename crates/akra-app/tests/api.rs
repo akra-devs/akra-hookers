@@ -436,6 +436,7 @@ async fn provider_toggle_synchronizes_the_global_codex_manifest() {
         .record("codex", "session", "turn", "project", "history survives")
         .await
         .expect("history");
+    assert_eq!(store.canvas_nodes().await.expect("canvas").len(), 1);
 
     let off = app_with_codex_lifecycle(
         "fixture-token",
@@ -456,6 +457,7 @@ async fn provider_toggle_synchronizes_the_global_codex_manifest() {
     .expect("response");
     assert_eq!(off.status(), StatusCode::NO_CONTENT);
     assert_eq!(store.activity_count().await.expect("history"), 1);
+    assert_eq!(store.canvas_nodes().await.expect("canvas").len(), 1);
 
     let after_off: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(codex_directory.join("hooks.json")).expect("manifest"),
@@ -482,6 +484,7 @@ async fn provider_toggle_synchronizes_the_global_codex_manifest() {
     .await
     .expect("response");
     assert_eq!(on.status(), StatusCode::NO_CONTENT);
+    assert_eq!(store.canvas_nodes().await.expect("canvas").len(), 1);
 
     let after_on: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(codex_directory.join("hooks.json")).expect("manifest"),
