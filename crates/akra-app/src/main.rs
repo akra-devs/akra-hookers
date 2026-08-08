@@ -27,6 +27,8 @@ enum Command {
         port: u16,
         #[arg(long)]
         data_dir: Option<std::path::PathBuf>,
+        #[arg(long)]
+        home: Option<std::path::PathBuf>,
     },
     /// Capture a provider prompt from standard input.
     Capture {
@@ -93,31 +95,22 @@ async fn main() {
             let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
             let mut input = String::new();
             std::io::stdin().read_to_string(&mut input).expect("stdin");
-            let event = match akra_adapters::codex::CodexAdapter::normalize(&input) {
-                Ok(event) => event,
-                Err(error) => {
-                    eprintln!("invalid Codex UserPromptSubmit payload: {error}");
-                    std::process::exit(2);
-                }
-            };
-            let store = akra_store::ActivityStore::open(&data_dir.join("akra-hookers.sqlite"))
-                .await
-                .expect("store");
-            store.migrate().await.expect("migration");
-            if !store
-                .provider_enabled(event.provider().as_str())
-                .await
-                .expect("provider state")
-            {
-                return;
+            if let Err(error) = akra_adapters::codex::CodexAdapter::normalize(&input) {
+                eprintln!("invalid Codex UserPromptSubmit payload: {error}");
+                std::process::exit(2);
             }
             akra_app::spool::Spool::open(&data_dir.join("spool"))
                 .expect("spool")
                 .enqueue(input.as_bytes())
                 .expect("spool enqueue");
         }
-        Command::Serve { port, data_dir } => {
+        Command::Serve {
+            port,
+            data_dir,
+            home,
+        } => {
             let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
+            let home = home.unwrap_or_else(akra_app::paths::user_home);
             std::fs::create_dir_all(&data_dir).expect("data directory");
             let store = std::sync::Arc::new(
                 akra_store::ActivityStore::open(&data_dir.join("akra-hookers.sqlite"))
@@ -170,10 +163,21 @@ async fn main() {
                 .expect("listener");
             let address = listener.local_addr().expect("address");
             let token = Box::leak(format!("akra-{}", Uuid::new_v4()).into_boxed_str());
+            let executable = std::env::current_exe().expect("current executable");
+            let lifecycle =
+                std::sync::Arc::new(akra_adapters::codex::CodexHookLifecycle::new(&home));
             println!("ready url=http://{address} token={token}");
-            axum::serve(listener, akra_app::http::app(token, store))
-                .await
-                .expect("server");
+            axum::serve(
+                listener,
+                akra_app::http::app_with_codex_lifecycle(
+                    token,
+                    store,
+                    lifecycle,
+                    akra_app::paths::hook_command(&executable, &data_dir),
+                ),
+            )
+            .await
+            .expect("server");
         }
         Command::Debug {
             command: DebugCommand::ProjectId { cwd },
