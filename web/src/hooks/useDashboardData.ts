@@ -133,7 +133,7 @@ export function useDashboardData(client: ApiClient | null, activityScope: Activi
   const hasOlderActivities = olderActivitiesHaveMore
     ?? activities.data?.length === ACTIVITY_PAGE_SIZE;
   const loadOlderActivities = useCallback(async () => {
-    const cursor = activityItems.at(-1)?.id;
+    const cursor = olderActivities.at(-1)?.id ?? activities.data?.at(-1)?.id;
     if (!client || cursor === undefined || !hasOlderActivities) return;
     setLoadingOlderActivities(true);
     setOlderActivitiesError("");
@@ -158,7 +158,7 @@ export function useDashboardData(client: ApiClient | null, activityScope: Activi
     } finally {
       setLoadingOlderActivities(false);
     }
-  }, [activities.data, activityItems, activityScope, client, hasOlderActivities]);
+  }, [activities.data, activityScope, client, hasOlderActivities, olderActivities]);
 
   useEffect(() => {
     if (!activities.data || !canvas.data) return;
