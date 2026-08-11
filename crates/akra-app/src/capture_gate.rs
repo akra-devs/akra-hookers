@@ -49,14 +49,46 @@ impl CaptureGate {
         enabled: bool,
         persist: impl FnOnce(NamedTempFile, &Path) -> io::Result<()>,
     ) -> Result<(), CaptureGateError> {
+        self.set_enabled_with_sync(enabled, persist, sync_directory)
+    }
+
+    fn set_enabled_with_sync(
+        &self,
+        enabled: bool,
+        persist: impl FnOnce(NamedTempFile, &Path) -> io::Result<()>,
+        sync_parent: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> Result<(), CaptureGateError> {
         let parent = self.path.parent().ok_or(CaptureGateError::MissingParent)?;
         fs::create_dir_all(parent)?;
         let mut temporary = NamedTempFile::new_in(parent)?;
         temporary.write_all(if enabled { b"true" } else { b"false" })?;
         temporary.as_file().sync_all()?;
         persist(temporary, &self.path)?;
+        sync_parent(parent)?;
         Ok(())
     }
+}
+
+fn sync_directory(path: &Path) -> io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        options.custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+    }
+    let result = options
+        .open(path)
+        .and_then(|directory| directory.sync_all());
+    #[cfg(windows)]
+    if result
+        .as_ref()
+        .is_err_and(|error| error.kind() == ErrorKind::PermissionDenied)
+    {
+        return Ok(());
+    }
+    result
 }
 
 pub fn enable_codex_capture(
@@ -172,6 +204,32 @@ mod tests {
 
         assert!(error.to_string().contains("injected persist failure"));
         assert!(gate.is_enabled().expect("previous state remains"));
+    }
+
+    #[test]
+    fn gate_syncs_parent_directory_after_replacement() {
+        let directory = TempDir::new().expect("data directory");
+        let gate = CaptureGate::new(directory.path());
+        let persisted = Cell::new(false);
+        let synced = Cell::new(false);
+
+        gate.set_enabled_with_sync(
+            false,
+            |temporary, path| {
+                temporary.persist(path).map_err(|error| error.error)?;
+                persisted.set(true);
+                Ok(())
+            },
+            |parent| {
+                assert_eq!(parent, directory.path());
+                assert!(persisted.get(), "directory sync must follow replacement");
+                synced.set(true);
+                Ok(())
+            },
+        )
+        .expect("durable gate replacement");
+
+        assert!(synced.get());
     }
 
     #[test]
