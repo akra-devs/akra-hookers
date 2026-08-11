@@ -1,16 +1,31 @@
 use axum::{
     Router,
     body::Body,
-    extract::{Json, Path, Query, State},
+    extract::{Json, State},
     http::{Method, Request, StatusCode, header},
     middleware::{self, Next},
     response::Response,
     routing::{delete, get, post},
 };
 use serde::Deserialize;
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::sync::Mutex;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+
+use crate::{
+    http_activities::{activities, activity_count, activity_detail},
+    http_assignments::assign_activities,
+    http_canvas::{
+        canvas, canvas_edges, canvas_revision, clear_canvas, create_canvas_edge,
+        delete_canvas_edge, delete_canvas_node, update_canvas_position,
+    },
+    http_origins::{configure_origin, origins, project_origins},
+    http_projects::{create_project, merge_project, projects, rename_project},
+    http_providers::{provider, toggle_provider},
+};
 
 #[derive(Deserialize)]
 struct IngressPayload {
@@ -20,38 +35,16 @@ struct IngressPayload {
     prompt: String,
 }
 
-#[derive(Deserialize)]
-struct CanvasPosition {
-    position_x: f64,
-    position_y: f64,
-}
-
-#[derive(Deserialize)]
-struct CanvasEdge {
-    source_node_id: i64,
-    target_node_id: i64,
-}
-
-#[derive(Deserialize)]
-struct ProviderToggle {
-    enabled: bool,
-}
-
-#[derive(Deserialize)]
-struct ActivityQuery {
-    project: Option<String>,
-}
-
 #[derive(Clone)]
 pub struct CodexLifecycleControl {
-    lifecycle: Arc<akra_adapters::codex::CodexHookLifecycle>,
-    command: Arc<str>,
-    capture_gate: crate::capture_gate::CaptureGate,
+    pub(crate) lifecycle: Arc<akra_adapters::codex::CodexHookLifecycleSet>,
+    pub(crate) command: Arc<str>,
+    pub(crate) capture_gate: crate::capture_gate::CaptureGate,
 }
 
 impl CodexLifecycleControl {
     pub fn new(
-        lifecycle: Arc<akra_adapters::codex::CodexHookLifecycle>,
+        lifecycle: Arc<akra_adapters::codex::CodexHookLifecycleSet>,
         command: String,
         capture_gate: crate::capture_gate::CaptureGate,
     ) -> Self {
@@ -64,10 +57,10 @@ impl CodexLifecycleControl {
 }
 
 #[derive(Clone)]
-struct AppState {
-    store: Arc<akra_store::ActivityStore>,
-    codex: Option<CodexLifecycleControl>,
-    provider_toggle_lock: Arc<Mutex<()>>,
+pub(crate) struct AppState {
+    pub(crate) store: Arc<akra_store::ActivityStore>,
+    pub(crate) codex: Option<CodexLifecycleControl>,
+    pub(crate) provider_toggle_lock: Arc<Mutex<()>>,
 }
 
 pub fn app(token: &'static str, store: Arc<akra_store::ActivityStore>) -> Router {
@@ -84,7 +77,7 @@ pub fn app(token: &'static str, store: Arc<akra_store::ActivityStore>) -> Router
 pub fn app_with_codex_lifecycle(
     token: &'static str,
     store: Arc<akra_store::ActivityStore>,
-    lifecycle: Arc<akra_adapters::codex::CodexHookLifecycle>,
+    lifecycle: Arc<akra_adapters::codex::CodexHookLifecycleSet>,
     command: String,
     capture_gate: crate::capture_gate::CaptureGate,
 ) -> Router {
@@ -101,13 +94,32 @@ pub fn app_with_codex_lifecycle(
 fn router(token: &'static str, state: AppState) -> Router {
     Router::new()
         .route("/v1/ingest", post(ingest))
-        .route("/v1/projects", get(projects))
+        .route("/v1/projects", get(projects).post(create_project))
+        .route(
+            "/v1/projects/{project_id}",
+            axum::routing::patch(rename_project),
+        )
+        .route(
+            "/v1/projects/{source_project_id}/merge",
+            post(merge_project),
+        )
+        .route("/v1/origins", get(origins))
+        .route("/v1/projects/{project_id}/origins", get(project_origins))
+        .route(
+            "/v1/origins/{origin_id}/routing",
+            axum::routing::patch(configure_origin),
+        )
         .route("/v1/activities", get(activities))
+        .route("/v1/activities/count", get(activity_count))
+        .route("/v1/activities/{activity_id}", get(activity_detail))
+        .route("/v1/activity-assignments", post(assign_activities))
         .route("/v1/canvas", get(canvas).delete(clear_canvas))
+        .route("/v1/canvas/revision", get(canvas_revision))
         .route(
             "/v1/canvas/edges",
             get(canvas_edges).post(create_canvas_edge),
         )
+        .route("/v1/canvas/edges/{edge_id}", delete(delete_canvas_edge))
         .route(
             "/v1/providers/{provider}",
             get(provider).post(toggle_provider).patch(toggle_provider),
@@ -145,229 +157,46 @@ async fn ingest(
 ) -> Result<StatusCode, StatusCode> {
     let _transition = state.provider_toggle_lock.lock().await;
     let store = &state.store;
-    if !store
-        .provider_enabled("codex")
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
+    let enabled = match &state.codex {
+        Some(control) => control
+            .capture_gate
+            .is_enabled()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        None => store
+            .provider_enabled("codex")
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    };
+    if !enabled {
         return Ok(StatusCode::ACCEPTED);
     }
+    let event = akra_core::ingress::IngressEvent::try_new(
+        "codex",
+        payload.session_id,
+        payload.turn_id,
+        payload.cwd,
+        payload.prompt,
+        None,
+    )
+    .map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)?;
+    let origin =
+        akra_git::ProjectIdentity::capture_snapshot_from_cwd(std::path::Path::new(event.cwd()))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .origin;
+    let captured_at_us = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_micros()).ok())
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     store
-        .record(
-            "codex",
-            &payload.session_id,
-            &payload.turn_id,
-            &payload.cwd,
-            &payload.prompt,
-        )
+        .record(akra_store::RecordActivity::captured(
+            event,
+            origin,
+            captured_at_us,
+        ))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::ACCEPTED)
-}
-
-async fn projects(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<akra_store::ProjectSummary>>, StatusCode> {
-    let store = &state.store;
-    store
-        .projects()
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn activities(
-    State(state): State<AppState>,
-    Query(query): Query<ActivityQuery>,
-) -> Result<Json<Vec<akra_store::ActivitySummary>>, StatusCode> {
-    let store = &state.store;
-    store
-        .activities_for_project(query.project.as_deref())
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn canvas(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<akra_store::CanvasNodeSummary>>, StatusCode> {
-    let store = &state.store;
-    store
-        .canvas_nodes()
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn create_canvas_edge(
-    State(state): State<AppState>,
-    Json(edge): Json<CanvasEdge>,
-) -> Result<StatusCode, StatusCode> {
-    let store = &state.store;
-    if edge.source_node_id == edge.target_node_id {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
-    }
-    if !store
-        .canvas_node_exists(edge.source_node_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        || !store
-            .canvas_node_exists(edge.target_node_id)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    store
-        .create_canvas_edge(edge.source_node_id, edge.target_node_id)
-        .await
-        .map(|_| StatusCode::CREATED)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn canvas_edges(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<akra_store::CanvasEdgeSummary>>, StatusCode> {
-    let store = &state.store;
-    store
-        .canvas_edges()
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn toggle_provider(
-    State(state): State<AppState>,
-    Path(provider): Path<String>,
-    Json(toggle): Json<ProviderToggle>,
-) -> Result<StatusCode, StatusCode> {
-    if provider != "codex" {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    let _transition = state.provider_toggle_lock.lock().await;
-    let previous_enabled = state
-        .store
-        .provider_enabled(&provider)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if let Some(codex) = state.codex.clone() {
-        update_global_codex_capture(codex.clone(), toggle.enabled).await?;
-        if state
-            .store
-            .set_provider_enabled(&provider, toggle.enabled)
-            .await
-            .is_err()
-        {
-            let _ = update_global_codex_capture(codex, previous_enabled).await;
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-        return Ok(StatusCode::NO_CONTENT);
-    }
-    state
-        .store
-        .set_provider_enabled(&provider, toggle.enabled)
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn provider(
-    State(state): State<AppState>,
-    Path(provider): Path<String>,
-) -> Result<Json<akra_store::ProviderIntegration>, StatusCode> {
-    if provider != "codex" {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    let _transition = state.provider_toggle_lock.lock().await;
-    if let Some(codex) = state.codex {
-        let enabled = global_codex_hook_enabled(codex).await?;
-        return Ok(Json(akra_store::ProviderIntegration { provider, enabled }));
-    }
-    state
-        .store
-        .provider(&provider)
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn clear_canvas(State(state): State<AppState>) -> Result<StatusCode, StatusCode> {
-    state
-        .store
-        .clear_canvas()
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn delete_canvas_node(
-    State(state): State<AppState>,
-    Path(node_id): Path<i64>,
-) -> Result<StatusCode, StatusCode> {
-    state
-        .store
-        .delete_canvas_node(node_id)
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn update_canvas_position(
-    State(state): State<AppState>,
-    Path(node_id): Path<i64>,
-    Json(position): Json<CanvasPosition>,
-) -> Result<StatusCode, StatusCode> {
-    state
-        .store
-        .update_canvas_position(node_id, position.position_x, position.position_y)
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn update_global_codex_capture(
-    control: CodexLifecycleControl,
-    enabled: bool,
-) -> Result<(), StatusCode> {
-    let lifecycle = Arc::clone(&control.lifecycle);
-    let command = Arc::clone(&control.command);
-    let capture_gate = control.capture_gate;
-    tokio::task::spawn_blocking(move || {
-        let previously_enabled = lifecycle.is_enabled().map_err(|error| error.to_string())?;
-        if enabled {
-            if !previously_enabled {
-                lifecycle
-                    .enable(&command)
-                    .map_err(|error| error.to_string())?;
-            }
-            if let Err(error) = capture_gate.set_enabled(true) {
-                if !previously_enabled {
-                    let _ = lifecycle.disable();
-                }
-                return Err(error.to_string());
-            }
-        } else {
-            capture_gate
-                .set_enabled(false)
-                .map_err(|error| error.to_string())?;
-            if previously_enabled && let Err(error) = lifecycle.disable() {
-                let _ = capture_gate.set_enabled(true);
-                return Err(error.to_string());
-            }
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-async fn global_codex_hook_enabled(control: CodexLifecycleControl) -> Result<bool, StatusCode> {
-    let lifecycle = Arc::clone(&control.lifecycle);
-    tokio::task::spawn_blocking(move || lifecycle.is_enabled())
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn authorize(

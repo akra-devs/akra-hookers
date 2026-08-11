@@ -38,11 +38,17 @@ async fn migrates_pre_project_activity_data_into_visible_legacy_project() {
     store.migrate().await.expect("migration");
 
     let projects = store.projects().await.expect("projects");
-    assert!(projects.iter().any(|project| {
-        project.identity == "__legacy__" && project.display_path == "Legacy activity"
-    }));
+    let legacy_project = projects.iter().find(|project| {
+        project.name == "Legacy activity"
+            && project.origin_count == 1
+            && project.activity_count == 1
+            && project.needs_setup
+    });
+    assert!(legacy_project.is_some());
     let activities = store
-        .activities_for_project(Some("__legacy__"))
+        .activity_summaries(akra_store::ActivityScope::Project(
+            legacy_project.expect("legacy project").id,
+        ))
         .await
         .expect("legacy activities");
     assert_eq!(activities.len(), 1);
@@ -86,7 +92,7 @@ async fn migration_removes_unassociated_legacy_project_rows() {
     assert!(
         projects
             .iter()
-            .all(|project| project.identity != "stale-project"),
+            .all(|project| project.name != "stale-project"),
         "legacy project rows with no associated activity must not become blank filters"
     );
 }

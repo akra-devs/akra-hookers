@@ -1,89 +1,238 @@
-export type Activity = {
-  id: number;
-  provider: string;
-  session_id: string;
-  turn_id: string;
-  prompt: string;
-};
+import type {
+  ActivityAssignmentRequest,
+  ActivityAssignmentResult,
+  ActivityDetail,
+  ActivityScope,
+  ActivitySummary,
+  ApiErrorBody,
+  CanvasEdge,
+  CanvasNode,
+  OriginRoutingRequest,
+  OriginSummary,
+  ProjectSummary,
+  ProviderIntegration,
+} from "./api-contracts";
 
-export type Project = {
-  identity: string;
-  display_path: string;
-};
+export type {
+  ActivityAssignmentRequest,
+  ActivityAssignmentResult,
+  ActivityConversationTurn,
+  ActivityDetail,
+  ActivityProject,
+  ActivityScope,
+  ActivitySummary,
+  ActivityTime,
+  ActivityTimeProvenance,
+  ApiErrorBody,
+  CanvasEdge,
+  CanvasNode,
+  FutureRoute,
+  OriginRoutingRequest,
+  OriginSummary,
+  ProjectDestination,
+  ProjectSummary,
+  ProviderIntegration,
+} from "./api-contracts";
 
-export type ProviderIntegration = {
-  provider: string;
-  enabled: boolean;
-};
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly body: ApiErrorBody;
 
-export type CanvasNode = {
-  id: number;
-  activity_event_id: number;
-  position_x: number;
-  position_y: number;
-};
-
-export type CanvasEdge = {
-  id: number;
-  source_node_id: number;
-  target_node_id: number;
-};
+  constructor(status: number, body: ApiErrorBody) {
+    super(body.message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = body.code;
+    this.body = body;
+  }
+}
 
 export type ApiClient = {
-  activities(project?: string): Promise<Activity[]>;
+  activities(
+    scope: ActivityScope,
+    page?: { limit?: number; afterId?: number; order?: "oldest" | "newest" },
+  ): Promise<ActivitySummary[]>;
+  activityCount(scope: ActivityScope): Promise<number>;
+  activity(
+    activityId: number,
+    page?: { limit?: number; afterId?: number },
+  ): Promise<ActivityDetail>;
+  projects(): Promise<ProjectSummary[]>;
+  createProject(name: string): Promise<ProjectSummary>;
+  renameProject(projectId: number, name: string): Promise<ProjectSummary>;
+  mergeProject(sourceProjectId: number, targetProjectId: number): Promise<ProjectSummary>;
+  origins(): Promise<OriginSummary[]>;
+  projectOrigins(projectId: number): Promise<OriginSummary[]>;
+  configureOrigin(originId: number, request: OriginRoutingRequest): Promise<OriginSummary>;
+  assignActivities(request: ActivityAssignmentRequest): Promise<ActivityAssignmentResult>;
   canvas(): Promise<CanvasNode[]>;
+  canvasRevision(): Promise<number>;
   clearCanvas(): Promise<void>;
   deleteCanvasNode(nodeId: number): Promise<void>;
   createCanvasEdge(sourceNodeId: number, targetNodeId: number): Promise<void>;
+  deleteCanvasEdge(edgeId: number): Promise<void>;
   edges(): Promise<CanvasEdge[]>;
   updateCanvasPosition(nodeId: number, position: { x: number; y: number }): Promise<void>;
   setProviderEnabled(provider: string, enabled: boolean): Promise<void>;
   provider(provider: string): Promise<ProviderIntegration>;
-  projects(): Promise<Project[]>;
 };
 
 type Fetch = typeof fetch;
+type Method = "DELETE" | "PATCH" | "POST";
 
-export function createApiClient(baseUrl: string, token: string, fetcher: Fetch = fetch): ApiClient {
-  async function get<T>(path: string): Promise<T> {
+export function createApiClient(
+  baseUrl: string,
+  token: string,
+  fetcher: Fetch = fetch,
+): ApiClient {
+  async function request<T>(
+    path: string,
+    method?: Method,
+    body?: unknown,
+  ): Promise<T> {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+    };
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/json";
+    }
     const response = await fetcher(`${baseUrl}${path}`, {
-      headers: { Authorization: `Bearer ${token}` },
+      ...(method ? { method } : {}),
+      headers,
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     if (!response.ok) {
-      throw new Error(`API request failed: ${response.status}`);
+      throw await apiError(response);
+    }
+    if (response.status === 204 || response.headers.get("Content-Length") === "0") {
+      return undefined as T;
     }
     return response.json() as Promise<T>;
   }
 
-  async function send(path: string, method: "DELETE" | "PATCH" | "POST", body?: unknown): Promise<void> {
-    const response = await fetcher(`${baseUrl}${path}`, {
-      method,
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!response.ok) {
-      throw new Error(`API request failed: ${response.status}`);
-    }
-  }
-
   return {
-    activities: (project) => get<Activity[]>(
-      project ? `/v1/activities?project=${encodeURIComponent(project)}` : "/v1/activities",
-    ),
-    canvas: () => get<CanvasNode[]>("/v1/canvas"),
-    clearCanvas: () => send("/v1/canvas", "DELETE"),
-    edges: () => get<CanvasEdge[]>("/v1/canvas/edges"),
-    createCanvasEdge: (sourceNodeId, targetNodeId) => send("/v1/canvas/edges", "POST", {
-      source_node_id: sourceNodeId,
-      target_node_id: targetNodeId,
-    }),
-    deleteCanvasNode: (nodeId) => send(`/v1/canvas/${nodeId}`, "DELETE"),
-    updateCanvasPosition: (nodeId, position) => send(`/v1/canvas/${nodeId}`, "PATCH", {
-      position_x: position.x,
-      position_y: position.y,
-    }),
-    setProviderEnabled: (provider, enabled) => send(`/v1/providers/${provider}`, "PATCH", { enabled }),
-    provider: (provider) => get<ProviderIntegration>(`/v1/providers/${provider}`),
-    projects: () => get<Project[]>("/v1/projects"),
+    activities: (scope, page) =>
+      request<ActivitySummary[]>(activityPath(scope, page)),
+    activityCount: async (scope) => {
+      const result = await request<{ count: number }>(activityCountPath(scope));
+      return result.count;
+    },
+    activity: (activityId, page) =>
+      request<ActivityDetail>(conversationPath(activityId, page)),
+    projects: () => request<ProjectSummary[]>("/v1/projects"),
+    createProject: (name) => request<ProjectSummary>("/v1/projects", "POST", { name }),
+    renameProject: (projectId, name) =>
+      request<ProjectSummary>(`/v1/projects/${projectId}`, "PATCH", { name }),
+    mergeProject: (sourceProjectId, targetProjectId) =>
+      request<ProjectSummary>(`/v1/projects/${sourceProjectId}/merge`, "POST", {
+        target_project_id: targetProjectId,
+      }),
+    origins: () => request<OriginSummary[]>("/v1/origins"),
+    projectOrigins: (projectId) =>
+      request<OriginSummary[]>(`/v1/projects/${projectId}/origins`),
+    configureOrigin: (originId, command) =>
+      request<OriginSummary>(`/v1/origins/${originId}/routing`, "PATCH", command),
+    assignActivities: (command) =>
+      request<ActivityAssignmentResult>("/v1/activity-assignments", "POST", command),
+    canvas: () => request<CanvasNode[]>("/v1/canvas"),
+    canvasRevision: async () => {
+      const result = await request<{ revision: number }>("/v1/canvas/revision");
+      return result.revision;
+    },
+    clearCanvas: () => request<void>("/v1/canvas", "DELETE"),
+    edges: () => request<CanvasEdge[]>("/v1/canvas/edges"),
+    createCanvasEdge: (sourceNodeId, targetNodeId) =>
+      request<void>("/v1/canvas/edges", "POST", {
+        source_node_id: sourceNodeId,
+        target_node_id: targetNodeId,
+      }),
+    deleteCanvasEdge: (edgeId) =>
+      request<void>(`/v1/canvas/edges/${edgeId}`, "DELETE"),
+    deleteCanvasNode: (nodeId) => request<void>(`/v1/canvas/${nodeId}`, "DELETE"),
+    updateCanvasPosition: (nodeId, position) =>
+      request<void>(`/v1/canvas/${nodeId}`, "PATCH", {
+        position_x: position.x,
+        position_y: position.y,
+      }),
+    setProviderEnabled: (provider, enabled) =>
+      request<void>(`/v1/providers/${encodeURIComponent(provider)}`, "PATCH", { enabled }),
+    provider: (provider) =>
+      request<ProviderIntegration>(`/v1/providers/${encodeURIComponent(provider)}`),
   };
+}
+
+function activityPath(
+  scope: ActivityScope,
+  page?: { limit?: number; afterId?: number; order?: "oldest" | "newest" },
+): string {
+  let path: string;
+  switch (scope.scope) {
+    case "all":
+      path = "/v1/activities?scope=all";
+      break;
+    case "inbox":
+      path = "/v1/activities?scope=inbox";
+      break;
+    case "project":
+      path = `/v1/activities?scope=project&project_id=${encodeURIComponent(scope.projectId)}`;
+      break;
+  }
+  return appendPage(path, page, "after_id");
+}
+
+function conversationPath(
+  activityId: number,
+  page?: { limit?: number; afterId?: number },
+): string {
+  return appendPage(
+    `/v1/activities/${activityId}`,
+    page,
+    "conversation_after_id",
+    "conversation_limit",
+  );
+}
+
+function activityCountPath(scope: ActivityScope): string {
+  return activityPath(scope).replace("/v1/activities?", "/v1/activities/count?");
+}
+
+function appendPage(
+  path: string,
+  page: { limit?: number; afterId?: number; order?: "oldest" | "newest" } | undefined,
+  cursorName: string,
+  limitName = "limit",
+): string {
+  if (!page) return path;
+  const parameters = new URLSearchParams();
+  if (page.limit !== undefined) parameters.set(limitName, String(page.limit));
+  if (page.afterId !== undefined) parameters.set(cursorName, String(page.afterId));
+  if (page.order !== undefined) parameters.set("order", page.order);
+  const query = parameters.toString();
+  return query.length === 0
+    ? path
+    : `${path}${path.includes("?") ? "&" : "?"}${query}`;
+}
+
+async function apiError(response: Response): Promise<ApiError> {
+  const fallback: ApiErrorBody = {
+    code: `http_${response.status}`,
+    message: `API request failed: ${response.status}`,
+  };
+  try {
+    const body: unknown = await response.json();
+    if (
+      typeof body === "object"
+      && body !== null
+      && "code" in body
+      && "message" in body
+      && typeof body.code === "string"
+      && typeof body.message === "string"
+    ) {
+      return new ApiError(response.status, { code: body.code, message: body.message });
+    }
+  } catch {
+    // Empty and non-JSON error responses use the typed HTTP fallback.
+  }
+  return new ApiError(response.status, fallback);
 }

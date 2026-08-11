@@ -1,17 +1,22 @@
-import type { Node } from "@xyflow/react";
+import type { Edge } from "@xyflow/react";
 
-import type { Activity, CanvasNode } from "./api";
+import type { ActivitySummary, CanvasEdge, CanvasNode } from "./api";
+import type { ActivityFlowNode } from "./components/ActivityNode";
 
 export type ActivityNodeData = {
+  activityId: number;
+  project: ActivitySummary["project"];
   provider: string;
   prompt: string;
-  sessionId: string;
+  time: ActivitySummary["time"];
+  conversationIndex: number;
+  conversationTotal: number;
 };
 
 export function toCanvasNodes(
-  activities: Activity[],
+  activities: ActivitySummary[],
   canvasNodes: CanvasNode[],
-): Node<ActivityNodeData>[] {
+): ActivityFlowNode[] {
   const canvasByActivity = new Map(
     canvasNodes.map((node) => [node.activity_event_id, node]),
   );
@@ -22,12 +27,35 @@ export function toCanvasNodes(
     }
     return [{
       id: `activity-${activity.id}`,
+      type: "activity",
       position: { x: canvasNode.position_x, y: canvasNode.position_y },
       data: {
+        activityId: activity.id,
+        project: activity.project,
         provider: activity.provider,
         prompt: activity.prompt,
-        sessionId: activity.session_id,
+        time: activity.time,
+        conversationIndex: activity.conversation_index,
+        conversationTotal: activity.conversation_total,
       },
     }];
+  });
+}
+
+export function toVisibleEdges(
+  activities: ActivitySummary[],
+  canvasNodes: CanvasNode[],
+  persistedEdges: CanvasEdge[],
+): Edge[] {
+  const visibleActivityIds = new Set(activities.map(({ id }) => id));
+  const idByCanvasNode = new Map(
+    canvasNodes
+      .filter(({ activity_event_id }) => visibleActivityIds.has(activity_event_id))
+      .map(({ id, activity_event_id }) => [id, `activity-${activity_event_id}`]),
+  );
+  return persistedEdges.flatMap((edge) => {
+    const source = idByCanvasNode.get(edge.source_node_id);
+    const target = idByCanvasNode.get(edge.target_node_id);
+    return source && target ? [{ id: `edge-${edge.id}`, source, target }] : [];
   });
 }

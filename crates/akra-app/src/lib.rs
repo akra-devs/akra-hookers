@@ -2,5 +2,13 @@
 
 pub mod capture_gate;
 pub mod http;
+mod http_activities;
+mod http_assignments;
+mod http_canvas;
+mod http_error;
+mod http_origins;
+mod http_projects;
+mod http_providers;
 pub mod paths;
+pub mod recovery;
 pub mod spool;

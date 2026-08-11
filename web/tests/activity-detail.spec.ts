@@ -1,0 +1,349 @@
+import { expect, test as base, type Page } from "@playwright/test";
+
+import { FixtureApi, installFixtureApi } from "./fixtures/api";
+
+const test = base.extend<{ api: FixtureApi }>({
+  api: [async ({ page }, use) => use(await installFixtureApi(page)), { auto: true }],
+});
+
+test.use({ locale: "ko-KR", timezoneId: "Asia/Seoul" });
+
+function panel(page: Page) {
+  return page.getByTestId("activity-detail-panel");
+}
+
+async function open(page: Page, activityId: number) {
+  const response = page.waitForResponse((candidate) =>
+    candidate.request().method() === "GET"
+    && new URL(candidate.url()).pathname === `/v1/activities/${activityId}`
+    && candidate.status() === 200,
+  );
+  await page.getByTestId(`activity-node-${activityId}`).click();
+  await response;
+  return panel(page);
+}
+
+function setConversation(api: FixtureApi) {
+  const { activities, details, projects, canvasNodes } = api.state;
+  projects.push({
+    id: 2, name: "두 번째 프로젝트", origin_count: 0, activity_count: 1,
+    needs_setup: false, latest_activity_at_us: null,
+  });
+  activities[0]!.prompt = "가장 먼저 기록된 한국어 프롬프트";
+  activities[0]!.time = { value: "2026-08-08T10:00:00Z", provenance: "captured" };
+  activities[1]!.prompt = "가운데 선택 프롬프트의 전체 내용";
+  activities[1]!.project = { id: 2, name: "두 번째 프로젝트" };
+  activities[1]!.time = { value: "2026-08-08T12:00:00Z", provenance: "captured" };
+  const last = structuredClone(activities[1]!);
+  last.id = 3;
+  last.prompt = "마지막 한국어 프롬프트의 전체 내용";
+  last.project = null;
+  last.time = { value: "2026-08-08T14:00:00Z", provenance: "captured" };
+  last.conversation_index = 3;
+  activities.push(last);
+  canvasNodes.push({ id: 13, activity_event_id: 3, position_x: 720, position_y: 160 });
+  details[3] = { ...structuredClone(details[2]!), id: 3, prompt: last.prompt, project: last.project };
+  syncDetails(api);
+}
+
+function insertEarlierTurn(api: FixtureApi) {
+  const earlier = structuredClone(api.state.activities[0]!);
+  earlier.id = 4;
+  earlier.prompt = "지연되어 도착한 가장 이른 프롬프트";
+  earlier.time = { value: "2026-08-08T08:00:00Z", provenance: "captured" };
+  api.state.activities.unshift(earlier);
+  api.state.details[4] = {
+    ...structuredClone(api.state.details[1]!), id: 4, prompt: earlier.prompt,
+    project: earlier.project, captured_at: earlier.time, first_recorded_at: earlier.time,
+  };
+  syncDetails(api);
+}
+
+function syncDetails(api: FixtureApi) {
+  const { activities, details, canvasNodes } = api.state;
+  const visible = new Set(canvasNodes.map((node) => node.activity_event_id));
+  for (const activity of activities) {
+    activity.conversation_total = activities.length;
+    const detail = details[activity.id];
+    if (detail) {
+      detail.prompt = activity.prompt;
+      detail.project = activity.project;
+      detail.captured_at = activity.time;
+      detail.first_recorded_at = activity.time;
+      detail.on_canvas = visible.has(activity.id);
+      detail.selected_turn = {
+        id: activity.id,
+        prompt: activity.prompt,
+        project: activity.project,
+        time: activity.time,
+        on_canvas: visible.has(activity.id),
+        selected: true,
+      };
+      detail.conversation_total = activities.length;
+      detail.conversation_has_more = false;
+    }
+  }
+  for (const detail of Object.values(details)) {
+    detail.conversation = activities.map((activity) => ({
+      id: activity.id, prompt: activity.prompt, project: activity.project, time: activity.time,
+      on_canvas: visible.has(activity.id), selected: activity.id === detail.id,
+    }));
+  }
+}
+
+test("conversation pages load explicitly without duplicate turns", async ({ page, api }) => {
+  const detail = api.state.details[1]!;
+  const initial = structuredClone(detail.conversation[0]!);
+  const later = structuredClone(detail.conversation[1]!);
+  detail.conversation = [initial];
+  detail.conversation_total = 2;
+  detail.conversation_has_more = true;
+  await page.route("**/v1/activities/1?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("conversation_after_id") !== String(initial.id)) {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...detail,
+        conversation: [later],
+        conversation_has_more: false,
+      }),
+    });
+  });
+  await page.goto("/");
+  const detailPanel = await open(page, 1);
+  await expect(detailPanel.getByRole("heading", { name: "대화 기록 (1/2)" })).toBeVisible();
+
+  await detailPanel.getByRole("button", { name: "대화 기록 더 보기" }).click();
+
+  await expect(detailPanel.getByRole("heading", { name: "대화 기록 (2/2)" })).toBeVisible();
+  await expect(detailPanel.locator(".activity-detail__turn")).toHaveCount(2);
+  await expect(detailPanel.getByRole("button", { name: "대화 기록 더 보기" })).toHaveCount(0);
+});
+
+test("a selected turn outside the first conversation page is visible immediately", async ({
+  page,
+  api,
+}) => {
+  const detail = api.state.details[2]!;
+  detail.conversation = [structuredClone(api.state.details[1]!.selected_turn)];
+  detail.conversation_total = 2;
+  detail.conversation_has_more = true;
+  await page.goto("/");
+  const detailPanel = await open(page, 2);
+
+  await expect(
+    detailPanel.locator("[data-activity-id='2'][aria-current='true']"),
+  ).toBeVisible();
+  await expect(detailPanel.getByRole("heading", { name: "대화 기록 (2/2)" })).toBeVisible();
+});
+
+test("a card opens a right detail column with truthful Korean metadata and guarded technical values", async ({ page, api, context }) => {
+  const detail = api.state.details[2]!;
+  detail.prompt = "전체 한국어 프롬프트는 카드에서 잘려도 상세 패널에서는 한 글자도 생략되지 않습니다.";
+  detail.submitted_cwd = "C:\\submitted\\worktree";
+  detail.origin.display_path = "C:\\detected\\repository";
+  detail.technical = { session_id: "SESSION_DETAIL_ONLY", turn_id: "TURN_DETAIL_ONLY" };
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/");
+  await open(page, 2);
+  await page.screenshot({ path: "../.omo/evidence/task-16-project-context-and-conversation.png", fullPage: true });
+
+  const detailPanel = panel(page);
+  await expect(detailPanel).toBeVisible();
+  await expect(detailPanel).toContainText(detail.prompt);
+  await expect(detailPanel).toContainText("Inbox");
+  await expect(detailPanel).toContainText("codex");
+  await expect(detailPanel.getByTestId("captured-at")).toHaveAttribute("data-provenance", "captured");
+  await expect(detailPanel.getByTestId("captured-at").locator("time")).toHaveAttribute("datetime", "2026-08-08T12:00:00Z");
+  await expect(detailPanel.getByText("C:\\submitted\\worktree", { exact: true })).toBeVisible();
+  await expect(detailPanel.getByText("C:\\detected\\repository", { exact: true })).toBeVisible();
+  await expect(detailPanel.locator("details").filter({ hasText: "기술 정보" })).not.toHaveAttribute("open", "");
+  await expect(detailPanel).not.toContainText("SESSION_DETAIL_ONLY");
+  await expect(page.locator(".rail")).not.toContainText("SESSION_DETAIL_ONLY");
+  await expect(page.locator(".canvas-panel")).not.toContainText("SESSION_DETAIL_ONLY");
+  await detailPanel.getByText("기술 정보", { exact: true }).click();
+  await detailPanel.getByRole("button", { name: "세션 ID 복사" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("SESSION_DETAIL_ONLY");
+  const [rail, canvas, side] = await Promise.all([".rail", ".canvas-panel", "[data-testid=activity-detail-panel]"].map(
+    async (selector) => page.locator(selector).evaluate((element) => element.getBoundingClientRect()),
+  ));
+  expect(canvas.right).toBeLessThanOrEqual(side.left + 1);
+  expect(side.left).toBeGreaterThanOrEqual(rail.right - 1);
+});
+
+test("a failed detail request renders an alert and supports an explicit retry", async ({ page }) => {
+  let rejectDetail = true;
+  await page.route("**/v1/activities/1", async (route) => {
+    if (!rejectDetail) {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({
+        code: "detail_unavailable",
+        message: "상세 조회 실패",
+      }),
+    });
+  });
+  await page.goto("/");
+  const failed = page.waitForResponse((response) =>
+    response.request().method() === "GET"
+    && new URL(response.url()).pathname === "/v1/activities/1"
+    && response.status() === 500,
+  );
+  await page.getByTestId("activity-node-1").click();
+  await failed;
+
+  const detailPanel = panel(page);
+  await expect(detailPanel.getByRole("alert")).toContainText(
+    "활동 상세를 불러오지 못했습니다",
+  );
+  await expect(detailPanel).not.toContainText("불러오는 중입니다");
+  await expect(
+    detailPanel.getByRole("button", { name: "상세 닫기" }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "../.omo/evidence/final-detail-error.png",
+    fullPage: true,
+  });
+
+  rejectDetail = false;
+  const recovered = page.waitForResponse((response) =>
+    response.request().method() === "GET"
+    && new URL(response.url()).pathname === "/v1/activities/1"
+    && response.status() === 200,
+  );
+  await detailPanel.getByRole("button", { name: "다시 시도" }).click();
+  await recovered;
+  await expect(detailPanel.getByRole("heading", { name: "활동 상세" })).toBeVisible();
+});
+
+test("legacy time and a missing submitted path remain explicitly truthful", async ({ page, api }) => {
+  const detail = api.state.details[2]!;
+  detail.submitted_cwd = null;
+  detail.captured_at = { value: "2026-08-08T12:00:00Z", provenance: "legacy_recorded" };
+  detail.first_recorded_at = { value: null, provenance: "unknown" };
+  detail.origin.resolution_source = "legacy_migrated";
+  await page.goto("/");
+  const detailPanel = await open(page, 2);
+
+  await expect(detailPanel.getByTestId("submitted-cwd")).toHaveText("정확한 작업 경로를 사용할 수 없음");
+  await expect(detailPanel.getByTestId("captured-at")).toHaveAttribute("data-provenance", "legacy_recorded");
+  await expect(detailPanel.getByTestId("captured-at")).toContainText("기존 기록");
+  await expect(detailPanel.getByTestId("first-recorded-at")).toHaveAttribute("data-provenance", "unknown");
+  await expect(detailPanel.getByTestId("first-recorded-at")).toContainText("시간 정보 없음");
+  await expect(detailPanel.getByTestId("detected-path")).toHaveAttribute("data-resolution-source", "legacy_migrated");
+});
+
+test("the detail panel stacks without horizontal overflow on a narrow Korean viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  const detailPanel = await open(page, 2);
+
+  await expect(detailPanel).toBeVisible();
+  const bounds = await detailPanel.evaluate((element) => element.getBoundingClientRect());
+  expect(bounds.left).toBeGreaterThanOrEqual(0);
+  expect(bounds.right).toBeLessThanOrEqual(390);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth));
+});
+
+test("a long timeline reveals its initially selected immutable turn", async ({ page, api }) => {
+  const detail = api.state.details[2]!;
+  const template = detail.conversation[0]!;
+  const selected = detail.conversation.find(({ id }) => id === 2)!;
+  detail.conversation = [
+    ...Array.from({ length: 10 }, (_, index) => ({
+      ...structuredClone(template),
+      id: 100 + index,
+      prompt: `앞선 대화 ${index + 1}`,
+      selected: false,
+      on_canvas: false,
+    })),
+    { ...selected, selected: true },
+  ];
+  await page.goto("/");
+  const detailPanel = await open(page, 2);
+  const visible = await detailPanel.locator('[data-activity-id="2"]').evaluate((element) => {
+    const list = element.closest("ol")!;
+    const listBounds = list.getBoundingClientRect();
+    const turnBounds = element.getBoundingClientRect();
+    return turnBounds.top >= listBounds.top && turnBounds.bottom <= listBounds.bottom;
+  });
+
+  expect(visible).toBe(true);
+});
+
+test("the oldest-first timeline retains its selected ID and scroll anchor across a delayed earlier response and rename", async ({ page, api }) => {
+  setConversation(api);
+  await page.goto("/");
+  const detailPanel = await open(page, 2);
+  await expect(detailPanel).toBeVisible();
+  const timeline = detailPanel.getByRole("list", { name: "대화 기록" });
+  await expect(timeline.locator("[data-activity-id]").first()).toHaveAttribute("data-activity-id", "1");
+  await expect(timeline).toContainText("가장 먼저 기록된 한국어 프롬프트");
+  await expect(timeline).toContainText("가운데 선택 프롬프트의 전체 내용");
+  await expect(timeline).toContainText("마지막 한국어 프롬프트의 전체 내용");
+  await page.getByLabel("프로젝트 필터").selectOption("project:2");
+  await page.getByRole("button", { name: "프로젝트 관리" }).click();
+  await page.getByLabel("프로젝트 이름", { exact: true }).fill("이름이 바뀐 프로젝트");
+  const delayed = api.deferNextDetail(2);
+  const response = page.waitForResponse((candidate) =>
+    candidate.request().method() === "GET" && new URL(candidate.url()).pathname === "/v1/activities/2" && candidate.status() === 200,
+  );
+  await page.getByRole("button", { name: "이름 저장" }).click();
+  await delayed.requested;
+  const selected = timeline.locator('[data-activity-id="2"]');
+  await selected.scrollIntoViewIfNeeded();
+  const anchorTop = await selected.evaluate((element) => element.getBoundingClientRect().top);
+  insertEarlierTurn(api);
+  delayed.release();
+  await response;
+  await expect(detailPanel).toHaveAttribute("data-selected-activity-id", "2");
+  await expect(timeline.locator("[data-activity-id]").first()).toHaveAttribute("data-activity-id", "4");
+  expect(await selected.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(anchorTop, 0);
+  await expect(detailPanel).toContainText("이름이 바뀐 프로젝트");
+});
+
+test("the pane closes only when its selected node becomes invisible while deleted history stays immutable", async ({ page, api }) => {
+  const origin = api.state.origins[0]!;
+  origin.routing_mode = "shared";
+  origin.default_project_id = null;
+  origin.default_project_name = null;
+  await page.goto("/");
+  await page.getByLabel("프로젝트 필터").selectOption("inbox");
+  let detailPanel = await open(page, 2);
+  await expect(detailPanel).toBeVisible();
+  const assignment = page.getByRole("region", { name: "프로젝트에 배정" });
+  await assignment.getByLabel("기존 프로젝트").check();
+  await assignment.getByLabel("프로젝트", { exact: true }).selectOption("1");
+  const assigned = page.waitForResponse((candidate) => candidate.request().method() === "POST" && new URL(candidate.url()).pathname === "/v1/activity-assignments");
+  await assignment.getByRole("button", { name: "배정 저장" }).click();
+  await assigned;
+  await expect(panel(page)).toHaveCount(0);
+  await page.getByLabel("프로젝트 필터").selectOption("project:1");
+  detailPanel = await open(page, 2);
+  const deleted = page.waitForResponse((candidate) => candidate.request().method() === "DELETE" && new URL(candidate.url()).pathname === "/v1/canvas/12");
+  await page.keyboard.press("Backspace");
+  await deleted;
+  await expect(panel(page)).toHaveCount(0);
+  await expect(page.getByTestId("activity-node-2")).toHaveCount(0);
+  detailPanel = await open(page, 1);
+  await expect(detailPanel.getByRole("list", { name: "대화 기록" }).locator('[data-activity-id="2"]')).toContainText("캔버스에 없음");
+  expect(api.state.canvasNodes.map((node) => node.activity_event_id)).toEqual([1]);
+  await page.getByLabel("프로젝트 필터").selectOption("inbox");
+  await expect(panel(page)).toHaveCount(0);
+  await page.getByLabel("프로젝트 필터").selectOption("project:1");
+  await open(page, 1);
+  const cleared = page.waitForResponse((candidate) => candidate.request().method() === "DELETE" && new URL(candidate.url()).pathname === "/v1/canvas");
+  await page.getByRole("button", { name: "Clear canvas" }).click();
+  await cleared;
+  await expect(panel(page)).toHaveCount(0);
+});

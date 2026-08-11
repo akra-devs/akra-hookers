@@ -5,7 +5,11 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./app.css";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: false },
+  },
+});
 
 createRoot(document.querySelector("#root")!).render(
   <StrictMode>

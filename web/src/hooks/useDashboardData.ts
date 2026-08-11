@@ -1,0 +1,326 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  applyNodeChanges, type Edge, type NodeChange, type XYPosition,
+} from "@xyflow/react";
+import { useQueries, useQuery } from "@tanstack/react-query";
+
+import type { ActivityScope, ApiClient } from "../api";
+import { toCanvasNodes, toVisibleEdges } from "../canvas";
+import type { ActivityFlowNode } from "../components/ActivityNode";
+
+const ACTIVITY_PAGE_SIZE = 100;
+
+function reconcileNodes(
+  current: ActivityFlowNode[],
+  fresh: ActivityFlowNode[],
+  dirtyActivityIds: ReadonlySet<number>,
+): ActivityFlowNode[] {
+  const currentById = new Map(current.map((node) => [node.data.activityId, node]));
+  const reconciled = fresh.map((node) => {
+    const existing = currentById.get(node.data.activityId);
+    if (!existing) return node;
+    const position = dirtyActivityIds.has(node.data.activityId)
+      ? existing.position
+      : node.position;
+    if (
+      existing.position.x === position.x
+      && existing.position.y === position.y
+      && JSON.stringify(existing.data) === JSON.stringify(node.data)
+    ) {
+      return existing;
+    }
+    return {
+      ...existing,
+      ...node,
+      position,
+      selected: existing.selected,
+      dragging: existing.dragging,
+    };
+  });
+  return reconciled.length === current.length
+    && reconciled.every((node, index) => node === current[index])
+    ? current
+    : reconciled;
+}
+
+export function useDashboardData(client: ApiClient | null, activityScope: ActivityScope) {
+  const [nodes, setNodes] = useState<ActivityFlowNode[]>([]);
+  const [selectedActivityIds, setSelectedActivityIds] = useState<number[]>([]);
+  const dirtyPositions = useRef(new Map<number, number>());
+  const revision = useRef(0);
+  const positionQueues = useRef(new Map<number, Promise<void>>());
+  const edgeCache = useRef<Edge[]>([]);
+  const [olderActivities, setOlderActivities] = useState<NonNullable<
+    Awaited<ReturnType<ApiClient["activities"]>>
+  >>([]);
+  const [olderActivitiesHaveMore, setOlderActivitiesHaveMore] =
+    useState<boolean | null>(null);
+  const [loadingOlderActivities, setLoadingOlderActivities] = useState(false);
+  const [olderActivitiesError, setOlderActivitiesError] = useState("");
+  const scopeKey = activityScope.scope === "project"
+    ? `project:${activityScope.projectId}`
+    : activityScope.scope;
+
+  const activities = useQuery({
+    queryKey: ["activities", activityScope],
+    queryFn: () => client!.activities(activityScope, {
+      limit: ACTIVITY_PAGE_SIZE,
+      order: "newest",
+    }),
+    enabled: client !== null,
+    refetchInterval: 500,
+  });
+  const inboxCount = useQuery({
+    queryKey: ["activity-count", { scope: "inbox" }],
+    queryFn: () => client!.activityCount({ scope: "inbox" }),
+    enabled: client !== null,
+    refetchInterval: 500,
+  });
+  const projects = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => client!.projects(),
+    enabled: client !== null,
+    refetchInterval: 500,
+  });
+  const origins = useQuery({
+    queryKey: ["origins"],
+    queryFn: () => client!.origins(),
+    enabled: client !== null,
+    refetchInterval: 500,
+  });
+  const provider = useQuery({
+    queryKey: ["provider", "codex"],
+    queryFn: () => client!.provider("codex"),
+    enabled: client !== null,
+  });
+  const canvasRevision = useQuery({
+    queryKey: ["canvas-revision"],
+    queryFn: () => client!.canvasRevision(),
+    enabled: client !== null,
+    refetchInterval: 500,
+  });
+  const canvas = useQuery({
+    queryKey: ["canvas", canvasRevision.data],
+    queryFn: () => client!.canvas(),
+    enabled: client !== null && canvasRevision.data !== undefined,
+    placeholderData: (previous) => previous,
+  });
+  const persistedEdges = useQuery({
+    queryKey: ["canvas-edges", canvasRevision.data],
+    queryFn: () => client!.edges(),
+    enabled: client !== null && canvasRevision.data !== undefined,
+    placeholderData: (previous) => previous,
+  });
+  const selectedDetails = useQueries({
+    queries: selectedActivityIds.map((activityId) => ({
+      queryKey: ["activity", activityId],
+      queryFn: () => client!.activity(activityId),
+      enabled: client !== null,
+    })),
+  });
+  useEffect(() => {
+    setOlderActivities([]);
+    setOlderActivitiesHaveMore(null);
+    setOlderActivitiesError("");
+  }, [client, scopeKey]);
+  const activityItems = useMemo(() => {
+    const byId = new Map(
+      [...olderActivities, ...(activities.data ?? [])]
+        .map((activity) => [activity.id, activity]),
+    );
+    return [...byId.values()];
+  }, [activities.data, olderActivities]);
+  const hasOlderActivities = olderActivitiesHaveMore
+    ?? activities.data?.length === ACTIVITY_PAGE_SIZE;
+  const loadOlderActivities = useCallback(async () => {
+    const cursor = activityItems.at(-1)?.id;
+    if (!client || cursor === undefined || !hasOlderActivities) return;
+    setLoadingOlderActivities(true);
+    setOlderActivitiesError("");
+    try {
+      const page = await client.activities(activityScope, {
+        limit: ACTIVITY_PAGE_SIZE,
+        afterId: cursor,
+        order: "newest",
+      });
+      setOlderActivities((current) => {
+        const byId = new Map(
+          [...(activities.data ?? []), ...current, ...page]
+            .map((activity) => [activity.id, activity]),
+        );
+        return [...byId.values()];
+      });
+      setOlderActivitiesHaveMore(page.length === ACTIVITY_PAGE_SIZE);
+    } catch (cause) {
+      setOlderActivitiesError(
+        cause instanceof Error ? cause.message : "이전 활동을 불러오지 못했습니다.",
+      );
+    } finally {
+      setLoadingOlderActivities(false);
+    }
+  }, [activities.data, activityItems, activityScope, client, hasOlderActivities]);
+
+  useEffect(() => {
+    if (!activities.data || !canvas.data) return;
+    const fresh = toCanvasNodes(activityItems, canvas.data);
+    const visible = new Set(fresh.map(({ data }) => data.activityId));
+    for (const activityId of dirtyPositions.current.keys()) {
+      if (!visible.has(activityId)) dirtyPositions.current.delete(activityId);
+    }
+    setNodes((current) => reconcileNodes(
+      current,
+      fresh,
+      new Set(dirtyPositions.current.keys()),
+    ));
+    setSelectedActivityIds((current) => {
+      const retained = current.filter((id) => visible.has(id));
+      return retained.length === current.length ? current : retained;
+    });
+  }, [activities.data, activityItems, canvas.data]);
+
+  const edges = useMemo(() => {
+    const fresh = activities.data && canvas.data && persistedEdges.data
+      ? toVisibleEdges(activityItems, canvas.data, persistedEdges.data)
+      : [];
+    const unchanged = fresh.length === edgeCache.current.length
+      && fresh.every((edge, index) => {
+        const existing = edgeCache.current[index];
+        return existing?.id === edge.id
+          && existing.source === edge.source
+          && existing.target === edge.target;
+      });
+    if (!unchanged) edgeCache.current = fresh;
+    return edgeCache.current;
+  }, [activities.data, activityItems, canvas.data, persistedEdges.data]);
+  const assignmentDetails = selectedActivityIds.length === 0
+    ? []
+    : selectedDetails.every(({ data }) => data !== undefined)
+      ? selectedDetails.flatMap(({ data }) => data ? [data] : [])
+      : undefined;
+
+  const refreshProjectContext = useCallback(async () => {
+    setOlderActivities([]);
+    setOlderActivitiesHaveMore(null);
+    setOlderActivitiesError("");
+    await Promise.all([
+      activities.refetch(),
+      inboxCount.refetch(),
+      projects.refetch(),
+      origins.refetch(),
+      ...selectedDetails.map((detail) => detail.refetch()),
+    ]);
+  }, [activities, inboxCount, origins, projects, selectedDetails]);
+  const refreshCanvas = useCallback(async () => {
+    await Promise.all([canvas.refetch(), persistedEdges.refetch()]);
+  }, [canvas, persistedEdges]);
+  const refreshCanvasAuthoritatively = useCallback(async () => {
+    const [result] = await Promise.all([canvas.refetch(), persistedEdges.refetch()]);
+    if (activities.data && result.data) {
+      setNodes((current) => reconcileNodes(
+        current,
+        toCanvasNodes(activityItems, result.data!),
+        new Set(),
+      ));
+    }
+  }, [activities.data, activityItems, canvas, persistedEdges]);
+
+  const onNodesChange = useCallback((changes: NodeChange<ActivityFlowNode>[]) => {
+    for (const change of changes) {
+      if (change.type !== "position" || !change.position) continue;
+      const activityId = Number(change.id.slice("activity-".length));
+      dirtyPositions.current.set(activityId, ++revision.current);
+    }
+    setNodes((current) => applyNodeChanges(
+      changes.filter((change) => change.type !== "remove"),
+      current,
+    ));
+  }, []);
+
+  const commitNodePosition = useCallback((activityId: number, position: XYPosition) => {
+    const currentRevision = dirtyPositions.current.get(activityId) ?? ++revision.current;
+    dirtyPositions.current.set(activityId, currentRevision);
+    const previous = positionQueues.current.get(activityId) ?? Promise.resolve();
+    let queued: Promise<void>;
+    queued = previous.catch(() => undefined).then(async () => {
+      const canvasNode = canvas.data?.find((node) => node.activity_event_id === activityId);
+      if (!client || !canvasNode) return;
+      try {
+        await client.updateCanvasPosition(canvasNode.id, position);
+        const result = await canvas.refetch();
+        if (dirtyPositions.current.get(activityId) !== currentRevision) return;
+        dirtyPositions.current.delete(activityId);
+        if (activities.data && result.data) {
+          setNodes((current) => reconcileNodes(
+            current,
+            toCanvasNodes(activityItems, result.data!),
+            new Set(),
+          ));
+        }
+      } catch (cause) {
+        const result = await canvas.refetch();
+        if (dirtyPositions.current.get(activityId) === currentRevision) {
+          dirtyPositions.current.delete(activityId);
+          if (activities.data && result.data) {
+            setNodes((current) => reconcileNodes(
+              current,
+              toCanvasNodes(activityItems, result.data!),
+              new Set(),
+            ));
+          }
+        }
+        throw cause;
+      }
+    }).finally(() => {
+      if (positionQueues.current.get(activityId) === queued) {
+        positionQueues.current.delete(activityId);
+      }
+    });
+    positionQueues.current.set(activityId, queued);
+    return queued;
+  }, [activities.data, activityItems, canvas, client]);
+
+  const bootstrapQueries = [
+    activities,
+    inboxCount,
+    projects,
+    origins,
+    provider,
+    canvasRevision,
+    canvas,
+    persistedEdges,
+  ];
+  const bootstrapError = bootstrapQueries.some((query) => query.isError);
+  const bootstrapReady = !bootstrapError && bootstrapQueries.every(
+    (query) => query.data !== undefined,
+  );
+  const retryBootstrap = useCallback(async () => {
+    await Promise.all([
+      activities.refetch(),
+      inboxCount.refetch(),
+      projects.refetch(),
+      origins.refetch(),
+      provider.refetch(),
+      canvasRevision.refetch(),
+      canvas.refetch(),
+      persistedEdges.refetch(),
+    ]);
+  }, [
+    activities,
+    canvas,
+    canvasRevision,
+    inboxCount,
+    origins,
+    persistedEdges,
+    projects,
+    provider,
+  ]);
+
+  return {
+    activities, inboxCount, projects, origins, provider, canvas,
+    nodes, setNodes, edges, onNodesChange, commitNodePosition,
+    selectedActivityIds, setSelectedActivityIds, assignmentDetails,
+    refreshProjectContext, refreshCanvas, refreshCanvasAuthoritatively,
+    bootstrapError, bootstrapReady, retryBootstrap,
+    hasOlderActivities, loadOlderActivities, loadingOlderActivities, olderActivitiesError,
+  };
+}

@@ -1,0 +1,403 @@
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, OpenOptions},
+    io::Read,
+    path::{Path, PathBuf},
+};
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[path = "codex_lifecycle/transaction.rs"]
+mod transaction;
+
+const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug)]
+pub struct CodexHookLifecycle {
+    manifest_path: PathBuf,
+}
+
+impl CodexHookLifecycle {
+    pub fn new(home: &Path) -> Self {
+        Self::from_codex_home(&home.join(".codex"))
+    }
+
+    pub fn from_codex_home(codex_home: &Path) -> Self {
+        Self {
+            manifest_path: codex_home.join("hooks.json"),
+        }
+    }
+
+    pub fn enable(&self, command: &str) -> Result<(), CodexLifecycleError> {
+        let parent = self
+            .manifest_path
+            .parent()
+            .ok_or(CodexLifecycleError::MissingManifestParent)?;
+        fs::create_dir_all(parent)?;
+        let mut hooks = self.read_hooks()?;
+        remove_akra_hooks(&mut hooks);
+        hooks
+            .hooks
+            .user_prompt_submit
+            .push(CodexMatcherGroup::akra_hook(command));
+        self.write_hooks(&hooks)?;
+        Ok(())
+    }
+
+    pub fn disable(&self) -> Result<(), CodexLifecycleError> {
+        if self.manifest_path.exists() {
+            let mut hooks = self.read_hooks()?;
+            remove_akra_hooks(&mut hooks);
+            self.write_hooks(&hooks)?;
+        }
+        Ok(())
+    }
+
+    pub fn is_enabled(&self) -> Result<bool, CodexLifecycleError> {
+        let hooks = self.read_hooks()?;
+        Ok(hooks
+            .hooks
+            .user_prompt_submit
+            .iter()
+            .flat_map(|group| &group.hooks)
+            .any(CodexHook::is_akra_hook))
+    }
+
+    fn read_hooks(&self) -> Result<CodexHooksFile, CodexLifecycleError> {
+        Ok(self.read_snapshot()?.hooks)
+    }
+
+    fn read_snapshot(&self) -> Result<ManifestSnapshot, CodexLifecycleError> {
+        match read_manifest_bytes(&self.manifest_path)? {
+            Some(content) => {
+                let hooks = serde_json::from_slice(&content).map_err(std::io::Error::other)?;
+                Ok(ManifestSnapshot {
+                    original: Some(content),
+                    hooks,
+                })
+            }
+            None => Ok(ManifestSnapshot {
+                original: None,
+                hooks: CodexHooksFile::default(),
+            }),
+        }
+    }
+
+    fn write_hooks(&self, hooks: &CodexHooksFile) -> Result<(), CodexLifecycleError> {
+        let parent = self
+            .manifest_path
+            .parent()
+            .ok_or(CodexLifecycleError::MissingManifestParent)?;
+        fs::create_dir_all(parent)?;
+        transaction::write_manifest_atomic(
+            &self.manifest_path,
+            serde_json::to_string_pretty(hooks)?.as_bytes(),
+        )?;
+        Ok(())
+    }
+}
+
+struct ManifestSnapshot {
+    original: Option<Vec<u8>>,
+    hooks: CodexHooksFile,
+}
+
+#[derive(Debug)]
+pub struct CodexHookLifecycleSet {
+    lifecycles: Vec<CodexHookLifecycle>,
+}
+
+impl CodexHookLifecycleSet {
+    pub fn from_codex_homes(homes: impl IntoIterator<Item = PathBuf>) -> Self {
+        let mut unique_homes = BTreeSet::new();
+        let lifecycles = homes
+            .into_iter()
+            .map(normalize_home)
+            .filter(|home| unique_homes.insert(home_key(home)))
+            .map(|home| CodexHookLifecycle::from_codex_home(&home))
+            .collect();
+        Self { lifecycles }
+    }
+
+    pub fn enable(&self, command: &str) -> Result<(), CodexLifecycleError> {
+        transaction::enable(self, command)
+    }
+
+    pub fn disable(&self) -> Result<(), CodexLifecycleError> {
+        transaction::disable(self)
+    }
+
+    pub fn is_enabled(&self) -> Result<bool, CodexLifecycleError> {
+        transaction::is_enabled(self)
+    }
+}
+
+fn normalize_home(home: PathBuf) -> PathBuf {
+    let absolute = if home.is_absolute() {
+        home
+    } else {
+        std::env::current_dir()
+            .map(|current| current.join(&home))
+            .unwrap_or(home)
+    };
+    let normalized = normalize_lexically(&absolute);
+    normalized.canonicalize().unwrap_or_else(|_| {
+        normalized
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .and_then(|parent| normalized.file_name().map(|name| parent.join(name)))
+            .unwrap_or(normalized)
+    })
+}
+
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+#[cfg(windows)]
+fn home_key(home: &Path) -> PathBuf {
+    PathBuf::from(home.to_string_lossy().to_lowercase())
+}
+
+#[cfg(not(windows))]
+fn home_key(home: &Path) -> PathBuf {
+    home.to_path_buf()
+}
+
+fn read_manifest_bytes(path: &Path) -> Result<Option<Vec<u8>>, CodexLifecycleError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(CodexLifecycleError::UnsafeManifest(path.to_path_buf()));
+    }
+    if metadata.len() > MAX_MANIFEST_BYTES {
+        return Err(CodexLifecycleError::OversizedManifest(metadata.len()));
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(CodexLifecycleError::UnsafeManifest(path.to_path_buf()));
+    }
+    let mut content = Vec::new();
+    file.by_ref()
+        .take(MAX_MANIFEST_BYTES + 1)
+        .read_to_end(&mut content)?;
+    if content.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(CodexLifecycleError::OversizedManifest(content.len() as u64));
+    }
+    Ok(Some(content))
+}
+
+fn remove_akra_hooks(hooks: &mut CodexHooksFile) {
+    for group in &mut hooks.hooks.user_prompt_submit {
+        group.hooks.retain(|hook| !hook.is_akra_hook());
+    }
+    hooks
+        .hooks
+        .user_prompt_submit
+        .retain(|group| !group.hooks.is_empty());
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct CodexHooksFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default)]
+    hooks: CodexHookEvents,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct CodexHookEvents {
+    #[serde(rename = "UserPromptSubmit", default)]
+    user_prompt_submit: Vec<CodexMatcherGroup>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CodexMatcherGroup {
+    #[serde(default)]
+    hooks: Vec<CodexHook>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
+}
+
+impl CodexMatcherGroup {
+    fn akra_hook(command: &str) -> Self {
+        Self {
+            hooks: vec![CodexHook {
+                hook_type: "command".to_owned(),
+                command: command.to_owned(),
+                command_windows: Some(command.to_owned()),
+                asynchronous: None,
+                timeout: Some(1),
+                managed: Some(true),
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct CodexHook {
+    #[serde(rename = "type")]
+    hook_type: String,
+    command: String,
+    #[serde(
+        default,
+        rename = "commandWindows",
+        skip_serializing_if = "Option::is_none"
+    )]
+    command_windows: Option<String>,
+    #[serde(default, rename = "async", skip_serializing_if = "Option::is_none")]
+    asynchronous: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout: Option<u64>,
+    #[serde(
+        default,
+        rename = "akraHookersManaged",
+        skip_serializing_if = "Option::is_none"
+    )]
+    managed: Option<bool>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
+}
+
+impl CodexHook {
+    fn is_akra_hook(&self) -> bool {
+        self.hook_type == "command"
+            && (self.managed == Some(true) || is_legacy_managed_command(&self.command))
+    }
+}
+
+fn is_legacy_managed_command(command: &str) -> bool {
+    let command = command.trim();
+    if matches!(
+        command.to_ascii_lowercase().as_str(),
+        "akra-hookers capture" | "akra-hookers.exe capture"
+    ) {
+        return true;
+    }
+    let Some((executable, data_dir)) = command.split_once(" capture --data-dir ") else {
+        return false;
+    };
+    let Some(executable) = legacy_path_argument(executable) else {
+        return false;
+    };
+    if legacy_path_argument(data_dir).is_none() {
+        return false;
+    }
+    std::path::Path::new(executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("akra-hookers")
+                || name.eq_ignore_ascii_case("akra-hookers.exe")
+        })
+}
+
+fn legacy_path_argument(argument: &str) -> Option<&str> {
+    let argument = argument.trim();
+    let first = argument.chars().next()?;
+    if matches!(first, '\'' | '"') {
+        let inner = argument.strip_prefix(first)?.strip_suffix(first)?;
+        return (!inner.is_empty() && !inner.contains(first)).then_some(inner);
+    }
+    (!argument.is_empty()
+        && !argument.chars().any(|character| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '\'' | '"' | '&' | '|' | '<' | '>' | '(' | ')' | '^' | ';'
+                )
+        }))
+    .then_some(argument)
+}
+
+#[derive(Debug, Error)]
+pub enum CodexLifecycleError {
+    #[error("Codex hook manifest has no parent directory")]
+    MissingManifestParent,
+    #[error("Codex lifecycle filesystem operation failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Codex lifecycle serialization failed: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("Codex hook manifest must be a regular non-link file: {0}")]
+    UnsafeManifest(PathBuf),
+    #[error("Codex hook manifest is {0} bytes, exceeding the {MAX_MANIFEST_BYTES}-byte limit")]
+    OversizedManifest(u64),
+    #[error("Codex hook manifest changed during lifecycle update: {0}")]
+    ConcurrentManifestChange(PathBuf),
+    #[error("{source}; additionally failed to roll back a Codex hook manifest: {rollback}")]
+    Rollback {
+        #[source]
+        source: Box<CodexLifecycleError>,
+        rollback: Box<CodexLifecycleError>,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn lexical_aliases_create_one_manifest_lifecycle_and_lock() {
+        let directory = TempDir::new().expect("home");
+        let home = directory.path().join(".codex");
+        fs::create_dir_all(&home).expect("Codex home");
+        let alias = home.join("missing").join("..");
+
+        let lifecycle = CodexHookLifecycleSet::from_codex_homes([home.clone(), alias]);
+
+        assert_eq!(lifecycle.lifecycles.len(), 1);
+        lifecycle
+            .enable("akra-hookers capture")
+            .expect("single locked lifecycle");
+        assert!(lifecycle.is_enabled().expect("status"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_aliases_create_one_manifest_lifecycle() {
+        let directory = TempDir::new().expect("home");
+        let home = directory.path().join("codex");
+        let alias = directory.path().join("alias");
+        fs::create_dir_all(&home).expect("Codex home");
+        std::os::unix::fs::symlink(&home, &alias).expect("alias");
+
+        let lifecycle = CodexHookLifecycleSet::from_codex_homes([home, alias]);
+
+        assert_eq!(lifecycle.lifecycles.len(), 1);
+    }
+}

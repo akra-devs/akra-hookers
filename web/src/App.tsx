@@ -1,109 +1,76 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Background,
-  Controls,
-  ReactFlow,
-  applyNodeChanges,
-  type Edge,
-  type Node,
-} from "@xyflow/react";
-import { useQuery } from "@tanstack/react-query";
+import { type Node, type NodeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-
 import { createApiClient } from "./api";
-import { toCanvasNodes, type ActivityNodeData } from "./canvas";
-
-const initialNodes: Node<ActivityNodeData>[] = [];
-
+import { getAssignmentSelection } from "./assignment-selection";
+import type { ActivityNodeData } from "./canvas";
+import { ActivityAssignmentBar } from "./components/ActivityAssignmentBar";
+import { ActivityCanvas } from "./components/ActivityCanvas";
+import { ActivityDetailPanel } from "./components/ActivityDetailPanel";
+import { ActivityNode } from "./components/ActivityNode";
+import { OriginSetupDialog } from "./components/OriginSetupDialog";
+import { ProjectDialog } from "./components/ProjectDialog";
+import { ProjectRail, type ProjectFilter } from "./components/ProjectRail";
+import { useDashboardData } from "./hooks/useDashboardData";
+const nodeTypes = { activity: ActivityNode } satisfies NodeTypes;
 export function App() {
-  const [nodes, setNodes] = useState(initialNodes);
-  const [edges, setEdges] = useState<Edge[]>([]);
-  const [codexEnabled, setCodexEnabled] = useState(true);
-  const [selectedProject, setSelectedProject] = useState<string>();
+  const [codexEnabled, setCodexEnabled] = useState(false);
+  const [filter, setFilter] = useState<ProjectFilter>("all");
+  const [projectDialog, setProjectDialog] = useState<"new" | number | null>(null);
+  const [originDialog, setOriginDialog] = useState<number | null>(null);
+  const [detailActivityId, setDetailActivityId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const client = useMemo(() => {
     const url = import.meta.env.VITE_AKRA_URL;
     const token = import.meta.env.VITE_AKRA_TOKEN;
     return url && token ? createApiClient(url, token) : null;
   }, []);
-  const activities = useQuery({
-    queryKey: ["activities", selectedProject],
-    queryFn: () => client!.activities(selectedProject),
-    enabled: client !== null,
-  });
-  const projects = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => client!.projects(),
-    enabled: client !== null,
-  });
-  const provider = useQuery({
-    queryKey: ["provider", "codex"],
-    queryFn: () => client!.provider("codex"),
-    enabled: client !== null,
-  });
-  const canvas = useQuery({
-    queryKey: ["canvas"],
-    queryFn: () => client!.canvas(),
-    enabled: client !== null,
-  });
-  const persistedEdges = useQuery({
-    queryKey: ["canvas-edges"],
-    queryFn: () => client!.edges(),
-    enabled: client !== null,
-  });
-  useEffect(() => {
-    if (activities.data && canvas.data) {
-      setNodes(toCanvasNodes(activities.data, canvas.data));
-    }
-  }, [activities.data, canvas.data]);
+  const activityScope = filter === "all"
+    ? { scope: "all" } as const
+    : filter === "inbox"
+      ? { scope: "inbox" } as const
+      : { scope: "project", projectId: Number(filter.slice("project:".length)) } as const;
+  const {
+    activities, inboxCount, projects, origins, provider, canvas,
+    nodes, setNodes, edges, onNodesChange, commitNodePosition,
+    selectedActivityIds, setSelectedActivityIds, assignmentDetails,
+    refreshProjectContext, refreshCanvas, refreshCanvasAuthoritatively,
+    bootstrapError, bootstrapReady, retryBootstrap,
+    hasOlderActivities, loadOlderActivities, loadingOlderActivities, olderActivitiesError,
+  } = useDashboardData(client, activityScope);
   useEffect(() => {
     if (provider.data) {
       setCodexEnabled(provider.data.enabled);
     }
   }, [provider.data]);
   useEffect(() => {
-    if (activities.data && canvas.data && persistedEdges.data) {
-      const visibleActivityIds = new Set(activities.data.map((activity) => activity.id));
-      const idByCanvasNode = new Map(
-        canvas.data
-          .filter((node) => visibleActivityIds.has(node.activity_event_id))
-          .map((node) => [node.id, `activity-${node.activity_event_id}`]),
-      );
-      setEdges(
-        persistedEdges.data.flatMap((edge) => {
-          const source = idByCanvasNode.get(edge.source_node_id);
-          const target = idByCanvasNode.get(edge.target_node_id);
-          return source && target ? [{ id: `edge-${edge.id}`, source, target }] : [];
-        }),
-      );
+    if (
+      detailActivityId !== null
+      && nodes.every(({ data }) => data.activityId !== detailActivityId)
+    ) {
+      setDetailActivityId(null);
     }
-  }, [activities.data, canvas.data, persistedEdges.data]);
-  const nodeCount = useMemo(() => nodes.length, [nodes.length]);
-  const removeSelectedNode = useCallback(async (nodeId: string) => {
-    const canvasNode = canvas.data?.find((node) => `activity-${node.activity_event_id}` === nodeId);
-    if (client && canvasNode) {
-      try {
-        await client.deleteCanvasNode(canvasNode.id);
-        setNodes((current) => current.filter((node) => node.id !== nodeId));
-        await Promise.all([canvas.refetch(), persistedEdges.refetch()]);
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Could not remove canvas node.");
-      }
-    }
-  }, [canvas, client, persistedEdges]);
+  }, [detailActivityId, nodes]);
+  const changeSelection = useCallback((selection: { nodes: Node<ActivityNodeData>[] }) => {
+    const selected = selection.nodes.map(({ data }) => data.activityId);
+    setSelectedActivityIds((current) =>
+      current.length === selected.length
+      && current.every((activityId, index) => activityId === selected[index])
+        ? current
+        : selected
+    );
+  }, []);
   const clearCanvas = useCallback(async () => {
     if (!client) {
       return;
     }
     try {
       await client.clearCanvas();
-      setNodes([]);
-      setEdges([]);
-      await Promise.all([canvas.refetch(), persistedEdges.refetch()]);
+      await refreshCanvasAuthoritatively();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not clear canvas.");
     }
-  }, [canvas, client, persistedEdges]);
+  }, [client, refreshCanvasAuthoritatively]);
   const changeProvider = useCallback(async (enabled: boolean) => {
     if (!client) {
       return;
@@ -118,99 +85,127 @@ export function App() {
       setError(cause instanceof Error ? cause.message : "Could not update Codex capture.");
     }
   }, [client, codexEnabled, provider]);
-
+  const managedProject = projectDialog === null || projectDialog === "new"
+    ? undefined
+    : projects.data?.find((project) => project.id === projectDialog);
+  const managedOrigin = originDialog === null
+    ? undefined
+    : origins.data?.find((origin) => origin.id === originDialog);
+  const assignmentSelection = getAssignmentSelection(
+    assignmentDetails,
+    origins.data ?? [],
+  );
+  const selectedProjectId = assignmentDetails?.[0]?.project?.id;
+  const currentProjectId = selectedProjectId !== undefined
+    && assignmentDetails?.every(({ project }) => project?.id === selectedProjectId)
+    ? selectedProjectId
+    : null;
   return (
-    <main className="app-shell">
-      <aside className="rail">
-        <p className="eyebrow">LOCAL ACTIVITY MAP</p>
-        <h1>akra-hookers</h1>
-        <p className="muted">{nodeCount} canvas nodes</p>
-        <section className="provider-control" aria-label="Provider settings">
-          <p className="eyebrow">SETTINGS</p>
-          <label>
-            <span>Codex capture</span>
-            <input
-              type="checkbox"
-              checked={codexEnabled}
-              onChange={(event) => {
-                void changeProvider(event.target.checked);
-              }}
-            />
-          </label>
-          <small>Installs or removes the global Codex capture hook.</small>
-        </section>
-        <section className="provider-control" aria-label="Project filter">
-          <p className="eyebrow">PROJECT</p>
-          <select
-            value={selectedProject ?? ""}
-            onChange={(event) => setSelectedProject(event.target.value || undefined)}
-          >
-            <option value="">All projects</option>
-            {projects.data?.map((project) => (
-              <option key={project.identity} value={project.identity}>
-                {project.display_path}
-              </option>
-            ))}
-          </select>
-        </section>
-      </aside>
+    <main className={detailActivityId === null ? "app-shell" : "app-shell app-shell--detail"}>
+      <ProjectRail
+        nodeCount={nodes.length} codexEnabled={codexEnabled}
+        codexAvailable={provider.data !== undefined && !provider.isError}
+        projects={projects.data ?? []} origins={origins.data ?? []}
+        inboxCount={inboxCount.data ?? 0} filter={filter}
+        onCodexChange={(enabled) => void changeProvider(enabled)}
+        onFilterChange={setFilter} onNewProject={() => setProjectDialog("new")}
+        onManageProject={setProjectDialog} onManageOrigin={setOriginDialog}
+      />
       <section className="canvas-panel">
         <header>
-          <div>
+          <div className="canvas-actions">
             <p className="eyebrow">PROJECT ACTIVITY</p>
             <h2>Prompt canvas</h2>
           </div>
-          <button type="button" onClick={() => void clearCanvas()}>Clear canvas</button>
+          <div>
+            {hasOlderActivities && (
+              <button
+                type="button"
+                disabled={loadingOlderActivities}
+                onClick={() => void loadOlderActivities()}
+              >
+                {loadingOlderActivities ? "불러오는 중…" : "이전 활동 불러오기"}
+              </button>
+            )}
+            <button type="button" onClick={() => void clearCanvas()}>Clear canvas</button>
+          </div>
         </header>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={(changes) => {
-            setNodes((current) => applyNodeChanges(
-              changes.filter((change) => change.type !== "remove"),
-              current,
-            ));
-          }}
-          onNodesDelete={(deleted) => {
-            deleted.forEach((node) => {
-              void removeSelectedNode(node.id);
-            });
-          }}
-          onNodeDragStop={(_, node) => {
-            const canvasNode = canvas.data?.find(
-              (candidate) => `activity-${candidate.activity_event_id}` === node.id,
-            );
-            if (client && canvasNode) {
-              void client.updateCanvasPosition(canvasNode.id, node.position).catch((cause: unknown) => {
-                setError(cause instanceof Error ? cause.message : "Could not save canvas position.");
-                void canvas.refetch();
-              });
-            }
-          }}
-          onConnect={(connection) => {
-            const sourceNode = canvas.data?.find((node) => `activity-${node.activity_event_id}` === connection.source);
-            const targetNode = canvas.data?.find((node) => `activity-${node.activity_event_id}` === connection.target);
-            if (client && sourceNode && targetNode) {
-              void client.createCanvasEdge(sourceNode.id, targetNode.id)
-                .then(() => persistedEdges.refetch())
-                .catch((cause: unknown) => {
-                  setError(cause instanceof Error ? cause.message : "Could not create canvas edge.");
-                });
-            }
-          }}
-          fitView
-        >
-          <Background />
-          <Controls />
-        </ReactFlow>
-        {nodes.length === 0 && (
+        {bootstrapError && (
+          <div className="dashboard-error" role="alert">
+            <span>대시보드 데이터를 불러오지 못했습니다.</span>
+            <button type="button" onClick={() => void retryBootstrap()}>
+              다시 시도
+            </button>
+          </div>
+        )}
+        {olderActivitiesError && (
+          <p className="dashboard-error" role="alert">{olderActivitiesError}</p>
+        )}
+        <ActivityCanvas
+          client={client} canvasNodes={canvas.data ?? []}
+          nodes={nodes} setNodes={setNodes} edges={edges} nodeTypes={nodeTypes}
+          onNodesChange={onNodesChange} onPositionCommit={commitNodePosition}
+          onActivityOpen={setDetailActivityId} onError={setError}
+          onPersistedChange={refreshCanvas}
+          onSelectionChange={changeSelection}
+        />
+        {bootstrapReady && nodes.length === 0 && (
           <div className="empty-state">
             <strong>No activity on this canvas</strong>
             <span>Submitted provider prompts appear here; removing a node never deletes its activity record.</span>
           </div>
         )}
         {error && <p className="error-message" role="alert">{error}</p>}
+        {client && (
+          <ActivityAssignmentBar
+            key={assignmentSelection.state === "assignable"
+              ? assignmentSelection.activityIds.join(":")
+              : assignmentSelection.state}
+            selection={assignmentSelection}
+            projects={projects.data ?? []}
+            currentProjectId={currentProjectId}
+            onAssign={async (request) => {
+              await client.assignActivities(request);
+              await refreshProjectContext();
+              if (detailActivityId !== null && request.activity_ids.includes(detailActivityId)) {
+                const projectId = request.destination && "project_id" in request.destination
+                  ? request.destination.project_id
+                  : null;
+                const remainsVisible = filter === "all"
+                  || (filter === "inbox" && request.destination === null)
+                  || filter === `project:${projectId}`;
+                if (!remainsVisible) setDetailActivityId(null);
+              }
+            }}
+            onMoveOrigin={setOriginDialog}
+          />
+        )}
       </section>
+      {client && detailActivityId !== null && (
+        <ActivityDetailPanel
+          key={detailActivityId}
+          activityId={detailActivityId}
+          client={client}
+          onClose={() => setDetailActivityId(null)}
+        />
+      )}
+      {client && projectDialog !== null && (
+        <ProjectDialog
+          client={client} projects={projects.data ?? []} project={managedProject}
+          onClose={() => setProjectDialog(null)}
+          onChanged={async (projectId) => {
+            if (projectId !== undefined) setFilter(`project:${projectId}`);
+            await refreshProjectContext();
+          }}
+        />
+      )}
+      {client && managedOrigin && (
+        <OriginSetupDialog
+          client={client} origin={managedOrigin} projects={projects.data ?? []}
+          onClose={() => setOriginDialog(null)}
+          onChanged={refreshProjectContext}
+        />
+      )}
     </main>
   );
 }
