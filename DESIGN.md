@@ -16,10 +16,35 @@ analytics table.
 
 ## Layout
 
-- A compact left rail contains the product mark, project selector, and Settings.
+- A compact left rail establishes project context before controls: project filter,
+  Inbox count, new/manage-project actions, then work-location setup and management.
 - The main region is an infinite React Flow canvas with controls in the lower right.
 - A right detail panel opens for the selected activity and never obscures navigation.
+- On narrow screens the rail, canvas, assignment controls, and detail panel stack in
+  that order. No surface overlays navigation or introduces horizontal scrolling.
 - Settings is a modal panel listing provider state separately from historic activity.
+
+## Project and origin hierarchy
+
+- A project is a user-named logical context, not a directory path. Separate clones,
+  linked worktrees, and folders may be connected to one project through their origins.
+- Each origin is configured explicitly as dedicated or shared. Dedicated origins
+  route all history to one project; shared origins place new work in Inbox unless a
+  same-conversation future route exists.
+- Inbox means unassigned shared work. Assignment is conservative: only selected
+  activities move, and future conversation routing is a separate default-off choice.
+- Session and turn identifiers are technical detail. They never substitute for the
+  project name and remain collapsed in the detail panel.
+
+## Information density
+
+- Normal cards show project or Inbox context, conversation sequence, a three-line
+  prompt summary, provider, and compact local time. They do not show paths or IDs.
+- Detail shows the complete prompt, truthful captured/first-recorded timestamps and
+  provenance, submitted and detected paths separately, copyable collapsed technical
+  IDs, and the immutable oldest-first conversation timeline.
+- Korean text keeps semantic word boundaries where spaces exist. Unbroken Korean,
+  URLs, and mixed text may emergency-wrap without expanding their container.
 
 ## Interaction
 
@@ -29,3 +54,6 @@ analytics table.
   remain visible after a provider is disabled.
 - Empty state explains that a configured provider will populate the canvas after
   its next submitted prompt.
+- Every modal traps and restores focus. Setup, assignment, technical disclosure,
+  copy, detail close, and canvas-card activation remain keyboard operable with a
+  visible focus indicator.

@@ -17,3 +17,21 @@ fn rejects_payloads_without_prompt() {
     .expect_err("prompt is required");
     assert!(error.to_string().contains("prompt"));
 }
+
+#[test]
+fn rejects_payloads_without_required_technical_ids() {
+    for (field, payload) in [
+        (
+            "session_id",
+            r#"{"hook_event_name":"UserPromptSubmit","turn_id":"t","cwd":"C:\\x","prompt":"p"}"#,
+        ),
+        (
+            "turn_id",
+            r#"{"hook_event_name":"UserPromptSubmit","session_id":"s","cwd":"C:\\x","prompt":"p"}"#,
+        ),
+    ] {
+        let error = CodexAdapter::normalize(payload)
+            .expect_err("missing technical ID must reject the capture payload");
+        assert!(error.to_string().contains(field), "{error}");
+    }
+}

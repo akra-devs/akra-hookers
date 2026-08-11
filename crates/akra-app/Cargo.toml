@@ -11,16 +11,22 @@ akra-adapters = { path = "../akra-adapters" }
 akra-git = { path = "../akra-git" }
 akra-store = { path = "../akra-store" }
 axum = "0.8"
+base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
+fs2 = "0.4"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+tempfile = "3"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
 tower-http = { version = "0.6", features = ["cors"] }
 uuid = { version = "1", features = ["v4"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
-tempfile = "3"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 tower = { version = "0.5", features = ["util"] }
 
 [[bin]]

@@ -9,9 +9,11 @@ describe("toCanvasNodes", () => {
         {
           id: 9,
           provider: "codex",
-          session_id: "session",
-          turn_id: "turn",
           prompt: "Add a health endpoint",
+          project: null,
+          time: { value: null, provenance: "unknown" },
+          conversation_index: 1,
+          conversation_total: 1,
         },
       ],
       [{ id: 3, activity_event_id: 9, position_x: 64, position_y: 64 }],
@@ -20,15 +22,41 @@ describe("toCanvasNodes", () => {
     expect(nodes).toMatchObject([
       {
         id: "activity-9",
+        type: "activity",
         position: { x: 64, y: 64 },
-        data: { provider: "codex", prompt: "Add a health endpoint" },
+        data: {
+          activityId: 9,
+          project: null,
+          provider: "codex",
+          prompt: "Add a health endpoint",
+          time: { value: null, provenance: "unknown" },
+          conversationIndex: 1,
+          conversationTotal: 1,
+        },
       },
+    ]);
+    expect(Object.keys(nodes[0]?.data ?? {}).sort()).toEqual([
+      "activityId",
+      "conversationIndex",
+      "conversationTotal",
+      "project",
+      "prompt",
+      "provider",
+      "time",
     ]);
   });
 
   it("uses durable canvas positions when supplied by the API", () => {
     const nodes = toCanvasNodes(
-      [{ id: 9, provider: "codex", session_id: "s", turn_id: "t", prompt: "keep" }],
+      [{
+        id: 9,
+        provider: "codex",
+        prompt: "keep",
+        project: null,
+        time: { value: null, provenance: "unknown" },
+        conversation_index: 1,
+        conversation_total: 1,
+      }],
       [{ id: 3, activity_event_id: 9, position_x: 120, position_y: 220 }],
     );
 
@@ -37,7 +65,15 @@ describe("toCanvasNodes", () => {
 
   it("does not recreate an activity whose removable canvas node is absent", () => {
     const nodes = toCanvasNodes(
-      [{ id: 9, provider: "codex", session_id: "s", turn_id: "t", prompt: "removed" }],
+      [{
+        id: 9,
+        provider: "codex",
+        prompt: "removed",
+        project: null,
+        time: { value: null, provenance: "unknown" },
+        conversation_index: 1,
+        conversation_total: 1,
+      }],
       [],
     );
 
