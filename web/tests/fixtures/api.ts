@@ -75,10 +75,20 @@ export class FixtureApi {
         await deferred.released;
       }
       const detail = this.state.details[activityId];
-      return detail ? { status: 200, body: detail } : error(404, "not_found", "Activity was not found");
+      return detail
+        ? { status: 200, body: this.detail(detail, url) }
+        : error(404, "not_found", "Activity was not found");
     }
     if (path === "/v1/projects" && method === "GET") {
-      return { status: 200, body: this.state.projects };
+      return {
+        status: 200,
+        body: this.state.projects.map((project) => ({
+          ...project,
+          activity_count: this.state.activities.filter((activity) =>
+            activity.project?.id === project.id
+            && this.activityKindVisible(activity.activity_kind, url)).length,
+        })),
+      };
     }
     if (path === "/v1/projects" && method === "POST") {
       return { status: 201, body: this.model.createProject(named(body)) };
@@ -236,6 +246,8 @@ export class FixtureApi {
     } else {
       throw new Error(`Unexpected API request: GET ${url.pathname}${url.search}`);
     }
+    activities = activities.filter((activity) =>
+      this.activityKindVisible(activity.activity_kind, url));
     const ordered = url.searchParams.get("order") === "newest"
       ? [...activities].reverse()
       : [...activities];
@@ -245,6 +257,31 @@ export class FixtureApi {
       : 0;
     const limit = Number(url.searchParams.get("limit")) || ordered.length;
     return ordered.slice(start, start + limit);
+  }
+
+  private detail(detail: FixtureState["details"][number], url: URL) {
+    const conversation = detail.conversation.filter((turn) =>
+      this.activityKindVisible(turn.activity_kind, url));
+    const hiddenTotal = detail.conversation.filter((turn) =>
+      !this.activityKindVisible(turn.activity_kind, url)).length;
+    const conversationTotal = Math.max(0, detail.conversation_total - hiddenTotal);
+    return {
+      ...detail,
+      conversation,
+      conversation_total: conversationTotal,
+      conversation_has_more:
+        detail.conversation_has_more && conversation.length < conversationTotal,
+    };
+  }
+
+  private activityKindVisible(activityKind: string, url: URL) {
+    if (activityKind === "subagent") {
+      return url.searchParams.get("include_subagent") !== "false";
+    }
+    if (activityKind === "internal") {
+      return url.searchParams.get("include_internal") !== "false";
+    }
+    return true;
   }
 
 }

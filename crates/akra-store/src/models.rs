@@ -11,6 +11,7 @@ pub struct ActivitySummary {
     pub time: ActivityTimeSummary,
     pub conversation_index: i64,
     pub conversation_total: i64,
+    pub result_summary_status: ResultSummaryStatus,
 }
 
 #[derive(Debug, Serialize)]
@@ -46,6 +47,7 @@ pub struct ActivityDetail {
     pub submitted_cwd: Option<String>,
     pub origin: ActivityOriginDetail,
     pub technical: ActivityTechnicalDetail,
+    pub result_summary: ActivityResultSummary,
     pub selected_turn: ActivityConversationTurn,
     pub conversation: Vec<ActivityConversationTurn>,
     pub conversation_total: i64,
@@ -78,6 +80,31 @@ pub struct ActivityConversationTurn {
     pub time: ActivityTimeSummary,
     pub on_canvas: bool,
     pub selected: bool,
+    pub result_summary: ActivityResultSummary,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultSummaryStatus {
+    Pending,
+    Ready,
+    Unavailable,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ActivityResultSummary {
+    pub status: ResultSummaryStatus,
+    pub lines: Option<[String; 3]>,
+}
+
+impl ActivityResultSummary {
+    pub const fn unavailable() -> Self {
+        Self {
+            status: ResultSummaryStatus::Unavailable,
+            lines: None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

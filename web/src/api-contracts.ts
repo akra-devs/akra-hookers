@@ -1,5 +1,10 @@
 export type ActivityTimeProvenance = "captured" | "legacy_recorded" | "unknown";
 export type ActivityKind = "user" | "subagent" | "internal";
+export type ResultSummaryStatus = "pending" | "ready" | "unavailable" | "failed";
+
+export type ActivityResultSummary =
+  | { status: "ready"; lines: [string, string, string] }
+  | { status: Exclude<ResultSummaryStatus, "ready">; lines: null };
 
 export type ActivityTime = {
   value: string | null;
@@ -20,6 +25,7 @@ export type ActivitySummary = {
   time: ActivityTime;
   conversation_index: number;
   conversation_total: number;
+  result_summary_status: ResultSummaryStatus;
 };
 
 export type ActivityConversationTurn = {
@@ -30,6 +36,7 @@ export type ActivityConversationTurn = {
   time: ActivityTime;
   on_canvas: boolean;
   selected: boolean;
+  result_summary: ActivityResultSummary;
 };
 
 export type ActivityDetail = {
@@ -55,6 +62,7 @@ export type ActivityDetail = {
     agent_id: string | null;
     agent_type: string | null;
   };
+  result_summary: ActivityResultSummary;
   selected_turn: ActivityConversationTurn;
   conversation: ActivityConversationTurn[];
   conversation_total: number;

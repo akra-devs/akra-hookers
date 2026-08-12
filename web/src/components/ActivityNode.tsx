@@ -24,6 +24,13 @@ export function ActivityNode({
   const projectName = data.project?.name ?? "분류 필요";
   const displayTime = formatActivityTime(data.time);
   const nodeId = `activity-${data.activityId}`;
+  const resultStatus = data.resultSummaryStatus === "ready"
+    ? "요약 있음"
+    : data.resultSummaryStatus === "pending"
+      ? "요약 중"
+      : data.resultSummaryStatus === "failed"
+        ? "요약 실패"
+        : null;
 
   return (
     <article
@@ -71,6 +78,13 @@ export function ActivityNode({
           {data.activityKind !== "user" && (
             <span className={`activity-node__kind activity-node__kind--${data.activityKind}`}>
               {data.activityKind}
+            </span>
+          )}
+          {resultStatus && (
+            <span
+              className={`activity-node__result activity-node__result--${data.resultSummaryStatus}`}
+            >
+              {resultStatus}
             </span>
           )}
         </span>

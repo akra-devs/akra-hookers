@@ -23,6 +23,7 @@ export type FixtureState = {
 };
 
 const captured = { value: "2026-08-08T12:00:00Z", provenance: "captured" } as const;
+const unavailableResult = { status: "unavailable", lines: null } as const;
 
 export function createFixtureState(): FixtureState {
   const activities: ActivitySummary[] = [
@@ -35,6 +36,7 @@ export function createFixtureState(): FixtureState {
       time: captured,
       conversation_index: 1,
       conversation_total: 2,
+      result_summary_status: "unavailable",
     },
     {
       id: 2,
@@ -45,6 +47,7 @@ export function createFixtureState(): FixtureState {
       time: captured,
       conversation_index: 2,
       conversation_total: 2,
+      result_summary_status: "unavailable",
     },
   ];
   const details: Record<number, ActivityDetail> = {
@@ -64,6 +67,7 @@ export function createFixtureState(): FixtureState {
       time: activity.time,
       on_canvas: true,
       selected: activity.id === selected,
+      result_summary: unavailableResult,
     }));
   }
   return {
@@ -201,6 +205,7 @@ function detail(summary: ActivitySummary, turnId: string): ActivityDetail {
       agent_id: null,
       agent_type: null,
     },
+    result_summary: unavailableResult,
     selected_turn: {
       id: summary.id,
       activity_kind: summary.activity_kind,
@@ -209,6 +214,7 @@ function detail(summary: ActivitySummary, turnId: string): ActivityDetail {
       time: summary.time,
       on_canvas: true,
       selected: true,
+      result_summary: unavailableResult,
     },
     conversation: [],
     conversation_total: 2,

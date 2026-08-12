@@ -59,6 +59,21 @@ pub struct IngressEvent {
     agent_type: Option<String>,
 }
 
+/// Provider-neutral final result captured for a previously submitted prompt.
+///
+/// Providers can report a completed turn without a final assistant message, so
+/// `result` is optional. The technical session/turn identity is still retained
+/// so storage can join the completion to its prompt deterministically.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ResultEvent {
+    provider: ProviderId,
+    provider_session_id: String,
+    provider_turn_id: String,
+    cwd: String,
+    result: Option<String>,
+    model: Option<String>,
+}
+
 impl IngressEvent {
     pub fn try_new(
         provider: impl Into<String>,
@@ -74,18 +89,7 @@ impl IngressEvent {
         let cwd = cwd.into();
         let prompt = prompt.into();
 
-        if provider.trim().is_empty() {
-            return Err(IngressError::BlankProvider);
-        }
-        if provider_session_id.trim().is_empty() {
-            return Err(IngressError::BlankSessionId);
-        }
-        if provider_turn_id.trim().is_empty() {
-            return Err(IngressError::BlankTurnId);
-        }
-        if cwd.trim().is_empty() {
-            return Err(IngressError::BlankWorkingDirectory);
-        }
+        validate_identity(&provider, &provider_session_id, &provider_turn_id, &cwd)?;
         if prompt.trim().is_empty() {
             return Err(IngressError::BlankPrompt);
         }
@@ -140,6 +144,10 @@ impl IngressEvent {
         &self.cwd
     }
 
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
     pub const fn activity_kind(&self) -> ActivityKind {
         self.activity_kind
     }
@@ -151,6 +159,78 @@ impl IngressEvent {
     pub fn agent_type(&self) -> Option<&str> {
         self.agent_type.as_deref()
     }
+}
+
+impl ResultEvent {
+    pub fn try_new(
+        provider: impl Into<String>,
+        provider_session_id: impl Into<String>,
+        provider_turn_id: impl Into<String>,
+        cwd: impl Into<String>,
+        result: Option<String>,
+        model: Option<String>,
+    ) -> Result<Self, IngressError> {
+        let provider = provider.into();
+        let provider_session_id = provider_session_id.into();
+        let provider_turn_id = provider_turn_id.into();
+        let cwd = cwd.into();
+
+        validate_identity(&provider, &provider_session_id, &provider_turn_id, &cwd)?;
+
+        Ok(Self {
+            provider: ProviderId(provider),
+            provider_session_id,
+            provider_turn_id,
+            cwd,
+            result,
+            model,
+        })
+    }
+
+    pub fn provider(&self) -> &ProviderId {
+        &self.provider
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.provider_session_id
+    }
+
+    pub fn turn_id(&self) -> &str {
+        &self.provider_turn_id
+    }
+
+    pub fn cwd(&self) -> &str {
+        &self.cwd
+    }
+
+    pub fn result(&self) -> Option<&str> {
+        self.result.as_deref()
+    }
+
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+}
+
+fn validate_identity(
+    provider: &str,
+    provider_session_id: &str,
+    provider_turn_id: &str,
+    cwd: &str,
+) -> Result<(), IngressError> {
+    if provider.trim().is_empty() {
+        return Err(IngressError::BlankProvider);
+    }
+    if provider_session_id.trim().is_empty() {
+        return Err(IngressError::BlankSessionId);
+    }
+    if provider_turn_id.trim().is_empty() {
+        return Err(IngressError::BlankTurnId);
+    }
+    if cwd.trim().is_empty() {
+        return Err(IngressError::BlankWorkingDirectory);
+    }
+    Ok(())
 }
 
 fn validate_optional_context(label: &'static str, value: Option<&str>) -> Result<(), IngressError> {

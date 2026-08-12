@@ -1,13 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import type { ActivityConversationTurn, ActivityTime, ApiClient } from "../api";
+import type {
+  ActivityConversationTurn,
+  ActivityResultSummary,
+  ActivityTime,
+  ApiClient,
+} from "../api";
+import {
+  isActivityKindVisible,
+  type ActivityVisibility,
+} from "../activity-visibility";
 import { formatActivityTime } from "../time";
 import { useTimelineAnchor } from "../useTimelineAnchor";
 import { UiIcon } from "./UiIcon";
 
 type ActivityDetailPanelProps = {
   activityId: number;
+  activityVisibility: ActivityVisibility;
   client: ApiClient;
   onClose: () => void;
 };
@@ -31,15 +41,62 @@ function DetailTime({
   );
 }
 
+function ResultSummary({ summary }: { summary: ActivityResultSummary }) {
+  return (
+    <section
+      className={`activity-detail__result activity-detail__result--${summary.status}`}
+      data-testid="activity-result-summary"
+      data-status={summary.status}
+      aria-labelledby="result-summary-heading"
+      aria-busy={summary.status === "pending" || undefined}
+    >
+      <h3 id="result-summary-heading">결과 요약</h3>
+      {summary.status === "ready" && (
+        <ol>
+          {summary.lines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
+        </ol>
+      )}
+      {summary.status === "pending" && (
+        <p aria-live="polite">Codex Spark가 결과를 요약하는 중입니다.</p>
+      )}
+      {summary.status === "failed" && <p>결과 요약을 만들지 못했습니다.</p>}
+      {summary.status === "unavailable" && <p>저장된 결과 요약이 없습니다.</p>}
+    </section>
+  );
+}
+
+function TimelineResultSummary({ summary }: { summary: ActivityResultSummary }) {
+  if (summary.status === "unavailable") return null;
+  if (summary.status === "pending") {
+    return <p className="activity-detail__turn-result-state">결과 요약 중</p>;
+  }
+  if (summary.status === "failed") {
+    return <p className="activity-detail__turn-result-state is-failed">결과 요약 실패</p>;
+  }
+  if (summary.status !== "ready") return null;
+  return (
+    <details className="activity-detail__turn-result">
+      <summary>결과 요약 보기</summary>
+      <ul>
+        {summary.lines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
+      </ul>
+    </details>
+  );
+}
+
 export function ActivityDetailPanel({
   activityId,
+  activityVisibility,
   client,
   onClose,
 }: ActivityDetailPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
   const detailQuery = useQuery({
-    queryKey: ["activity", activityId],
-    queryFn: () => client.activity(activityId),
+    queryKey: ["activity", activityId, activityVisibility],
+    queryFn: () => client.activity(activityId, {
+      includeSubagent: activityVisibility.subagent,
+      includeInternal: activityVisibility.internal,
+    }),
     retry: false,
     refetchInterval: (query) =>
       query.state.status === "success" ? 500 : false,
@@ -48,6 +105,7 @@ export function ActivityDetailPanel({
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
   const [additionalTurns, setAdditionalTurns] = useState<ActivityConversationTurn[]>([]);
+  const [additionalPageCursors, setAdditionalPageCursors] = useState<number[]>([]);
   const [pageHasMore, setPageHasMore] = useState<boolean | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pageError, setPageError] = useState("");
@@ -56,18 +114,24 @@ export function ActivityDetailPanel({
   }, [activityId]);
   useEffect(() => {
     setAdditionalTurns([]);
+    setAdditionalPageCursors([]);
     setPageHasMore(null);
     setPageError("");
-  }, [activityId, detail?.conversation_total]);
+  }, [
+    activityId,
+    activityVisibility.internal,
+    activityVisibility.subagent,
+    detail?.conversation_total,
+  ]);
   const pageTurns = detail
     ? [...detail.conversation, ...additionalTurns].filter(
       (turn, index, turns) => turns.findIndex(({ id }) => id === turn.id) === index,
-    )
+    ).filter((turn) => isActivityKindVisible(turn.activity_kind, activityVisibility))
     : [];
   const timelineTurns = detail
     ? [...pageTurns, detail.selected_turn].filter(
       (turn, index, turns) => turns.findIndex(({ id }) => id === turn.id) === index,
-    )
+    ).filter((turn) => isActivityKindVisible(turn.activity_kind, activityVisibility))
     : [];
   const timelineKey = timelineTurns.map(({ id }) => id).join(":");
   const timelineRef = useTimelineAnchor(activityId, timelineKey);
@@ -77,8 +141,16 @@ export function ActivityDetailPanel({
     setLoadingMore(true);
     setPageError("");
     try {
-      const page = await client.activity(activityId, { limit: 100, afterId: cursor });
+      const page = await client.activity(activityId, {
+        limit: 100,
+        afterId: cursor,
+        includeSubagent: activityVisibility.subagent,
+        includeInternal: activityVisibility.internal,
+      });
       setAdditionalTurns((current) => [...current, ...page.conversation]);
+      setAdditionalPageCursors((current) =>
+        current.includes(cursor) ? current : [...current, cursor]
+      );
       setPageHasMore(page.conversation_has_more);
     } catch (cause) {
       setPageError(cause instanceof Error ? cause.message : "대화 기록을 더 불러오지 못했습니다.");
@@ -86,6 +158,51 @@ export function ActivityDetailPanel({
       setLoadingMore(false);
     }
   };
+  useEffect(() => {
+    if (additionalPageCursors.length === 0) return;
+    let cancelled = false;
+    let refreshInFlight = false;
+    const refreshAdditionalPages = async () => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      try {
+        const pages = await Promise.all(additionalPageCursors.map((afterId) =>
+          client.activity(activityId, {
+            limit: 100,
+            afterId,
+            includeSubagent: activityVisibility.subagent,
+            includeInternal: activityVisibility.internal,
+          })
+        ));
+        if (cancelled) return;
+        setAdditionalTurns((current) => {
+          const byId = new Map(current.map((turn) => [turn.id, turn]));
+          for (const turn of pages.flatMap((page) => page.conversation)) {
+            byId.set(turn.id, turn);
+          }
+          return [...byId.values()];
+        });
+        const lastPage = pages.at(-1);
+        if (lastPage) setPageHasMore(lastPage.conversation_has_more);
+      } catch {
+        // Keep the loaded page visible; the next interval retries its refresh.
+      } finally {
+        refreshInFlight = false;
+      }
+    };
+    void refreshAdditionalPages();
+    const interval = window.setInterval(() => void refreshAdditionalPages(), 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [
+    activityId,
+    activityVisibility.internal,
+    activityVisibility.subagent,
+    additionalPageCursors,
+    client,
+  ]);
   const copyTechnicalValue = async (label: string, value: string) => {
     try {
       await navigator.clipboard.writeText(value);
@@ -162,11 +279,18 @@ export function ActivityDetailPanel({
           <UiIcon name="close" />
         </button>
       </header>
+      <div
+        className="activity-detail__context"
+        role="region"
+        aria-label="선택한 활동 정보"
+        tabIndex={0}
+      >
       <section className="activity-detail__selected" aria-label="선택한 활동">
         <span className="activity-detail__project">{detail.project?.name ?? "Inbox"}</span>
         <p>{detail.prompt}</p>
         <span className="activity-detail__provider">{detail.provider}</span>
       </section>
+      <ResultSummary summary={detail.result_summary} />
       <dl className="activity-detail__facts">
         <DetailTime label="수집 시각" testId="captured-at" time={detail.captured_at} />
         <DetailTime label="최초 기록 시각" testId="first-recorded-at" time={detail.first_recorded_at} />
@@ -252,6 +376,7 @@ export function ActivityDetailPanel({
         </dl>}
         <span className="sr-only" aria-live="polite">{copyStatus}</span>
       </details>
+      </div>
       <section className="activity-detail__timeline" aria-labelledby="conversation-heading">
         <h3 id="conversation-heading">
           대화 기록 ({timelineTurns.length}/{detail.conversation_total})
@@ -269,6 +394,7 @@ export function ActivityDetailPanel({
                 {!turn.on_canvas && <span>캔버스에 없음</span>}
               </div>
               <p>{turn.prompt}</p>
+              {!turn.selected && <TimelineResultSummary summary={turn.result_summary} />}
               <time dateTime={turn.time.value ?? undefined}>{formatActivityTime(turn.time)}</time>
             </li>
           ))}

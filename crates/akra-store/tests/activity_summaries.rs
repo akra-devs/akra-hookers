@@ -122,6 +122,7 @@ async fn scopes_use_effective_projects_and_keep_global_conversation_numbers() {
             "project",
             "prompt",
             "provider",
+            "result_summary_status",
             "time"
         ]
     );

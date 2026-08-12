@@ -22,10 +22,18 @@ pub struct CodexCaptureContext {
 /// The hook event is authoritative for subagents; session metadata and the Codex
 /// application directory are conservative fallbacks for older prompt captures.
 pub fn codex_capture_context(payload: &Value, wsl_distro: Option<&str>) -> CodexCaptureContext {
+    codex_capture_context_with_home(payload, wsl_distro, None)
+}
+
+fn codex_capture_context_with_home(
+    payload: &Value,
+    wsl_distro: Option<&str>,
+    codex_home: Option<&str>,
+) -> CodexCaptureContext {
     let meta = payload
         .get("transcript_path")
         .and_then(Value::as_str)
-        .and_then(session_meta)
+        .and_then(|path| session_meta(path, wsl_distro, codex_home))
         .and_then(|value| classify_session_meta(&value));
     let client = if wsl_distro.is_some() {
         "wsl_cli"
@@ -77,8 +85,9 @@ pub fn codex_capture_context(payload: &Value, wsl_distro: Option<&str>) -> Codex
 pub fn codex_managed_capture_context(
     payload: &Value,
     wsl_distro: Option<&str>,
+    codex_home: Option<&str>,
 ) -> CodexCaptureContext {
-    let mut context = codex_capture_context(payload, wsl_distro);
+    let mut context = codex_capture_context_with_home(payload, wsl_distro, codex_home);
     if context.client == "unknown" && context.activity_kind == ActivityKind::User {
         context.activity_kind = ActivityKind::Internal;
     }
@@ -89,9 +98,14 @@ pub fn codex_client(payload: &Value, wsl_distro: Option<&str>) -> &'static str {
     codex_capture_context(payload, wsl_distro).client
 }
 
-fn session_meta(transcript_path: &str) -> Option<Value> {
-    let path = PathBuf::from(transcript_path);
-    if !is_codex_session_path(&path) {
+fn session_meta(
+    transcript_path: &str,
+    wsl_distro: Option<&str>,
+    codex_home: Option<&str>,
+) -> Option<Value> {
+    let path = runtime_path(transcript_path, wsl_distro)?;
+    let home = codex_home.and_then(|home| runtime_path(home, wsl_distro));
+    if !is_codex_session_path(&path, home.as_deref()) {
         return None;
     }
     let metadata = fs::symlink_metadata(&path).ok()?;
@@ -107,7 +121,22 @@ fn session_meta(transcript_path: &str) -> Option<Value> {
     serde_json::from_str(&line).ok()
 }
 
-fn is_codex_session_path(path: &Path) -> bool {
+fn is_codex_session_path(path: &Path, codex_home: Option<&Path>) -> bool {
+    if path
+        .extension()
+        .is_none_or(|extension| extension != "jsonl")
+    {
+        return false;
+    }
+    if let Some(codex_home) = codex_home {
+        let Ok(path) = path.canonicalize() else {
+            return false;
+        };
+        let Ok(sessions) = codex_home.join("sessions").canonicalize() else {
+            return false;
+        };
+        return path.starts_with(sessions);
+    }
     let components = path
         .components()
         .filter_map(|component| match component {
@@ -119,9 +148,17 @@ fn is_codex_session_path(path: &Path) -> bool {
     components
         .windows(2)
         .any(|pair| pair[0] == ".codex" && pair[1] == "sessions")
-        && path
-            .extension()
-            .is_some_and(|extension| extension == "jsonl")
+}
+
+fn runtime_path(path: &str, wsl_distro: Option<&str>) -> Option<PathBuf> {
+    #[cfg(windows)]
+    if let Some(distro) = wsl_distro {
+        return crate::paths::wsl_cwd_to_windows(distro, path).ok();
+    }
+    #[cfg(not(windows))]
+    let _ = wsl_distro;
+    let path = PathBuf::from(path);
+    path.is_absolute().then_some(path)
 }
 
 #[derive(Debug)]
@@ -204,8 +241,11 @@ fn is_codex_internal_cwd(cwd: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use akra_core::ingress::ActivityKind;
     use serde_json::json;
+    use tempfile::TempDir;
 
     use super::{
         classify_session_meta, codex_capture_context, codex_managed_capture_context,
@@ -292,6 +332,7 @@ mod tests {
                 "cwd": "C:/dev/project"
             }),
             None,
+            None,
         );
         assert_eq!(context.client, "unknown");
         assert_eq!(context.activity_kind, ActivityKind::Internal);
@@ -304,5 +345,50 @@ mod tests {
             None,
         );
         assert_eq!(manual.activity_kind, ActivityKind::User);
+    }
+
+    #[test]
+    fn custom_codex_home_session_metadata_is_classified_without_dot_codex_name() {
+        let root = TempDir::new().expect("custom Codex home parent");
+        let home = root.path().join("custom-profile");
+        let sessions = home.join("sessions").join("2026").join("08");
+        fs::create_dir_all(&sessions).expect("sessions");
+        let transcript = sessions.join("turn.jsonl");
+        fs::write(
+            &transcript,
+            serde_json::to_vec(&json!({
+                "type": "session_meta",
+                "payload": {
+                    "originator": "Codex Desktop",
+                    "source": "vscode",
+                    "thread_source": "user"
+                }
+            }))
+            .expect("session JSON"),
+        )
+        .expect("session metadata");
+
+        let context = codex_managed_capture_context(
+            &json!({
+                "hook_event_name": "UserPromptSubmit",
+                "cwd": root.path(),
+                "transcript_path": transcript
+            }),
+            None,
+            home.to_str(),
+        );
+
+        assert_eq!(context.client, "app");
+        assert_eq!(context.activity_kind, ActivityKind::User);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_transcript_paths_are_resolved_through_the_originating_distribution() {
+        assert_eq!(
+            super::runtime_path("/home/akra/.codex/sessions/turn.jsonl", Some("Ubuntu"))
+                .expect("WSL transcript"),
+            std::path::Path::new(r"\\wsl.localhost\Ubuntu\home\akra\.codex\sessions\turn.jsonl")
+        );
     }
 }

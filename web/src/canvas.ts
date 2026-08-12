@@ -12,6 +12,7 @@ export type ActivityNodeData = {
   time: ActivitySummary["time"];
   conversationIndex: number;
   conversationTotal: number;
+  resultSummaryStatus: ActivitySummary["result_summary_status"];
 };
 
 export function toCanvasNodes(
@@ -39,6 +40,7 @@ export function toCanvasNodes(
         time: activity.time,
         conversationIndex: activity.conversation_index,
         conversationTotal: activity.conversation_total,
+        resultSummaryStatus: activity.result_summary_status,
       },
     }];
   });

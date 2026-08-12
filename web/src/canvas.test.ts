@@ -15,6 +15,7 @@ describe("toCanvasNodes", () => {
           time: { value: null, provenance: "unknown" },
           conversation_index: 1,
           conversation_total: 1,
+          result_summary_status: "ready",
         },
       ],
       [{ id: 3, activity_event_id: 9, position_x: 64, position_y: 64 }],
@@ -33,6 +34,7 @@ describe("toCanvasNodes", () => {
           time: { value: null, provenance: "unknown" },
           conversationIndex: 1,
           conversationTotal: 1,
+          resultSummaryStatus: "ready",
         },
       },
     ]);
@@ -44,6 +46,7 @@ describe("toCanvasNodes", () => {
       "project",
       "prompt",
       "provider",
+      "resultSummaryStatus",
       "time",
     ]);
   });
@@ -59,6 +62,7 @@ describe("toCanvasNodes", () => {
         time: { value: null, provenance: "unknown" },
         conversation_index: 1,
         conversation_total: 1,
+        result_summary_status: "unavailable",
       }],
       [{ id: 3, activity_event_id: 9, position_x: 120, position_y: 220 }],
     );
@@ -77,6 +81,7 @@ describe("toCanvasNodes", () => {
         time: { value: null, provenance: "unknown" },
         conversation_index: 1,
         conversation_total: 1,
+        result_summary_status: "unavailable",
       }],
       [],
     );

@@ -42,14 +42,38 @@ test("canvas visibility independently filters subagent and Codex internal nodes"
       id: 3,
       activity_kind: "subagent",
       prompt: "Subagent started: reviewer",
+      conversation_index: 3,
+      conversation_total: 4,
     },
     {
       ...structuredClone(template),
       id: 4,
       activity_kind: "internal",
       prompt: "Ambient suggestion evaluation",
+      conversation_index: 4,
+      conversation_total: 4,
     },
   );
+  for (const detail of Object.values(api.state.details)) {
+    const turn = detail.conversation[0]!;
+    detail.conversation.push(
+      {
+        ...structuredClone(turn),
+        id: 3,
+        activity_kind: "subagent",
+        prompt: "Subagent started: reviewer",
+        selected: false,
+      },
+      {
+        ...structuredClone(turn),
+        id: 4,
+        activity_kind: "internal",
+        prompt: "Ambient suggestion evaluation",
+        selected: false,
+      },
+    );
+    detail.conversation_total = 4;
+  }
   api.state.canvasNodes.push(
     { id: 13, activity_event_id: 3, position_x: 720, position_y: 120 },
     { id: 14, activity_event_id: 4, position_x: 720, position_y: 360 },
@@ -67,11 +91,20 @@ test("canvas visibility independently filters subagent and Codex internal nodes"
   await expect(internalToggle).not.toBeChecked();
   await expect(page.getByTestId("activity-node-3")).toBeVisible();
   await expect(page.getByTestId("activity-node-4")).toHaveCount(0);
+  const firstProjectCount = page.locator(".rail-projects li").first().locator("small");
+  await expect(firstProjectCount).toHaveText("2");
 
   await subagentToggle.uncheck();
   await expect(page.getByTestId("activity-node-3")).toHaveCount(0);
+  await expect(firstProjectCount).toHaveText("1");
+  await page.getByTestId("activity-node-1").click();
+  const detailPanel = page.getByTestId("activity-detail-panel");
+  await expect(detailPanel.locator(".activity-detail__turn")).toHaveCount(2);
+  await expect(detailPanel).not.toContainText("Subagent started: reviewer");
   await internalToggle.check();
   await expect(page.getByTestId("activity-node-4")).toBeVisible();
+  await expect(firstProjectCount).toHaveText("2");
+  await expect(detailPanel).toContainText("Ambient suggestion evaluation");
   expect(api.state.activities.map(({ id }) => id)).toEqual([1, 2, 3, 4]);
 
   await page.reload();

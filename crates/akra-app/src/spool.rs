@@ -272,14 +272,19 @@ impl Spool {
     }
 
     pub fn enqueue(&self, payload: &[u8]) -> Result<(), SpoolError> {
+        self.enqueue_with_kind(payload, false)
+    }
+
+    fn enqueue_with_kind(&self, payload: &[u8], result_capture: bool) -> Result<(), SpoolError> {
         if payload.len() > MAX_PENDING_ITEM_BYTES {
             return Err(SpoolError::Oversized(payload.len() as u64));
         }
         let _admission = self.lock_admission()?;
         self.ensure_capacity(payload.len() as u64)?;
         let key = Uuid::new_v4();
-        let pending = self.directory.join(format!("{key}.pending"));
-        let temporary = self.directory.join(format!("{key}.tmp"));
+        let kind = if result_capture { ".result" } else { "" };
+        let pending = self.directory.join(format!("{key}{kind}.pending"));
+        let temporary = self.directory.join(format!("{key}{kind}.tmp"));
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -292,7 +297,14 @@ impl Spool {
     }
 
     pub fn enqueue_envelope(&self, envelope: &CaptureEnvelope) -> Result<(), SpoolError> {
-        self.enqueue(&serde_json::to_vec(envelope)?)
+        self.enqueue_with_kind(
+            &serde_json::to_vec(envelope)?,
+            envelope
+                .payload
+                .get("hook_event_name")
+                .and_then(serde_json::Value::as_str)
+                == Some("Stop"),
+        )
     }
 }
 

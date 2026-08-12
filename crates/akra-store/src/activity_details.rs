@@ -1,9 +1,10 @@
 use akra_core::ingress::ActivityKind;
 
 use crate::{
-    ActivityConversationTurn, ActivityDetail, ActivityOriginDetail, ActivityStore,
-    ActivityTechnicalDetail, StoreError,
-    activities::{activity_time, explicit_activity_time, project_summary},
+    ActivityConversationTurn, ActivityDetail, ActivityKindFilter, ActivityOriginDetail,
+    ActivityResultSummary, ActivityStore, ActivityTechnicalDetail, ResultSummaryLines,
+    ResultSummaryStatus, StoreError,
+    activities::{activity_time, explicit_activity_time, project_summary, result_summary_status},
 };
 
 #[derive(sqlx::FromRow)]
@@ -30,6 +31,10 @@ struct DetailRow {
     project_id: Option<i64>,
     project_name: Option<String>,
     on_canvas: i64,
+    result_summary_state: String,
+    summary_line_1: Option<String>,
+    summary_line_2: Option<String>,
+    summary_line_3: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -42,6 +47,10 @@ struct TimelineRow {
     captured_at_us: Option<i64>,
     first_recorded_at_us: Option<i64>,
     on_canvas: i64,
+    result_summary_state: String,
+    summary_line_1: Option<String>,
+    summary_line_2: Option<String>,
+    summary_line_3: Option<String>,
 }
 
 impl ActivityStore {
@@ -54,6 +63,22 @@ impl ActivityStore {
         activity_id: i64,
         conversation_after_id: Option<i64>,
         conversation_limit: i64,
+    ) -> Result<ActivityDetail, StoreError> {
+        self.activity_detail_page_filtered(
+            activity_id,
+            conversation_after_id,
+            conversation_limit,
+            ActivityKindFilter::ALL,
+        )
+        .await
+    }
+
+    pub async fn activity_detail_page_filtered(
+        &self,
+        activity_id: i64,
+        conversation_after_id: Option<i64>,
+        conversation_limit: i64,
+        activity_filter: ActivityKindFilter,
     ) -> Result<ActivityDetail, StoreError> {
         let row = sqlx::query_as::<_, DetailRow>(
             "WITH selected AS (
@@ -88,17 +113,30 @@ impl ActivityStore {
                         SELECT COUNT(*) FROM activity_events AS turn
                         WHERE turn.provider = selected.provider
                           AND turn.provider_session_id = selected.provider_session_id
+                          AND (
+                                 turn.activity_kind = 'user'
+                              OR (?2 = 1 AND turn.activity_kind = 'subagent')
+                              OR (?3 = 1 AND turn.activity_kind = 'internal')
+                          )
                     ) AS conversation_total,
                     selected.project_id, projects.name AS project_name,
                     EXISTS (
                         SELECT 1 FROM canvas_nodes
                         WHERE canvas_nodes.activity_event_id = selected.id
                           AND canvas_nodes.deleted_at_us IS NULL
-                    ) AS on_canvas
+                    ) AS on_canvas,
+                    COALESCE(result_summary.state, 'unavailable') AS result_summary_state,
+                    result_summary.summary_line_1,
+                    result_summary.summary_line_2,
+                    result_summary.summary_line_3
              FROM selected
-             LEFT JOIN projects ON projects.id = selected.project_id",
+             LEFT JOIN projects ON projects.id = selected.project_id
+             LEFT JOIN activity_result_summaries AS result_summary
+               ON result_summary.activity_event_id = selected.id",
         )
         .bind(activity_id)
+        .bind(activity_filter.include_subagent())
+        .bind(activity_filter.include_internal())
         .fetch_optional(&self.pool)
         .await?
         .ok_or(StoreError::ActivityNotFound(activity_id))?;
@@ -109,6 +147,7 @@ impl ActivityStore {
                 activity_id,
                 conversation_after_id,
                 conversation_limit.saturating_add(1),
+                activity_filter,
             )
             .await?;
         let conversation_has_more =
@@ -116,6 +155,12 @@ impl ActivityStore {
         if conversation_has_more {
             conversation.pop();
         }
+        let result_summary = result_summary_from_parts(
+            &row.result_summary_state,
+            row.summary_line_1,
+            row.summary_line_2,
+            row.summary_line_3,
+        )?;
         let selected_turn = ActivityConversationTurn {
             id: row.id,
             activity_kind: parse_activity_kind(&row.activity_kind)?,
@@ -124,6 +169,7 @@ impl ActivityStore {
             time: activity_time(row.captured_at_us, row.first_recorded_at_us)?,
             on_canvas: row.on_canvas != 0,
             selected: true,
+            result_summary: result_summary.clone(),
         };
         Ok(ActivityDetail {
             id: row.id,
@@ -154,6 +200,7 @@ impl ActivityStore {
                 agent_id: row.agent_id,
                 agent_type: row.agent_type,
             },
+            result_summary,
             selected_turn,
             conversation,
             conversation_total: row.conversation_total,
@@ -168,6 +215,7 @@ impl ActivityStore {
         selected_id: i64,
         after_id: Option<i64>,
         fetch_limit: i64,
+        activity_filter: ActivityKindFilter,
     ) -> Result<Vec<ActivityConversationTurn>, StoreError> {
         let rows = sqlx::query_as::<_, TimelineRow>(
             "WITH effective AS (
@@ -175,6 +223,10 @@ impl ActivityStore {
                         activity_events.prompt,
                         activity_events.captured_at_us,
                         activity_events.first_recorded_at_us,
+                        COALESCE(result_summary.state, 'unavailable') AS result_summary_state,
+                        result_summary.summary_line_1,
+                        result_summary.summary_line_2,
+                        result_summary.summary_line_3,
                         CASE
                             WHEN activity_origins.routing_mode = 'dedicated'
                             THEN activity_origins.default_project_id
@@ -184,8 +236,15 @@ impl ActivityStore {
                  JOIN activity_origins ON activity_origins.id = activity_events.origin_id
                  LEFT JOIN activity_project_assignments
                    ON activity_project_assignments.activity_event_id = activity_events.id
-                 WHERE activity_events.provider = ?
-                   AND activity_events.provider_session_id = ?
+                 LEFT JOIN activity_result_summaries AS result_summary
+                   ON result_summary.activity_event_id = activity_events.id
+                 WHERE activity_events.provider = ?1
+                   AND activity_events.provider_session_id = ?2
+                   AND (
+                          activity_events.activity_kind = 'user'
+                       OR (?3 = 1 AND activity_events.activity_kind = 'subagent')
+                       OR (?4 = 1 AND activity_events.activity_kind = 'internal')
+                   )
              ),
              classified AS (
                  SELECT effective.*, projects.name AS project_name,
@@ -210,22 +269,24 @@ impl ActivityStore {
                  FROM classified
              ),
              cursor AS (
-                 SELECT conversation_index FROM numbered WHERE id = ?
+                 SELECT conversation_index FROM numbered WHERE id = ?5
              )
              SELECT id, activity_kind, prompt, project_id, project_name,
-                    captured_at_us, first_recorded_at_us, on_canvas
+                    captured_at_us, first_recorded_at_us, on_canvas,
+                    result_summary_state, summary_line_1, summary_line_2, summary_line_3
              FROM numbered
-             WHERE ? IS NULL
+             WHERE ?5 IS NULL
                 OR conversation_index > COALESCE(
                     (SELECT conversation_index FROM cursor),
                     9223372036854775807
                 )
              ORDER BY conversation_index
-             LIMIT ?",
+             LIMIT ?6",
         )
         .bind(provider)
         .bind(session_id)
-        .bind(after_id)
+        .bind(activity_filter.include_subagent())
+        .bind(activity_filter.include_internal())
         .bind(after_id)
         .bind(fetch_limit)
         .fetch_all(&self.pool)
@@ -240,10 +301,37 @@ impl ActivityStore {
                     time: activity_time(row.captured_at_us, row.first_recorded_at_us)?,
                     on_canvas: row.on_canvas != 0,
                     selected: row.id == selected_id,
+                    result_summary: result_summary_from_parts(
+                        &row.result_summary_state,
+                        row.summary_line_1,
+                        row.summary_line_2,
+                        row.summary_line_3,
+                    )?,
                 })
             })
             .collect()
     }
+}
+
+fn result_summary_from_parts(
+    state: &str,
+    line_1: Option<String>,
+    line_2: Option<String>,
+    line_3: Option<String>,
+) -> Result<ActivityResultSummary, StoreError> {
+    let status = result_summary_status(state)?;
+    let lines = match (status, line_1, line_2, line_3) {
+        (ResultSummaryStatus::Ready, Some(line_1), Some(line_2), Some(line_3)) => {
+            Some(ResultSummaryLines::try_new(line_1, line_2, line_3)?.into_array())
+        }
+        (ResultSummaryStatus::Ready, _, _, _) => {
+            return Err(StoreError::Invariant(
+                "ready result summary is missing one or more lines".into(),
+            ));
+        }
+        _ => None,
+    };
+    Ok(ActivityResultSummary { status, lines })
 }
 
 fn parse_activity_kind(value: &str) -> Result<ActivityKind, StoreError> {

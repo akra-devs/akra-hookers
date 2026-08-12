@@ -56,9 +56,11 @@ function detail(
       agent_id: null,
       agent_type: null,
     },
+    result_summary: { status: "unavailable", lines: null },
     selected_turn: {
       id, activity_kind: "user", prompt: `prompt-${id}`, project: null,
       time: { value: null, provenance: "unknown" }, on_canvas: true, selected: true,
+      result_summary: { status: "unavailable", lines: null },
     },
     conversation: [], conversation_total: 0, conversation_has_more: false,
   };
