@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 pub mod capture_gate;
+pub mod capture_source;
+pub mod codex_targets;
 pub mod http;
 mod http_activities;
 mod http_assignments;

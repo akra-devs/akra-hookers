@@ -35,6 +35,12 @@ enum Command {
     Capture {
         #[arg(long)]
         data_dir: Option<std::path::PathBuf>,
+        /// Detected Codex installation that invoked this managed hook.
+        #[arg(long)]
+        capture_target: Option<String>,
+        /// WSL distribution that produced the hook payload.
+        #[arg(long)]
+        wsl_distro: Option<String>,
     },
     /// Report local runtime and provider status.
     Status {
@@ -64,22 +70,26 @@ enum DebugCommand {
     },
 }
 
-fn codex_lifecycle(
+fn codex_targets(
     home: Option<std::path::PathBuf>,
-) -> akra_adapters::codex::CodexHookLifecycleSet {
+    executable: &std::path::Path,
+    data_dir: &std::path::Path,
+) -> akra_app::codex_targets::CodexTargetRegistry {
     match home {
-        Some(home) => {
-            akra_adapters::codex::CodexHookLifecycleSet::from_codex_homes([home.join(".codex")])
-        }
-        None => akra_adapters::codex::CodexHookLifecycleSet::from_codex_homes([
-            akra_app::paths::user_home().join(".codex"),
-            akra_app::paths::codex_home(),
-        ]),
+        Some(home) => akra_app::codex_targets::CodexTargetRegistry::explicit(
+            home.join(".codex"),
+            hook_command(executable, data_dir, "explicit"),
+        ),
+        None => akra_app::codex_targets::CodexTargetRegistry::detect(executable, data_dir),
     }
 }
 
-fn hook_command(executable: &std::path::Path, data_dir: &std::path::Path) -> String {
-    match akra_app::paths::hook_command(executable, data_dir) {
+fn hook_command(
+    executable: &std::path::Path,
+    data_dir: &std::path::Path,
+    capture_target: &str,
+) -> String {
+    match akra_app::paths::hook_command_for_target(executable, data_dir, capture_target) {
         Ok(command) => command,
         Err(error) => {
             eprintln!("unable to construct Codex hook command: {error}");
@@ -94,9 +104,8 @@ async fn main() {
     match cli.command {
         Command::Setup { home, data_dir } => {
             let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
-            let lifecycle = codex_lifecycle(home);
             let executable = std::env::current_exe().expect("current executable");
-            let command = hook_command(&executable, &data_dir);
+            let targets = codex_targets(home, &executable, &data_dir);
             let capture_gate = akra_app::capture_gate::CaptureGate::new(&data_dir);
             if !data_dir.join("capture-enabled").exists()
                 && let Err(error) = capture_gate.set_enabled(false)
@@ -104,36 +113,50 @@ async fn main() {
                 eprintln!("unable to initialize Codex capture gate: {error}");
                 std::process::exit(2);
             }
-            if let Err(error) =
-                akra_app::capture_gate::enable_codex_capture(&capture_gate, &lifecycle, &command)
-            {
+            if let Err(error) = targets.apply_all(&capture_gate, true) {
                 eprintln!("unable to enable Codex capture: {error}");
                 std::process::exit(2);
             }
             println!("codex=enabled");
         }
         Command::Status { home } => {
-            let lifecycle = codex_lifecycle(home);
-            let status = if lifecycle.is_enabled().expect("Codex hook status") {
+            let executable = std::env::current_exe().expect("current executable");
+            let data_dir = akra_app::paths::default_data_dir();
+            let targets = codex_targets(home, &executable, &data_dir);
+            let statuses = targets.statuses();
+            let status = if statuses.iter().any(|target| target.enabled) {
                 "enabled"
             } else {
                 "disabled"
             };
             println!("codex={status}");
+            for target in statuses {
+                println!(
+                    "target={} enabled={} available={} home={}",
+                    target.id,
+                    target.enabled,
+                    target.available,
+                    target.codex_home.as_deref().unwrap_or("unknown")
+                );
+            }
         }
         Command::Disable { home, data_dir } => {
             let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
-            let lifecycle = codex_lifecycle(home);
-            if let Err(error) = akra_app::capture_gate::disable_codex_capture(
-                &akra_app::capture_gate::CaptureGate::new(&data_dir),
-                &lifecycle,
-            ) {
+            let executable = std::env::current_exe().expect("current executable");
+            let targets = codex_targets(home, &executable, &data_dir);
+            if let Err(error) =
+                targets.apply_all(&akra_app::capture_gate::CaptureGate::new(&data_dir), false)
+            {
                 eprintln!("unable to disable Codex capture: {error}");
                 std::process::exit(2);
             }
             println!("codex=disabled");
         }
-        Command::Capture { data_dir } => {
+        Command::Capture {
+            data_dir,
+            capture_target,
+            wsl_distro,
+        } => {
             let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
             match akra_app::capture_gate::CaptureGate::new(&data_dir).is_enabled() {
                 Ok(true) => {}
@@ -159,6 +182,10 @@ async fn main() {
                 eprintln!("invalid Codex payload UTF-8: {error}");
                 std::process::exit(2);
             });
+            let payload: serde_json::Value = serde_json::from_str(input).unwrap_or_else(|error| {
+                eprintln!("invalid Codex payload JSON: {error}");
+                std::process::exit(2);
+            });
             let event =
                 akra_adapters::codex::CodexAdapter::normalize(input).unwrap_or_else(|error| {
                     eprintln!("invalid Codex UserPromptSubmit payload: {error}");
@@ -174,24 +201,30 @@ async fn main() {
                 eprintln!("capture timestamp is out of range: {error}");
                 std::process::exit(2);
             });
-            let origin = akra_git::ProjectIdentity::capture_snapshot_from_cwd(
-                std::path::Path::new(event.cwd()),
-            )
-            .unwrap_or_else(|error| {
-                eprintln!("unable to capture project origin: {error}");
-                std::process::exit(2);
-            })
-            .origin;
-            let payload = serde_json::from_str(input).unwrap_or_else(|error| {
-                eprintln!("invalid Codex payload JSON: {error}");
-                std::process::exit(2);
-            });
-            let envelope = akra_app::spool::CaptureEnvelope::new(
-                event.provider().as_str(),
-                captured_at_us,
-                origin,
-                payload,
-            )
+            let origin =
+                capture_origin(event.cwd(), wsl_distro.as_deref()).unwrap_or_else(|error| {
+                    eprintln!("unable to capture project origin: {error}");
+                    std::process::exit(2);
+                });
+            let capture_client = capture_target
+                .as_ref()
+                .map(|_| akra_app::capture_source::codex_client(&payload, wsl_distro.as_deref()));
+            let envelope = match capture_target.as_deref() {
+                Some(target) => akra_app::spool::CaptureEnvelope::new_with_source(
+                    event.provider().as_str(),
+                    captured_at_us,
+                    origin,
+                    payload,
+                    target,
+                    capture_client.expect("capture client accompanies target"),
+                ),
+                None => akra_app::spool::CaptureEnvelope::new(
+                    event.provider().as_str(),
+                    captured_at_us,
+                    origin,
+                    payload,
+                ),
+            }
             .unwrap_or_else(|error| {
                 eprintln!("unable to construct capture envelope: {error}");
                 std::process::exit(2);
@@ -210,22 +243,18 @@ async fn main() {
         } => {
             let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
             std::fs::create_dir_all(&data_dir).expect("data directory");
-            let lifecycle = std::sync::Arc::new(codex_lifecycle(home));
+            let executable = std::env::current_exe().expect("current executable");
+            let targets = std::sync::Arc::new(codex_targets(home, &executable, &data_dir));
             let capture_gate = akra_app::capture_gate::CaptureGate::new(&data_dir);
             if data_dir.join("capture-enabled").exists() {
-                let executable = std::env::current_exe().expect("current executable");
-                let command = hook_command(&executable, &data_dir);
-                if let Err(error) = akra_app::capture_gate::reconcile_codex_capture(
-                    &capture_gate,
-                    &lifecycle,
-                    &command,
-                ) {
+                if let Err(error) = targets.reconcile(&capture_gate) {
                     eprintln!("unable to reconcile Codex capture lifecycle: {error}");
                     std::process::exit(2);
                 }
             } else {
+                let any_enabled = targets.statuses().iter().any(|target| target.enabled);
                 capture_gate
-                    .set_enabled(lifecycle.is_enabled().expect("Codex hook status"))
+                    .set_enabled(any_enabled)
                     .expect("capture gate synchronization");
             }
             let store = std::sync::Arc::new(
@@ -259,17 +288,10 @@ async fn main() {
                 .expect("listener");
             let address = listener.local_addr().expect("address");
             let token = Box::leak(format!("akra-{}", Uuid::new_v4()).into_boxed_str());
-            let executable = std::env::current_exe().expect("current executable");
             println!("ready url=http://{address} token={token}");
             axum::serve(
                 listener,
-                akra_app::http::app_with_codex_lifecycle(
-                    token,
-                    store,
-                    lifecycle,
-                    hook_command(&executable, &data_dir),
-                    capture_gate,
-                ),
+                akra_app::http::app_with_codex_targets(token, store, targets, capture_gate),
             )
             .await
             .expect("server");
@@ -284,4 +306,35 @@ async fn main() {
             }
         },
     }
+}
+
+fn capture_origin(
+    cwd: &str,
+    wsl_distro: Option<&str>,
+) -> Result<akra_git::ProjectOriginSnapshot, akra_git::IdentityError> {
+    #[cfg(windows)]
+    if let Some(distro) = wsl_distro {
+        if is_wsl_windows_mount(cwd)
+            && let Ok(windows_cwd) = akra_app::paths::wsl_cwd_to_windows(distro, cwd)
+        {
+            return akra_git::ProjectIdentity::capture_snapshot_from_cwd(&windows_cwd)
+                .map(|snapshot| snapshot.origin);
+        }
+        return akra_git::ProjectIdentity::capture_snapshot_from_wsl(distro, cwd)
+            .map(|snapshot| snapshot.origin);
+    }
+    #[cfg(not(windows))]
+    let _ = wsl_distro;
+    akra_git::ProjectIdentity::capture_snapshot_from_cwd(std::path::Path::new(cwd))
+        .map(|snapshot| snapshot.origin)
+}
+
+#[cfg(windows)]
+fn is_wsl_windows_mount(cwd: &str) -> bool {
+    let Some(mounted) = cwd.strip_prefix("/mnt/") else {
+        return false;
+    };
+    let bytes = mounted.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && (bytes.len() == 1 || bytes.get(1) == Some(&b'/'))
 }

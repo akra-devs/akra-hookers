@@ -80,6 +80,74 @@ test("bootstrap query failures replace false empty state and retry explicitly", 
   await expect(page.getByTestId("activity-node-1")).toBeVisible();
 });
 
+test("successful capture mutations recover when their status refresh fails", async ({
+  page,
+  api,
+}) => {
+  let rejectProviderRefresh = false;
+  await page.route("**/v1/providers/codex", async (route) => {
+    if (!rejectProviderRefresh || route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({
+        code: "provider_refresh_failed",
+        message: "Provider status refresh failed",
+      }),
+    });
+  });
+  await page.goto("/");
+
+  const wslCapture = page.getByRole("checkbox", { name: /Ubuntu capture/ });
+  rejectProviderRefresh = true;
+  const targetUpdated = page.waitForResponse((response) =>
+    response.request().method() === "PATCH"
+    && new URL(response.url()).pathname === "/v1/providers/codex/targets/wsl%3AUbuntu"
+    && response.status() === 204,
+  );
+  await wslCapture.click();
+  await targetUpdated;
+
+  await expect(page.locator(".capture-control-error")).toContainText(
+    "설정은 변경되었지만 최신 상태를 확인하지 못했습니다.",
+  );
+  expect(api.state.provider.targets.find(({ id }) => id === "wsl:Ubuntu")?.enabled).toBe(true);
+  await expect(wslCapture).not.toBeChecked();
+  await expect(wslCapture).toBeDisabled();
+
+  rejectProviderRefresh = false;
+  await page.getByRole("button", { name: "다시 시도" }).click();
+  await expect(page.locator(".capture-control-error")).toHaveCount(0);
+  await expect(wslCapture).toBeChecked();
+  await expect(wslCapture).toBeEnabled();
+
+  const masterCapture = page.getByRole("checkbox", { name: "Codex capture" });
+  rejectProviderRefresh = true;
+  const providerUpdated = page.waitForResponse((response) =>
+    response.request().method() === "PATCH"
+    && new URL(response.url()).pathname === "/v1/providers/codex"
+    && response.status() === 204,
+  );
+  await masterCapture.uncheck();
+  await providerUpdated;
+
+  await expect(page.locator(".capture-control-error")).toContainText(
+    "설정은 변경되었지만 최신 상태를 확인하지 못했습니다.",
+  );
+  expect(api.state.provider.enabled).toBe(false);
+  await expect(masterCapture).not.toBeChecked();
+  await expect(masterCapture).toBeDisabled();
+
+  rejectProviderRefresh = false;
+  await page.getByRole("button", { name: "다시 시도" }).click();
+  await expect(page.locator(".capture-control-error")).toHaveCount(0);
+  await expect(masterCapture).not.toBeChecked();
+  await expect(masterCapture).toBeEnabled();
+});
+
 test("a rejected position mutation refetches the exact server canvas without duplicating immutable history", async ({ page, api }) => {
   const beforeCanvas = durableCanvas(api);
   const beforeActivities = JSON.stringify(api.state.activities);

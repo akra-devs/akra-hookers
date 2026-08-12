@@ -78,6 +78,28 @@ fn envelope_v1_round_trips_exact_provider_payload_and_origin() {
     );
 }
 
+#[test]
+fn envelope_v1_round_trips_optional_capture_source() {
+    let cwd = TempDir::new().expect("working directory");
+    let origin = ProjectIdentity::capture_snapshot_from_cwd(cwd.path())
+        .expect("origin snapshot")
+        .origin;
+    let payload = codex_payload(cwd.path(), "session", "turn", "source");
+    let envelope = CaptureEnvelope::new_with_source(
+        "codex",
+        123_456,
+        origin,
+        payload,
+        "windows-native",
+        "app",
+    )
+    .expect("valid envelope");
+    let bytes = serde_json::to_vec(&envelope).expect("envelope JSON");
+    let decoded = CaptureEnvelope::decode(&bytes).expect("decoded envelope");
+
+    assert_eq!(decoded.capture_source(), Some(("windows-native", "app")));
+}
+
 #[tokio::test]
 async fn delayed_recovery_preserves_captured_origin_time_and_submitted_cwd() {
     let directory = TempDir::new().expect("test directory");

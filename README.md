@@ -5,12 +5,26 @@
 - Codex `UserPromptSubmit` 훅을 받아 프롬프트와 작업 위치를 로컬 SQLite에 저장합니다.
 - Git worktree는 같은 프로젝트로 묶습니다.
 - 활동 기록은 불변이며, 캔버스 노드·위치·연결은 자유롭게 이동하거나 삭제할 수 있습니다.
-- 대시보드에서 provider별 캡처를 켜고 끌 수 있습니다. 끄더라도 기존 기록과 실행 중인 에이전트에는 영향이 없습니다.
-- Codex 토글은 전역 `~/.codex/hooks.json`의 akra hook을 직접 등록하거나 제거합니다. 다른 hook은 유지됩니다.
+- 대시보드에서 Windows Codex App/CLI와 각 WSL Codex의 캡처를 함께 찾고, 설치별 또는 전체로 켜고 끌 수 있습니다.
+- Codex 토글은 각 설치의 `hooks.json`에서 Akra 훅만 등록하거나 제거합니다. 다른 훅은 유지됩니다.
 
 ## 개인정보와 범위
 
 데이터는 로컬 SQLite와 로컬 spool에만 저장합니다. 기본 런타임은 `127.0.0.1`에만 바인딩하며, 클라우드 전송·텔레메트리·Git 변경은 하지 않습니다.
+
+## 필수 보안 고지: Codex 훅 자동 신뢰
+
+이 프로젝트는 개인 로컬 설치를 전제로 하며, `setup` 또는 대시보드의 Codex 캡처 활성화 시 다음 작업을 자동으로 수행합니다.
+
+1. Akra `UserPromptSubmit` 명령을 해당 설치의 `hooks.json`에 기록합니다.
+2. Codex와 같은 정규화 규칙으로 **그 Akra 명령만의 현재 신뢰 해시**를 계산합니다.
+3. 해당 설치의 `config.toml` 내 `[hooks.state]`에 `enabled = true`와 `trusted_hash`를 기록합니다.
+
+따라서 설치 후 Codex의 **Hooks need review** 화면은 표시되지 않으며 별도 수동 승인이 필요하지 않습니다. 이 자동 신뢰는 Akra가 생성한 정확한 명령과 위치에만 적용되고, 기존의 다른 훅이나 이후 외부에서 변경된 명령을 신뢰하지 않습니다.
+
+Codex 훅은 신뢰된 뒤 샌드박스 밖에서 실행될 수 있습니다. Akra 훅은 사용자가 Codex에 제출하는 프롬프트, 작업 경로, 세션·턴 식별자와 모델 정보를 로컬 저장소로 전달합니다. 이 동작에 동의하지 않으면 `setup`을 실행하거나 캡처 토글을 켜지 마십시오. `disable` 또는 캡처 토글 해제 시 Akra 훅과 Akra가 기록한 신뢰 항목만 제거하며, 다른 Codex 설정과 훅은 보존합니다.
+
+Codex의 훅 신뢰 모델은 [OpenAI Codex Hooks 문서](https://learn.chatgpt.com/docs/hooks)를 참고하십시오.
 
 ## 요구 사항
 
@@ -21,7 +35,7 @@
 ## 시작하기
 
 ```bash
-# Codex 전역 훅 설치 (~/.codex/hooks.json)
+# 감지된 Codex 설치에 훅 설치
 cargo run -p akra-app -- setup
 
 # 로컬 런타임 시작
@@ -41,6 +55,13 @@ npm run dev
 ```
 
 브라우저에서 Vite가 출력한 주소를 열면 활동 캔버스와 Codex 캡처 설정을 볼 수 있습니다.
+
+Windows 네이티브 Codex App과 CLI는 `%USERPROFILE%\.codex`를 하나의 대상으로 사용합니다.
+둘은 같은 `hooks.json`을 공유하므로 설치 토글도 하나이며, 대시보드는 실제로 수집된 프롬프트 증거를 기준으로 App과 CLI의 캡처 확인 상태를 각각 표시합니다.
+WSL은 배포판별 Linux `~/.codex`를 별도 대상으로 감지하며 Docker 내부 배포판은 제외합니다.
+Windows 또는 WSL에 별도 `CODEX_HOME`이 있으면 함께 감지합니다. Windows와 WSL이 같은 물리 경로를 공유하면 하나의 대상으로 합치되, manifest에는 Linux용 `command`와 Windows용 `commandWindows`를 각각 기록합니다. `--home`을 명시한 CLI 작업만 해당 경로로 격리됩니다.
+WSL 자동 검색이 필요 없는 격리 환경에서는 `AKRA_HOOKERS_SKIP_WSL=1`로 명시적으로 끌 수 있습니다.
+훅을 새로 설치하거나 변경한 뒤에는 해당 Codex를 다시 시작하십시오. Akra가 현재 훅 정의의 신뢰 해시까지 함께 갱신하므로 `/hooks`에서 별도로 승인할 필요가 없습니다.
 
 ## 주요 명령
 

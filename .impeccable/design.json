@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-12T06:40:00+09:00",
+  "title": "Design System: akra-hookers",
+  "extensions": {
+    "colorMeta": {
+      "bg": { "role": "neutral", "displayName": "Oxide Black", "canonical": "#0b1012", "tonalRamp": ["#080b0d", "#111719", "#1c2427", "#354044", "#596568", "#818c8e", "#b5bdbe", "#edf0f0"] },
+      "accent": { "role": "primary", "displayName": "Lichen State", "canonical": "#8fc7a1", "tonalRamp": ["#13251a", "#1f3c2a", "#315a40", "#477a57", "#629b70", "#8fc7a1", "#b9dfc5", "#e8f5ec"] },
+      "steel": { "role": "secondary", "displayName": "Cold Steel Provenance", "canonical": "#86a0a8", "tonalRamp": ["#10191c", "#213137", "#354c54", "#4d6871", "#68858e", "#86a0a8", "#b2c4c9", "#e8f0f2"] }
+    },
+    "shadows": [
+      { "name": "command-plane", "value": "0 8px 24px rgb(0 0 0 / 18%)", "purpose": "Command separation." },
+      { "name": "toggle-thumb", "value": "0 2px 5px rgb(0 0 0 / 34%)", "purpose": "Switch lift." },
+      { "name": "canvas-controls", "value": "0 12px 30px rgb(0 0 0 / 26%)", "purpose": "Controls over grid." },
+      { "name": "empty-state", "value": "0 18px 42px rgb(0 0 0 / 25%)", "purpose": "Field guidance." },
+      { "name": "activity-plate", "value": "0 14px 34px rgb(0 0 0 / 24%)", "purpose": "Evidence plate." },
+      { "name": "activity-selected", "value": "0 0 0 2px var(--color-canvas), 0 0 0 3px var(--color-accent), 0 18px 38px rgb(0 0 0 / 30%)", "purpose": "Selected evidence." },
+      { "name": "assignment-dock", "value": "0 16px 38px rgb(0 0 0 / 35%)", "purpose": "Context action." },
+      { "name": "modal-decision", "value": "0 28px 70px rgb(0 0 0 / 52%)", "purpose": "Modal decision." }
+    ],
+    "motion": [
+      { "name": "state-change", "value": "140ms ease", "purpose": "Borders and surfaces." },
+      { "name": "activity-lift", "value": "140ms cubic-bezier(.2, .8, .2, 1)", "purpose": "Plate lift." },
+      { "name": "switch-travel", "value": "160ms cubic-bezier(.2, .8, .2, 1)", "purpose": "Switch travel." },
+      { "name": "pending-pulse", "value": "1.4s ease-in-out infinite", "purpose": "Pending capture only." }
+    ],
+    "breakpoints": [
+      { "name": "compressed-detail", "value": "1180px" },
+      { "name": "compact-command", "value": "1040px" },
+      { "name": "stacked-detail", "value": "900px" },
+      { "name": "stacked-shell", "value": "720px" },
+      { "name": "tight-phone", "value": "430px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Confirmed lichen action.",
+      "html": "<button class=\"ds-btn-primary\">SAVE CHANGES</button>",
+      "css": ".ds-btn-primary { min-height: 38px; padding: 8px 12px; border: 1px solid #76ae88; border-radius: var(--radius-control); background: #5d956f; color: #07120b; font: 680 12px var(--font-ui); } .ds-btn-primary:focus-visible { outline: 2px solid var(--color-accent-strong); outline-offset: 2px; }"
+    },
+    {
+      "name": "Inset Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Measured dark field.",
+      "html": "<label class=\"ds-field-label\">PROJECT NAME<input class=\"ds-field\" value=\"akra-hookers\"></label>",
+      "css": ".ds-field-label { display: grid; gap: 6px; color: #c7d1cd; font: 650 10px var(--font-mono); letter-spacing: .08em; } .ds-field { min-height: 38px; padding: 8px 10px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); background: #0d1416; color: var(--color-text); font: 13px var(--font-ui); } .ds-field:focus-visible { outline: 2px solid var(--color-accent-strong); outline-offset: 2px; }"
+    },
+    {
+      "name": "Rail Item",
+      "kind": "nav",
+      "refersTo": "rail-item",
+      "description": "Navigation with active rail.",
+      "html": "<button class=\"ds-rail-item ds-is-active\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M4 6h16v12H4z M8 3v6 M16 3v6\"/></svg><span>All activity</span><b>24</b></button>",
+      "css": ".ds-rail-item { position: relative; display: grid; grid-template-columns: 20px 1fr auto; width: 100%; min-height: 42px; align-items: center; gap: 10px; padding: 8px 18px; border: 0; border-radius: 0; background: transparent; color: #bfc9c5; text-align: left; } .ds-rail-item svg { width: 18px; fill: none; stroke: var(--color-steel); stroke-width: 1.5; } .ds-rail-item b { color: var(--color-muted); font: 550 11px var(--font-mono); } .ds-rail-item:hover, .ds-rail-item.ds-is-active { background: #182124; color: var(--color-text); } .ds-rail-item.ds-is-active::before { position: absolute; inset: 0 auto 0 0; width: 2px; background: var(--color-accent); content: \"\"; } .ds-rail-item.ds-is-active svg { stroke: var(--color-accent); } .ds-rail-item:focus-visible { outline: 2px solid var(--color-accent-strong); outline-offset: -3px; }"
+    },
+    {
+      "name": "Activity Evidence Plate",
+      "kind": "card",
+      "refersTo": "activity-card",
+      "description": "Registration-marked evidence.",
+      "html": "<article class=\"ds-activity\" tabindex=\"0\"><i class=\"ds-reg ds-reg-tl\"></i><i class=\"ds-reg ds-reg-br\"></i><header><strong>AKRA-HOOKERS</strong><span>1/2</span></header><p>프로젝트 이름을 정리해 주세요</p><footer><span>● CODEX</span><time>2026. 8. 12.</time></footer></article>",
+      "css": ".ds-activity { position: relative; width: 288px; padding: 17px 18px 16px; border: 1px solid #425158; border-radius: var(--radius-control); background: #172124; color: var(--color-text); box-shadow: 0 14px 34px rgb(0 0 0 / 24%); transition: border-color 140ms ease, background-color 140ms ease, transform 140ms cubic-bezier(.2,.8,.2,1); } .ds-activity:hover { border-color: #62747b; background: #1a2528; transform: translateY(-1px); } .ds-activity:focus-visible { outline: 2px solid var(--color-accent-strong); outline-offset: 5px; } .ds-activity header, .ds-activity footer { display: flex; justify-content: space-between; color: var(--color-steel); font: 600 10px var(--font-mono); } .ds-activity header strong { color: var(--color-accent); } .ds-activity p { margin: 18px 0 22px; font: 570 16px/1.44 var(--font-ui); } .ds-activity footer { padding-top: 11px; border-top: 1px solid var(--color-border); } .ds-reg::before, .ds-reg::after { position: absolute; background: #89999d; content: \"\"; opacity: .75; } .ds-reg-tl::before { top: 6px; left: 6px; width: 10px; height: 1px; } .ds-reg-tl::after { top: 6px; left: 6px; width: 1px; height: 10px; } .ds-reg-br::before { right: 6px; bottom: 6px; width: 10px; height: 1px; } .ds-reg-br::after { right: 6px; bottom: 6px; width: 1px; height: 10px; }"
+    },
+    {
+      "name": "Capture Target",
+      "kind": "custom",
+      "refersTo": "capture-target",
+      "description": "Capture installation state.",
+      "html": "<div class=\"ds-capture-target\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M4 5h16v14H4z M7 9l3 3-3 3 M12 15h5\"/></svg><strong>Codex · Ubuntu</strong><small>WSL</small><button aria-label=\"Codex Ubuntu capture\" aria-pressed=\"true\"></button><p><i></i> Hook installed</p><code>/home/user/.codex/hooks.json</code></div>",
+      "css": ".ds-capture-target { display: grid; grid-template-columns: 18px minmax(0,1fr) auto 32px; gap: 5px 8px; align-items: center; padding: 11px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-control); background: #0d1416; color: var(--color-steel); } .ds-capture-target svg { width: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; } .ds-capture-target strong { color: #dfe6e2; font: 620 11px var(--font-ui); } .ds-capture-target small { padding: 2px 4px; border: 1px solid var(--color-border); border-radius: 3px; color: var(--color-muted); font: 650 8px var(--font-mono); } .ds-capture-target button { width: 32px; height: 18px; border: 1px solid #74ad86; border-radius: 999px; background: #5f9f73; } .ds-capture-target button:focus-visible { outline: 2px solid var(--color-accent-strong); outline-offset: 2px; } .ds-capture-target p { grid-column: 2 / -1; margin: 0; color: #acd8b8; font: 10px var(--font-ui); } .ds-capture-target p i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); } .ds-capture-target code { grid-column: 2 / -1; overflow: hidden; color: #7d8a8d; font: 500 9px/1.45 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Spatial Studio A",
+    "overview": "Spatial Studio A treats the localhost dashboard as a precision work surface: an oxide-black drafting field framed by matte instrument panels, mineral-white type, cold-steel provenance, lichen-green state, crisp rules, and small registration marks. It is compact and operational, but never collapses into a generic dark dashboard or analytics table.\n\nThe canvas is editable organization around immutable evidence. Moving, connecting, assigning, or clearing canvas records may alter placement, edges, and project organization; the captured activity, prompt, timestamps, paths, and oldest-first conversation remain trustworthy evidence. Depth is structural, motion is brief, and decorative glow is absent.",
+    "keyCharacteristics": [
+      "Oxide-black drafting field with a 48px line grid",
+      "Matte, rule-bounded instrument surfaces",
+      "Mineral-white hierarchy with cold-steel technical metadata",
+      "Lichen-green reserved for healthy, selected, connected, and focused state",
+      "Registration-corner activity plates instead of generic rounded cards",
+      "Responsive regions that stack without horizontal page scrolling"
+    ],
+    "rules": [
+      { "name": "The State Color Rule", "body": "Lichen-green marks state and selection; it never becomes a broad decorative wash.", "section": "colors" },
+      { "name": "The No Glow Rule", "body": "Do not add neon bloom, gradient aura, or ambient color haze; selected state uses crisp rings, borders, and restrained shadow.", "section": "colors" },
+      { "name": "The Evidence Voice Rule", "body": "Use monospace for provenance and machine-readable facts, never as a substitute for the project name or prompt hierarchy.", "section": "typography" },
+      { "name": "The Fixed Frame Rule", "body": "Preserve the rail/canvas/inspector relationship at desktop and the explicit stacked order below 900px; do not replace it with floating overlays.", "section": "layout" },
+      { "name": "The Structural Depth Rule", "body": "Add elevation only when a surface changes interaction layer; never add shadow merely to decorate a resting panel.", "section": "elevation" },
+      { "name": "The Instrument Edge Rule", "body": "Prefer precise rules and shallow radii; do not turn every container into a soft floating card.", "section": "shapes" }
+    ],
+    "dos": [
+      "Do keep lichen-green scarce and tied to operational state, selection, focus, and connectivity.",
+      "Do preserve the 48px drafting grid, registration corners, crisp rules, and matte panel hierarchy.",
+      "Do keep captured evidence visually and behaviorally distinct from editable canvas placement, edges, and project organization.",
+      "Do preserve visible focus, focus restoration, 44px narrow-screen targets, reduced-motion behavior, and semantic error text.",
+      "Do let Korean, paths, URLs, and mixed strings wrap inside their own region without horizontal page scrolling."
+    ],
+    "donts": [
+      "Don't add decorative glow, gradients, glass blur, glossy surfaces, or saturated ambient color.",
+      "Don't expose session IDs, turn IDs, or full paths on ordinary activity plates or navigation rows.",
+      "Don't turn capture switches, canvas deletion, assignment, or work-location changes into ambiguous history deletion.",
+      "Don't overlay the inspector on navigation or reorder narrow screens away from rail, canvas/assignment, then detail.",
+      "Don't replace the measured 5px/8px corner language with generic large-radius cards or pill-shaped containers."
+    ]
+  }
+}

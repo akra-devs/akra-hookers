@@ -5,7 +5,10 @@ use crate::{ActivityStore, CanvasEdgeSummary, CanvasNodeSummary, StoreError};
 impl ActivityStore {
     pub async fn canvas_nodes(&self) -> Result<Vec<CanvasNodeSummary>, StoreError> {
         Ok(sqlx::query_as::<_, (i64, i64, f64, f64)>(
-            "SELECT id, activity_event_id, position_x, position_y FROM canvas_nodes ORDER BY id",
+            "SELECT id, activity_event_id, position_x, position_y
+             FROM canvas_nodes
+             WHERE deleted_at_us IS NULL
+             ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await?
@@ -50,12 +53,14 @@ impl ActivityStore {
         &self,
         canvas_node_id: i64,
     ) -> Result<Option<(f64, f64)>, StoreError> {
-        Ok(
-            sqlx::query_as("SELECT position_x, position_y FROM canvas_nodes WHERE id = ?")
-                .bind(canvas_node_id)
-                .fetch_optional(&self.pool)
-                .await?,
+        Ok(sqlx::query_as(
+            "SELECT position_x, position_y
+                 FROM canvas_nodes
+                 WHERE id = ? AND deleted_at_us IS NULL",
         )
+        .bind(canvas_node_id)
+        .fetch_optional(&self.pool)
+        .await?)
     }
 
     pub async fn update_canvas_position(
@@ -65,12 +70,16 @@ impl ActivityStore {
         position_y: f64,
     ) -> Result<(), StoreError> {
         let mut transaction = self.pool.begin().await?;
-        sqlx::query("UPDATE canvas_nodes SET position_x = ?, position_y = ? WHERE id = ?")
-            .bind(position_x)
-            .bind(position_y)
-            .bind(canvas_node_id)
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query(
+            "UPDATE canvas_nodes
+             SET position_x = ?, position_y = ?
+             WHERE id = ? AND deleted_at_us IS NULL",
+        )
+        .bind(position_x)
+        .bind(position_y)
+        .bind(canvas_node_id)
+        .execute(&mut *transaction)
+        .await?;
         bump_canvas_revision(&mut transaction).await?;
         transaction.commit().await?;
         Ok(())
@@ -83,10 +92,14 @@ impl ActivityStore {
             .bind(canvas_node_id)
             .execute(&mut *transaction)
             .await?;
-        sqlx::query("DELETE FROM canvas_nodes WHERE id = ?")
-            .bind(canvas_node_id)
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query(
+            "UPDATE canvas_nodes
+             SET deleted_at_us = CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER)
+             WHERE id = ? AND deleted_at_us IS NULL",
+        )
+        .bind(canvas_node_id)
+        .execute(&mut *transaction)
+        .await?;
         bump_canvas_revision(&mut transaction).await?;
         transaction.commit().await?;
         Ok(())
@@ -97,22 +110,26 @@ impl ActivityStore {
         sqlx::query("DELETE FROM canvas_edges")
             .execute(&mut *transaction)
             .await?;
-        sqlx::query("DELETE FROM canvas_nodes")
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query(
+            "UPDATE canvas_nodes
+             SET deleted_at_us = CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER)
+             WHERE deleted_at_us IS NULL",
+        )
+        .execute(&mut *transaction)
+        .await?;
         bump_canvas_revision(&mut transaction).await?;
         transaction.commit().await?;
         Ok(())
     }
 
     pub async fn canvas_node_exists(&self, canvas_node_id: i64) -> Result<bool, StoreError> {
-        Ok(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM canvas_nodes WHERE id = ?")
-                .bind(canvas_node_id)
-                .fetch_one(&self.pool)
-                .await?
-                != 0,
+        Ok(sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM canvas_nodes WHERE id = ? AND deleted_at_us IS NULL",
         )
+        .bind(canvas_node_id)
+        .fetch_one(&self.pool)
+        .await?
+            != 0)
     }
 
     pub async fn create_canvas_edge(
@@ -150,7 +167,12 @@ impl ActivityStore {
 
     pub async fn canvas_edges(&self) -> Result<Vec<CanvasEdgeSummary>, StoreError> {
         Ok(sqlx::query_as::<_, (i64, i64, i64)>(
-            "SELECT id, source_node_id, target_node_id FROM canvas_edges ORDER BY id",
+            "SELECT canvas_edges.id, source_node_id, target_node_id
+             FROM canvas_edges
+             JOIN canvas_nodes AS source ON source.id = source_node_id
+             JOIN canvas_nodes AS target ON target.id = target_node_id
+             WHERE source.deleted_at_us IS NULL AND target.deleted_at_us IS NULL
+             ORDER BY canvas_edges.id",
         )
         .fetch_all(&self.pool)
         .await?

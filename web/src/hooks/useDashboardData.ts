@@ -92,6 +92,7 @@ export function useDashboardData(client: ApiClient | null, activityScope: Activi
     queryKey: ["provider", "codex"],
     queryFn: () => client!.provider("codex"),
     enabled: client !== null,
+    refetchInterval: 2_000,
   });
   const canvasRevision = useQuery({
     queryKey: ["canvas-revision"],

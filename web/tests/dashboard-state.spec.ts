@@ -121,6 +121,123 @@ test("Todo 17 exposes the dashboard data coordinator without relying on an impor
   expect(readFileSync(app, "utf8")).toContain('from "./hooks/useDashboardData"');
 });
 
+test("empty dashboards guide the first capture and keep destructive actions out of the way", async ({
+  page,
+  api,
+}) => {
+  api.state.activities = [];
+  api.state.canvasNodes = [];
+  api.state.canvasEdges = [];
+  api.state.origins = [];
+
+  await page.goto("/");
+
+  await expect(page.getByText("No activity on this canvas")).toBeVisible();
+  await expect(page.getByText("Enable Codex capture and submit a prompt to add your first activity.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Clear canvas" })).toHaveCount(0);
+  await expect(page.getByText("No work locations yet")).toBeVisible();
+});
+
+test("the canvas header stays readable on narrow screens and supports wheel zoom", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  const heading = page.getByRole("heading", { name: "Prompt canvas" });
+  const clear = page.getByRole("button", { name: "Clear canvas" });
+  const [headingBox, clearBox] = await Promise.all([heading.boundingBox(), clear.boundingBox()]);
+  if (!headingBox || !clearBox) throw new Error("Canvas header controls must be measurable");
+  expect(headingBox.x + headingBox.width).toBeLessThanOrEqual(clearBox.x + 1);
+  expect(clearBox.height).toBeLessThanOrEqual(42);
+
+  const viewport = page.locator(".react-flow__viewport");
+  const scale = async () => viewport.evaluate((element) => {
+    const transform = getComputedStyle(element).transform;
+    const match = /^matrix\(([-\d.]+)/.exec(transform);
+    if (!match) throw new Error(`Unexpected viewport transform: ${transform}`);
+    return Number(match[1]);
+  });
+  const initialScale = await scale();
+  const flow = page.locator(".react-flow");
+  await flow.scrollIntoViewIfNeeded();
+  const flowBox = await flow.boundingBox();
+  if (!flowBox) throw new Error("Canvas must be measurable");
+  await page.mouse.move(flowBox.x + flowBox.width / 2, flowBox.y + flowBox.height / 2);
+  await page.mouse.wheel(0, -360);
+  await expect.poll(scale).toBeGreaterThan(initialScale);
+});
+
+test("detected Codex installations expose independent hook controls", async ({ page, api }) => {
+  await page.goto("/");
+
+  await expect(page.getByText("2개 중 1개 hook 설치")).toBeVisible();
+  await expect(page.getByText("C:\\Users\\fixture\\.codex\\hooks.json")).toBeVisible();
+  await expect(page.getByText("/home/fixture/.codex/hooks.json")).toBeVisible();
+
+  const wslCapture = page.getByRole("checkbox", { name: "Codex · Ubuntu capture" });
+  const wslEnabled = responseFor(
+    page,
+    "PATCH",
+    "/v1/providers/codex/targets/wsl%3AUbuntu",
+  );
+  await wslCapture.click();
+  await wslEnabled;
+  await expect(page.getByText("2개 중 2개 hook 설치")).toBeVisible();
+  expect(api.state.provider.targets.find(({ id }) => id === "wsl:Ubuntu")?.enabled).toBe(true);
+
+  const windowsCapture = page.getByRole("checkbox", { name: "Codex App + CLI capture" });
+  const windowsDisabled = responseFor(
+    page,
+    "PATCH",
+    "/v1/providers/codex/targets/windows-native",
+  );
+  await windowsCapture.click();
+  await windowsDisabled;
+  await expect(page.getByText("2개 중 1개 hook 설치")).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "Codex capture" })).toBeChecked();
+
+  const wslDisabled = responseFor(
+    page,
+    "PATCH",
+    "/v1/providers/codex/targets/wsl%3AUbuntu",
+  );
+  await wslCapture.click();
+  await wslDisabled;
+  await expect(page.getByText("2개 중 0개 hook 설치")).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "Codex capture" })).not.toBeChecked();
+});
+
+test("one shared Windows hook reports App and CLI capture evidence independently", async ({ page, api }) => {
+  const windows = api.state.provider.targets.find(({ id }) => id === "windows-native");
+  if (!windows) throw new Error("Windows Codex fixture target is required");
+  windows.activation = "verified";
+  windows.clients = [
+    {
+      id: "app",
+      label: "Codex App",
+      verified: false,
+      last_captured_at_us: null,
+    },
+    {
+      id: "cli",
+      label: "Codex CLI",
+      verified: true,
+      last_captured_at_us: 1_786_176_000_000_000,
+    },
+  ];
+
+  await page.goto("/");
+
+  const target = page.getByRole("listitem").filter({ hasText: "Codex App + CLI" });
+  await expect(target.getByText("Capture verified")).toBeVisible();
+  await expect(target.getByText("Codex App", { exact: true })).toBeVisible();
+  await expect(target.getByText("설치 후 캡처 없음", { exact: true })).toBeVisible();
+  await expect(target.getByText("Codex CLI", { exact: true })).toBeVisible();
+  await expect(target.getByText(/캡처 확인/)).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "Codex App + CLI capture" })).toHaveCount(1);
+  await expect(page.getByRole("checkbox", { name: "Codex App capture" })).toHaveCount(0);
+  await expect(page.getByRole("checkbox", { name: "Codex CLI capture" })).toHaveCount(0);
+});
+
 test("one fixture session preserves durable canvas semantics through polling, filters, mutations, and deletion", async ({ page, api }) => {
   addParallelCrossProjectFixture(api);
   const writes = canvasWrites(page);
@@ -219,9 +336,19 @@ test("one fixture session preserves durable canvas semantics through polling, fi
   await page.keyboard.press("Backspace");
   await deleted;
   expect(api.state.activities).toEqual(activitiesBeforeDelete);
+  const clearButton = page.getByRole("button", { name: "Clear canvas" });
+  await clearButton.click();
+  const clearDialog = page.getByRole("dialog", { name: "Canvas를 비울까요?" });
+  await expect(clearDialog).toContainText("저장된 prompt history는 유지됩니다.");
+  await clearDialog.getByRole("button", { name: "취소" }).click();
+  await expect(clearDialog).toHaveCount(0);
+  await expect(clearButton).toBeFocused();
+  expect(api.state.canvasNodes.length).toBeGreaterThan(0);
   const cleared = responseFor(page, "DELETE", "/v1/canvas");
-  await page.getByRole("button", { name: "Clear canvas" }).click();
+  await clearButton.click();
+  await page.getByRole("button", { name: "Canvas 비우기" }).click();
   await cleared;
+  await expect(page.locator(".flow-stage")).toBeFocused();
   expect(api.state.canvasNodes).toEqual([]);
   expect(api.state.canvasEdges).toEqual([]);
   expect(api.state.activities).toEqual(activitiesBeforeDelete);

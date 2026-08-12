@@ -85,6 +85,7 @@ impl ActivityStore {
                     EXISTS (
                         SELECT 1 FROM canvas_nodes
                         WHERE canvas_nodes.activity_event_id = selected.id
+                          AND canvas_nodes.deleted_at_us IS NULL
                     ) AS on_canvas
              FROM selected
              LEFT JOIN projects ON projects.id = selected.project_id",
@@ -183,6 +184,7 @@ impl ActivityStore {
                         EXISTS (
                             SELECT 1 FROM canvas_nodes
                             WHERE canvas_nodes.activity_event_id = effective.id
+                              AND canvas_nodes.deleted_at_us IS NULL
                         ) AS on_canvas
                  FROM effective
                  LEFT JOIN projects ON projects.id = effective.project_id

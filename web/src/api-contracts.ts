@@ -78,9 +78,30 @@ export type OriginSummary = {
   recommended_mode: "dedicated" | "shared";
 };
 
+export type CodexCaptureTarget = {
+  id: string;
+  label: string;
+  environment: string;
+  codex_home: string | null;
+  hook_path: string | null;
+  enabled: boolean;
+  available: boolean;
+  activation: "disabled" | "awaiting_capture" | "verified";
+  clients: CodexCaptureClient[];
+  detail: string | null;
+};
+
+export type CodexCaptureClient = {
+  id: "app" | "cli" | "wsl_cli" | string;
+  label: string;
+  verified: boolean;
+  last_captured_at_us: number | null;
+};
+
 export type ProviderIntegration = {
   provider: string;
   enabled: boolean;
+  targets: CodexCaptureTarget[];
 };
 
 export type CanvasNode = {

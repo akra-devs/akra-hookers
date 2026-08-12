@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import type { ActivityConversationTurn, ActivityTime, ApiClient } from "../api";
 import { formatActivityTime } from "../time";
 import { useTimelineAnchor } from "../useTimelineAnchor";
+import { UiIcon } from "./UiIcon";
 
 type ActivityDetailPanelProps = {
   activityId: number;
@@ -35,6 +36,7 @@ export function ActivityDetailPanel({
   client,
   onClose,
 }: ActivityDetailPanelProps) {
+  const panelRef = useRef<HTMLElement>(null);
   const detailQuery = useQuery({
     queryKey: ["activity", activityId],
     queryFn: () => client.activity(activityId),
@@ -49,6 +51,9 @@ export function ActivityDetailPanel({
   const [pageHasMore, setPageHasMore] = useState<boolean | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pageError, setPageError] = useState("");
+  useEffect(() => {
+    panelRef.current?.focus({ preventScroll: false });
+  }, [activityId]);
   useEffect(() => {
     setAdditionalTurns([]);
     setPageHasMore(null);
@@ -93,17 +98,21 @@ export function ActivityDetailPanel({
   if (detailQuery.isError) {
     return (
       <aside
+        ref={panelRef}
         className="activity-detail"
         data-testid="activity-detail-panel"
         data-selected-activity-id={activityId}
         aria-label="활동 상세"
+        tabIndex={-1}
       >
         <header className="activity-detail__header">
           <div>
             <p className="eyebrow">ACTIVITY DETAIL</p>
             <h2>활동 상세</h2>
           </div>
-          <button type="button" onClick={onClose}>상세 닫기</button>
+          <button type="button" onClick={onClose} aria-label="상세 닫기" title="상세 닫기">
+            <UiIcon name="close" />
+          </button>
         </header>
         <p className="inline-error" role="alert">
           활동 상세를 불러오지 못했습니다.
@@ -123,10 +132,12 @@ export function ActivityDetailPanel({
   if (!detail) {
     return (
       <aside
+        ref={panelRef}
         className="activity-detail"
         data-testid="activity-detail-panel"
         data-selected-activity-id={activityId}
         aria-label="활동 상세"
+        tabIndex={-1}
       >
         <p>활동 상세를 불러오는 중입니다.</p>
       </aside>
@@ -135,17 +146,21 @@ export function ActivityDetailPanel({
 
   return (
     <aside
+      ref={panelRef}
       className="activity-detail"
       data-testid="activity-detail-panel"
       data-selected-activity-id={activityId}
       aria-label="활동 상세"
+      tabIndex={-1}
     >
       <header className="activity-detail__header">
         <div>
           <p className="eyebrow">ACTIVITY DETAIL</p>
           <h2>활동 상세</h2>
         </div>
-        <button type="button" onClick={onClose}>상세 닫기</button>
+        <button type="button" onClick={onClose} aria-label="상세 닫기" title="상세 닫기">
+          <UiIcon name="close" />
+        </button>
       </header>
       <section className="activity-detail__selected" aria-label="선택한 활동">
         <span className="activity-detail__project">{detail.project?.name ?? "Inbox"}</span>

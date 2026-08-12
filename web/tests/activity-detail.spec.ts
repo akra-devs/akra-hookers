@@ -236,7 +236,7 @@ test("legacy time and a missing submitted path remain explicitly truthful", asyn
 
   await expect(detailPanel.getByTestId("submitted-cwd")).toHaveText("정확한 작업 경로를 사용할 수 없음");
   await expect(detailPanel.getByTestId("captured-at")).toHaveAttribute("data-provenance", "legacy_recorded");
-  await expect(detailPanel.getByTestId("captured-at")).toContainText("기존 기록");
+  await expect(detailPanel.getByTestId("captured-at")).not.toContainText("기존 기록");
   await expect(detailPanel.getByTestId("first-recorded-at")).toHaveAttribute("data-provenance", "unknown");
   await expect(detailPanel.getByTestId("first-recorded-at")).toContainText("시간 정보 없음");
   await expect(detailPanel.getByTestId("detected-path")).toHaveAttribute("data-resolution-source", "legacy_migrated");
@@ -344,6 +344,7 @@ test("the pane closes only when its selected node becomes invisible while delete
   await open(page, 1);
   const cleared = page.waitForResponse((candidate) => candidate.request().method() === "DELETE" && new URL(candidate.url()).pathname === "/v1/canvas");
   await page.getByRole("button", { name: "Clear canvas" }).click();
+  await page.getByRole("button", { name: "Canvas 비우기" }).click();
   await cleared;
   await expect(panel(page)).toHaveCount(0);
 });

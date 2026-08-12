@@ -104,6 +104,13 @@ fn enable_creates_missing_hooks_configuration() {
             .is_none(),
         "akra capture must be synchronous because Codex skips async hooks"
     );
+
+    let config =
+        fs::read_to_string(home.path().join(".codex").join("config.toml")).expect("trusted config");
+    assert!(config.contains("enabled = true"));
+    assert!(
+        config.contains("sha256:e94def78b62a7838e51bc8b77e885b5e85c89162fc063bc9a3c4cfd4c8237f36")
+    );
 }
 
 #[test]
@@ -114,6 +121,8 @@ fn enable_is_idempotent_for_dashboard_repeated_on_actions() {
     lifecycle
         .enable(r#"C:\tools\akra-hookers.exe capture --data-dir C:\data"#)
         .expect("first enable");
+    let config_path = home.path().join(".codex").join("config.toml");
+    let first_config = fs::read(&config_path).expect("first config");
     lifecycle
         .enable(r#"C:\tools\akra-hookers.exe capture --data-dir C:\data"#)
         .expect("second enable");
@@ -122,6 +131,74 @@ fn enable_is_idempotent_for_dashboard_repeated_on_actions() {
     assert_eq!(
         commands(&hooks),
         vec![r#"C:\tools\akra-hookers.exe capture --data-dir C:\data"#]
+    );
+    assert_eq!(
+        fs::read(config_path).expect("second config"),
+        first_config,
+        "repeated enable must not churn Codex trust state"
+    );
+}
+
+#[test]
+fn enable_preserves_unrelated_config_and_disable_removes_only_akra_trust() {
+    let home = TempDir::new().expect("home directory");
+    let codex_home = home.path().join(".codex");
+    fs::create_dir_all(&codex_home).expect("Codex home");
+    let config_path = codex_home.join("config.toml");
+    fs::write(
+        &config_path,
+        r#"# retain this comment
+model = "gpt-test"
+
+[hooks.state.'other.json:user_prompt_submit:0:0']
+enabled = false
+trusted_hash = "sha256:other"
+"#,
+    )
+    .expect("existing config");
+    let lifecycle = CodexHookLifecycle::new(home.path());
+
+    lifecycle
+        .enable("akra-hookers capture")
+        .expect("enable and trust Akra hook");
+    let enabled = fs::read_to_string(&config_path).expect("enabled config");
+    assert!(enabled.contains("# retain this comment"));
+    assert!(enabled.contains("model = \"gpt-test\""));
+    assert!(enabled.contains("sha256:other"));
+    assert!(
+        enabled.contains("sha256:bd757851234b867d380008403ac0e54873ab8ff31dc399fae293dd2d5362a26b")
+    );
+
+    lifecycle.disable().expect("disable Akra hook");
+    let disabled = fs::read_to_string(config_path).expect("disabled config");
+    assert!(disabled.contains("# retain this comment"));
+    assert!(disabled.contains("sha256:other"));
+    assert!(
+        !disabled
+            .contains("sha256:bd757851234b867d380008403ac0e54873ab8ff31dc399fae293dd2d5362a26b")
+    );
+}
+
+#[test]
+fn malformed_config_aborts_before_manifest_mutation() {
+    let home = TempDir::new().expect("home directory");
+    let manifest = home.path().join("hooks.json");
+    let config = home.path().join("config.toml");
+    let original = br#"{ "description": "preserve exact bytes", "hooks": {} }
+"#;
+    fs::write(&manifest, original).expect("manifest");
+    fs::write(&config, b"[hooks.state\n").expect("malformed config");
+    let lifecycle = CodexHookLifecycle::from_codex_home(home.path());
+
+    let error = lifecycle
+        .enable("akra-hookers capture")
+        .expect_err("malformed config must abort installation");
+
+    assert!(error.to_string().contains("not valid TOML"));
+    assert_eq!(fs::read(manifest).expect("unchanged manifest"), original);
+    assert_eq!(
+        fs::read(config).expect("unchanged config"),
+        b"[hooks.state\n"
     );
 }
 

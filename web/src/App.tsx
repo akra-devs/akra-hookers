@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Node, type NodeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { createApiClient } from "./api";
 import { getAssignmentSelection } from "./assignment-selection";
 import type { ActivityNodeData } from "./canvas";
+import { AppCommandBar } from "./components/AppCommandBar";
 import { ActivityAssignmentBar } from "./components/ActivityAssignmentBar";
 import { ActivityCanvas } from "./components/ActivityCanvas";
 import { ActivityDetailPanel } from "./components/ActivityDetailPanel";
 import { ActivityNode } from "./components/ActivityNode";
+import { ClearCanvasDialog } from "./components/ClearCanvasDialog";
 import { OriginSetupDialog } from "./components/OriginSetupDialog";
 import { ProjectDialog } from "./components/ProjectDialog";
 import { ProjectRail, type ProjectFilter } from "./components/ProjectRail";
@@ -15,11 +17,16 @@ import { useDashboardData } from "./hooks/useDashboardData";
 const nodeTypes = { activity: ActivityNode } satisfies NodeTypes;
 export function App() {
   const [codexEnabled, setCodexEnabled] = useState(false);
+  const [codexPending, setCodexPending] = useState(false);
+  const [pendingCodexTargetIds, setPendingCodexTargetIds] = useState<string[]>([]);
+  const [captureError, setCaptureError] = useState<string | null>(null);
   const [filter, setFilter] = useState<ProjectFilter>("all");
   const [projectDialog, setProjectDialog] = useState<"new" | number | null>(null);
   const [originDialog, setOriginDialog] = useState<number | null>(null);
   const [detailActivityId, setDetailActivityId] = useState<number | null>(null);
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const detailTriggerRef = useRef<HTMLElement | null>(null);
   const client = useMemo(() => {
     const url = import.meta.env.VITE_AKRA_URL;
     const token = import.meta.env.VITE_AKRA_TOKEN;
@@ -35,14 +42,15 @@ export function App() {
     nodes, setNodes, edges, onNodesChange, commitNodePosition,
     selectedActivityIds, setSelectedActivityIds, assignmentDetails,
     refreshProjectContext, refreshCanvas, refreshCanvasAuthoritatively,
-    bootstrapError, bootstrapReady, retryBootstrap,
+    bootstrapError, retryBootstrap,
     hasOlderActivities, loadOlderActivities, loadingOlderActivities, olderActivitiesError,
   } = useDashboardData(client, activityScope);
   useEffect(() => {
-    if (provider.data) {
+    if (provider.data && !provider.isError) {
       setCodexEnabled(provider.data.enabled);
+      setCaptureError(null);
     }
-  }, [provider.data]);
+  }, [provider.data, provider.isError]);
   useEffect(() => {
     if (
       detailActivityId !== null
@@ -62,29 +70,90 @@ export function App() {
   }, []);
   const clearCanvas = useCallback(async () => {
     if (!client) {
-      return;
+      return false;
     }
     try {
       await client.clearCanvas();
       await refreshCanvasAuthoritatively();
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not clear canvas.");
+      return false;
     }
   }, [client, refreshCanvasAuthoritatively]);
+  const openActivity = useCallback((activityId: number) => {
+    const content = document.querySelector<HTMLElement>(
+      `[data-testid="activity-node-${activityId}"]`,
+    );
+    detailTriggerRef.current = content?.closest<HTMLElement>(".react-flow__node") ?? null;
+    setDetailActivityId(activityId);
+  }, []);
+  const closeActivity = useCallback(() => {
+    setDetailActivityId(null);
+    requestAnimationFrame(() => detailTriggerRef.current?.focus());
+  }, []);
+  const confirmClearCanvas = useCallback(async () => {
+    if (!await clearCanvas()) return false;
+    setClearConfirmOpen(false);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(".flow-stage")?.focus();
+    });
+    return true;
+  }, [clearCanvas]);
   const changeProvider = useCallback(async (enabled: boolean) => {
-    if (!client) {
+    if (!client || provider.isError || codexPending || pendingCodexTargetIds.length > 0) {
       return;
     }
     const previous = codexEnabled;
+    setCaptureError(null);
+    setCodexPending(true);
     setCodexEnabled(enabled);
     try {
       await client.setProviderEnabled("codex", enabled);
-      await provider.refetch();
     } catch (cause) {
       setCodexEnabled(previous);
-      setError(cause instanceof Error ? cause.message : "Could not update Codex capture.");
+      setCaptureError(cause instanceof Error ? cause.message : "Codex capture를 변경하지 못했습니다.");
+      setCodexPending(false);
+      return;
     }
-  }, [client, codexEnabled, provider]);
+    try {
+      await provider.refetch({ throwOnError: true });
+    } catch {
+      setCaptureError(
+        "설정은 변경되었지만 최신 상태를 확인하지 못했습니다. 대시보드에서 다시 시도하세요.",
+      );
+    } finally {
+      setCodexPending(false);
+    }
+  }, [client, codexEnabled, codexPending, pendingCodexTargetIds.length, provider]);
+  const changeProviderTarget = useCallback(async (targetId: string, enabled: boolean) => {
+    if (
+      !client
+      || provider.isError
+      || codexPending
+      || pendingCodexTargetIds.includes(targetId)
+    ) {
+      return;
+    }
+    setCaptureError(null);
+    setPendingCodexTargetIds((current) => [...current, targetId]);
+    try {
+      await client.setProviderTargetEnabled("codex", targetId, enabled);
+    } catch (cause) {
+      setCaptureError(cause instanceof Error ? cause.message : "Codex 설치 설정을 변경하지 못했습니다.");
+      setPendingCodexTargetIds((current) => current.filter((id) => id !== targetId));
+      return;
+    }
+    try {
+      await provider.refetch({ throwOnError: true });
+    } catch {
+      setCaptureError(
+        "설정은 변경되었지만 최신 상태를 확인하지 못했습니다. 대시보드에서 다시 시도하세요.",
+      );
+    } finally {
+      setPendingCodexTargetIds((current) => current.filter((id) => id !== targetId));
+    }
+  }, [client, codexPending, pendingCodexTargetIds, provider]);
   const managedProject = projectDialog === null || projectDialog === "new"
     ? undefined
     : projects.data?.find((project) => project.id === projectDialog);
@@ -100,24 +169,53 @@ export function App() {
     && assignmentDetails?.every(({ project }) => project?.id === selectedProjectId)
     ? selectedProjectId
     : null;
+  const canvasDataIsReady = !bootstrapError
+    && activities.data !== undefined
+    && canvas.data !== undefined;
+  const showCanvasEmptyState = canvasDataIsReady && nodes.length === 0;
+  const currentProjects = projects.data ?? [];
+  const currentOrigins = origins.data ?? [];
+  const currentTargets = provider.data?.targets ?? [];
+  const focusRailSection = (selector: string) => {
+    const target = document.querySelector<HTMLElement>(selector);
+    target?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    target?.focus({ preventScroll: true });
+  };
   return (
     <main className={detailActivityId === null ? "app-shell" : "app-shell app-shell--detail"}>
+      <AppCommandBar
+        filter={filter}
+        projects={currentProjects}
+        inboxCount={inboxCount.data ?? 0}
+        originCount={currentOrigins.length}
+        codexAvailable={provider.data !== undefined && !provider.isError}
+        codexTargets={currentTargets}
+        onFilterChange={setFilter}
+        onOpenWorkLocations={() => focusRailSection("#work-locations-heading")}
+        onOpenCaptureSettings={() => focusRailSection("#codex-capture-control")}
+      />
       <ProjectRail
         nodeCount={nodes.length} codexEnabled={codexEnabled}
         codexAvailable={provider.data !== undefined && !provider.isError}
-        projects={projects.data ?? []} origins={origins.data ?? []}
+        codexPending={codexPending}
+        codexTargets={currentTargets}
+        pendingCodexTargetIds={pendingCodexTargetIds}
+        captureError={captureError}
+        projects={currentProjects} origins={currentOrigins}
         inboxCount={inboxCount.data ?? 0} filter={filter}
         onCodexChange={(enabled) => void changeProvider(enabled)}
+        onCodexTargetChange={(targetId, enabled) =>
+          void changeProviderTarget(targetId, enabled)}
         onFilterChange={setFilter} onNewProject={() => setProjectDialog("new")}
         onManageProject={setProjectDialog} onManageOrigin={setOriginDialog}
       />
       <section className="canvas-panel">
-        <header>
-          <div className="canvas-actions">
-            <p className="eyebrow">PROJECT ACTIVITY</p>
-            <h2>Prompt canvas</h2>
+        <header className="canvas-toolbar">
+          <div className="canvas-context">
+            <span>Project activity</span>
+            <strong>{nodes.length} activities</strong>
           </div>
-          <div>
+          <div className="canvas-header-actions">
             {hasOlderActivities && (
               <button
                 type="button"
@@ -127,7 +225,15 @@ export function App() {
                 {loadingOlderActivities ? "불러오는 중…" : "이전 활동 불러오기"}
               </button>
             )}
-            <button type="button" onClick={() => void clearCanvas()}>Clear canvas</button>
+            {nodes.length > 0 && (
+              <button
+                className="canvas-clear"
+                type="button"
+                onClick={() => setClearConfirmOpen(true)}
+              >
+                Clear canvas
+              </button>
+            )}
           </div>
         </header>
         {bootstrapError && (
@@ -145,14 +251,15 @@ export function App() {
           client={client} canvasNodes={canvas.data ?? []}
           nodes={nodes} setNodes={setNodes} edges={edges} nodeTypes={nodeTypes}
           onNodesChange={onNodesChange} onPositionCommit={commitNodePosition}
-          onActivityOpen={setDetailActivityId} onError={setError}
+          onActivityOpen={openActivity} onError={setError}
           onPersistedChange={refreshCanvas}
+          onAuthoritativeRefresh={refreshCanvasAuthoritatively}
           onSelectionChange={changeSelection}
         />
-        {bootstrapReady && nodes.length === 0 && (
+        {showCanvasEmptyState && (
           <div className="empty-state">
             <strong>No activity on this canvas</strong>
-            <span>Submitted provider prompts appear here; removing a node never deletes its activity record.</span>
+            <span>Enable Codex capture and submit a prompt to add your first activity.</span>
           </div>
         )}
         {error && <p className="error-message" role="alert">{error}</p>}
@@ -186,7 +293,14 @@ export function App() {
           key={detailActivityId}
           activityId={detailActivityId}
           client={client}
-          onClose={() => setDetailActivityId(null)}
+          onClose={closeActivity}
+        />
+      )}
+      {clearConfirmOpen && (
+        <ClearCanvasDialog
+          nodeCount={nodes.length}
+          onCancel={() => setClearConfirmOpen(false)}
+          onConfirm={confirmClearCanvas}
         />
       )}
       {client && projectDialog !== null && (

@@ -10,12 +10,74 @@ use thiserror::Error;
 
 #[path = "codex_lifecycle/transaction.rs"]
 mod transaction;
+#[path = "codex_lifecycle/trust.rs"]
+mod trust;
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+const CAPTURE_HOOK_TIMEOUT_SECONDS: u64 = 5;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CodexHookLifecycle {
     manifest_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CodexHookCommand {
+    command: String,
+    command_windows: Option<String>,
+}
+
+impl CodexHookCommand {
+    pub fn same(command: impl Into<String>) -> Self {
+        let command = command.into();
+        Self {
+            command_windows: Some(command.clone()),
+            command,
+        }
+    }
+
+    pub fn posix(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            command_windows: None,
+        }
+    }
+
+    pub fn with_windows(command: impl Into<String>, command_windows: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            command_windows: Some(command_windows.into()),
+        }
+    }
+
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+}
+
+struct CodexHookUpdate {
+    lifecycle: CodexHookLifecycle,
+    command: Option<CodexHookCommand>,
+}
+
+/// Applies per-home hook intent as one filesystem transaction. This is used when
+/// Windows and WSL installations need different capture commands but must still
+/// roll back together on a malformed or concurrently changed manifest.
+pub fn apply_codex_hook_updates(
+    updates: impl IntoIterator<Item = (PathBuf, Option<CodexHookCommand>)>,
+) -> Result<(), CodexLifecycleError> {
+    let mut seen = BTreeSet::new();
+    let updates = updates
+        .into_iter()
+        .map(|(home, command)| (normalize_home(home), command))
+        .filter(|(home, _)| seen.insert(home_key(home)))
+        .map(|(home, command)| CodexHookUpdate {
+            lifecycle: CodexHookLifecycle::from_codex_home(&home),
+            command,
+        })
+        .collect::<Vec<_>>();
+    transaction::apply_updates(&updates)
 }
 
 impl CodexHookLifecycle {
@@ -30,28 +92,17 @@ impl CodexHookLifecycle {
     }
 
     pub fn enable(&self, command: &str) -> Result<(), CodexLifecycleError> {
-        let parent = self
-            .manifest_path
-            .parent()
-            .ok_or(CodexLifecycleError::MissingManifestParent)?;
-        fs::create_dir_all(parent)?;
-        let mut hooks = self.read_hooks()?;
-        remove_akra_hooks(&mut hooks);
-        hooks
-            .hooks
-            .user_prompt_submit
-            .push(CodexMatcherGroup::akra_hook(command));
-        self.write_hooks(&hooks)?;
-        Ok(())
+        transaction::apply_updates(&[CodexHookUpdate {
+            lifecycle: self.clone(),
+            command: Some(CodexHookCommand::same(command)),
+        }])
     }
 
     pub fn disable(&self) -> Result<(), CodexLifecycleError> {
-        if self.manifest_path.exists() {
-            let mut hooks = self.read_hooks()?;
-            remove_akra_hooks(&mut hooks);
-            self.write_hooks(&hooks)?;
-        }
-        Ok(())
+        transaction::apply_updates(&[CodexHookUpdate {
+            lifecycle: self.clone(),
+            command: None,
+        }])
     }
 
     pub fn is_enabled(&self) -> Result<bool, CodexLifecycleError> {
@@ -62,6 +113,20 @@ impl CodexHookLifecycle {
             .iter()
             .flat_map(|group| &group.hooks)
             .any(CodexHook::is_akra_hook))
+    }
+
+    fn managed_command(&self) -> Result<Option<CodexHookCommand>, CodexLifecycleError> {
+        let hooks = self.read_hooks()?;
+        Ok(hooks
+            .hooks
+            .user_prompt_submit
+            .iter()
+            .flat_map(|group| &group.hooks)
+            .find(|hook| hook.is_akra_hook())
+            .map(|hook| CodexHookCommand {
+                command: hook.command.clone(),
+                command_windows: hook.command_windows.clone(),
+            }))
     }
 
     fn read_hooks(&self) -> Result<CodexHooksFile, CodexLifecycleError> {
@@ -84,17 +149,11 @@ impl CodexHookLifecycle {
         }
     }
 
-    fn write_hooks(&self, hooks: &CodexHooksFile) -> Result<(), CodexLifecycleError> {
-        let parent = self
-            .manifest_path
+    fn config_path(&self) -> Result<PathBuf, CodexLifecycleError> {
+        self.manifest_path
             .parent()
-            .ok_or(CodexLifecycleError::MissingManifestParent)?;
-        fs::create_dir_all(parent)?;
-        transaction::write_manifest_atomic(
-            &self.manifest_path,
-            serde_json::to_string_pretty(hooks)?.as_bytes(),
-        )?;
-        Ok(())
+            .map(|parent| parent.join("config.toml"))
+            .ok_or(CodexLifecycleError::MissingManifestParent)
     }
 }
 
@@ -130,6 +189,10 @@ impl CodexHookLifecycleSet {
 
     pub fn is_enabled(&self) -> Result<bool, CodexLifecycleError> {
         transaction::is_enabled(self)
+    }
+
+    pub fn managed_command(&self) -> Result<Option<CodexHookCommand>, CodexLifecycleError> {
+        transaction::managed_command(self)
     }
 }
 
@@ -176,16 +239,39 @@ fn home_key(home: &Path) -> PathBuf {
 }
 
 fn read_manifest_bytes(path: &Path) -> Result<Option<Vec<u8>>, CodexLifecycleError> {
+    read_regular_file_bytes(
+        path,
+        MAX_MANIFEST_BYTES,
+        CodexLifecycleError::UnsafeManifest,
+        CodexLifecycleError::OversizedManifest,
+    )
+}
+
+fn read_config_bytes(path: &Path) -> Result<Option<Vec<u8>>, CodexLifecycleError> {
+    read_regular_file_bytes(
+        path,
+        MAX_CONFIG_BYTES,
+        CodexLifecycleError::UnsafeConfig,
+        CodexLifecycleError::OversizedConfig,
+    )
+}
+
+fn read_regular_file_bytes(
+    path: &Path,
+    max_bytes: u64,
+    unsafe_error: fn(PathBuf) -> CodexLifecycleError,
+    oversized_error: fn(u64) -> CodexLifecycleError,
+) -> Result<Option<Vec<u8>>, CodexLifecycleError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     if !metadata.file_type().is_file() {
-        return Err(CodexLifecycleError::UnsafeManifest(path.to_path_buf()));
+        return Err(unsafe_error(path.to_path_buf()));
     }
-    if metadata.len() > MAX_MANIFEST_BYTES {
-        return Err(CodexLifecycleError::OversizedManifest(metadata.len()));
+    if metadata.len() > max_bytes {
+        return Err(oversized_error(metadata.len()));
     }
 
     let mut options = OpenOptions::new();
@@ -194,7 +280,9 @@ fn read_manifest_bytes(path: &Path) -> Result<Option<Vec<u8>>, CodexLifecycleErr
     {
         use std::os::windows::fs::OpenOptionsExt;
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        if !is_wsl_unc(path) {
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
     }
     #[cfg(unix)]
     {
@@ -203,26 +291,70 @@ fn read_manifest_bytes(path: &Path) -> Result<Option<Vec<u8>>, CodexLifecycleErr
     }
     let mut file = options.open(path)?;
     if !file.metadata()?.file_type().is_file() {
-        return Err(CodexLifecycleError::UnsafeManifest(path.to_path_buf()));
+        return Err(unsafe_error(path.to_path_buf()));
     }
     let mut content = Vec::new();
     file.by_ref()
-        .take(MAX_MANIFEST_BYTES + 1)
+        .take(max_bytes + 1)
         .read_to_end(&mut content)?;
-    if content.len() as u64 > MAX_MANIFEST_BYTES {
-        return Err(CodexLifecycleError::OversizedManifest(content.len() as u64));
+    if content.len() as u64 > max_bytes {
+        return Err(oversized_error(content.len() as u64));
     }
     Ok(Some(content))
 }
 
-fn remove_akra_hooks(hooks: &mut CodexHooksFile) {
-    for group in &mut hooks.hooks.user_prompt_submit {
-        group.hooks.retain(|hook| !hook.is_akra_hook());
+fn is_wsl_unc(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let path = path.to_string_lossy().to_ascii_lowercase();
+        path.starts_with(r"\\wsl.localhost\") || path.starts_with(r"\\?\unc\wsl.localhost\")
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct HookLocation {
+    group: usize,
+    handler: usize,
+}
+
+impl HookLocation {
+    const fn new(group: usize, handler: usize) -> Self {
+        Self { group, handler }
+    }
+}
+
+fn remove_akra_hooks(hooks: &mut CodexHooksFile) -> Vec<HookLocation> {
+    let mut locations = Vec::new();
+    for (group_index, group) in hooks.hooks.user_prompt_submit.iter_mut().enumerate() {
+        let mut retained = Vec::with_capacity(group.hooks.len());
+        for (handler_index, hook) in group.hooks.drain(..).enumerate() {
+            if hook.is_akra_hook() {
+                locations.push(HookLocation::new(group_index, handler_index));
+            } else {
+                retained.push(hook);
+            }
+        }
+        group.hooks = retained;
     }
     hooks
         .hooks
         .user_prompt_submit
         .retain(|group| !group.hooks.is_empty());
+    locations
+}
+
+fn append_akra_hook(hooks: &mut CodexHooksFile, command: &CodexHookCommand) -> HookLocation {
+    let location = HookLocation::new(hooks.hooks.user_prompt_submit.len(), 0);
+    hooks
+        .hooks
+        .user_prompt_submit
+        .push(CodexMatcherGroup::akra_hook(command));
+    location
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -252,14 +384,14 @@ struct CodexMatcherGroup {
 }
 
 impl CodexMatcherGroup {
-    fn akra_hook(command: &str) -> Self {
+    fn akra_hook(command: &CodexHookCommand) -> Self {
         Self {
             hooks: vec![CodexHook {
                 hook_type: "command".to_owned(),
-                command: command.to_owned(),
-                command_windows: Some(command.to_owned()),
+                command: command.command.clone(),
+                command_windows: command.command_windows.clone(),
                 asynchronous: None,
-                timeout: Some(1),
+                timeout: Some(CAPTURE_HOOK_TIMEOUT_SECONDS),
                 managed: Some(true),
                 extra: BTreeMap::new(),
             }],
@@ -356,8 +488,28 @@ pub enum CodexLifecycleError {
     UnsafeManifest(PathBuf),
     #[error("Codex hook manifest is {0} bytes, exceeding the {MAX_MANIFEST_BYTES}-byte limit")]
     OversizedManifest(u64),
+    #[error("Codex config must be a regular non-link file: {0}")]
+    UnsafeConfig(PathBuf),
+    #[error("Codex config is {0} bytes, exceeding the {MAX_CONFIG_BYTES}-byte limit")]
+    OversizedConfig(u64),
+    #[error("Codex config is not valid UTF-8: {path}: {source}")]
+    InvalidConfigEncoding {
+        path: PathBuf,
+        #[source]
+        source: std::str::Utf8Error,
+    },
+    #[error("Codex config is not valid TOML: {path}: {source}")]
+    InvalidConfigToml {
+        path: PathBuf,
+        #[source]
+        source: toml_edit::TomlError,
+    },
+    #[error("Codex config has a non-table hooks/state value: {0}")]
+    InvalidConfigShape(PathBuf),
     #[error("Codex hook manifest changed during lifecycle update: {0}")]
     ConcurrentManifestChange(PathBuf),
+    #[error("Codex config changed during lifecycle update: {0}")]
+    ConcurrentConfigChange(PathBuf),
     #[error("{source}; additionally failed to roll back a Codex hook manifest: {rollback}")]
     Rollback {
         #[source]
@@ -370,6 +522,51 @@ pub enum CodexLifecycleError {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn per_home_updates_apply_distinct_commands_atomically() {
+        let homes = TempDir::new().expect("homes");
+        let first = homes.path().join("first");
+        let second = homes.path().join("second");
+
+        apply_codex_hook_updates([
+            (
+                first.clone(),
+                Some(CodexHookCommand::same("windows capture")),
+            ),
+            (second.clone(), Some(CodexHookCommand::posix("wsl capture"))),
+        ])
+        .expect("per-home update");
+
+        let first_manifest = fs::read_to_string(first.join("hooks.json")).expect("first manifest");
+        let second_manifest =
+            fs::read_to_string(second.join("hooks.json")).expect("second manifest");
+        assert!(first_manifest.contains("windows capture"));
+        assert!(!first_manifest.contains("wsl capture"));
+        assert!(second_manifest.contains("wsl capture"));
+        assert!(!second_manifest.contains("windows capture"));
+        assert!(!second_manifest.contains("commandWindows"));
+    }
+
+    #[test]
+    fn shared_home_serializes_distinct_posix_and_windows_commands() {
+        let home = TempDir::new().expect("home");
+
+        apply_codex_hook_updates([(
+            home.path().to_path_buf(),
+            Some(CodexHookCommand::with_windows(
+                "wsl capture --wsl-distro $WSL_DISTRO_NAME",
+                "powershell.exe windows capture",
+            )),
+        )])
+        .expect("shared update");
+
+        let manifest = fs::read_to_string(home.path().join("hooks.json")).expect("manifest");
+        let manifest: serde_json::Value = serde_json::from_str(&manifest).expect("valid manifest");
+        let hook = &manifest["hooks"]["UserPromptSubmit"][0]["hooks"][0];
+        assert_eq!(hook["command"], "wsl capture --wsl-distro $WSL_DISTRO_NAME");
+        assert_eq!(hook["commandWindows"], "powershell.exe windows capture");
+    }
 
     #[test]
     fn lexical_aliases_create_one_manifest_lifecycle_and_lock() {

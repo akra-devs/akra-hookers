@@ -4,7 +4,10 @@ use thiserror::Error;
 #[path = "codex_lifecycle.rs"]
 mod lifecycle;
 
-pub use lifecycle::{CodexHookLifecycle, CodexHookLifecycleSet, CodexLifecycleError};
+pub use lifecycle::{
+    CodexHookCommand, CodexHookLifecycle, CodexHookLifecycleSet, CodexLifecycleError,
+    apply_codex_hook_updates,
+};
 
 #[derive(Debug)]
 pub struct CodexAdapter;

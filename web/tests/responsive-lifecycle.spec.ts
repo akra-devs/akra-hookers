@@ -56,10 +56,23 @@ async function openDetail(page: Page, activityId: number) {
   await expect(panel(page)).toBeVisible();
 }
 
-async function tabTo(page: Page, target: Locator, limit = 24) {
-  for (let index = 0; index < limit; index += 1) {
+async function tabTo(page: Page, target: Locator) {
+  if (await target.evaluate((element) => element === document.activeElement)) return;
+  const visited = await page.evaluateHandle(() => {
+    const elements = new WeakSet<Element>();
+    if (document.activeElement) elements.add(document.activeElement);
+    return elements;
+  });
+  for (let index = 0; index < 256; index += 1) {
     await page.keyboard.press("Tab");
     if (await target.evaluate((element) => element === document.activeElement)) return;
+    const repeated = await visited.evaluate((elements) => {
+      const active = document.activeElement;
+      if (!active || elements.has(active)) return true;
+      elements.add(active);
+      return false;
+    });
+    if (repeated) break;
   }
   throw new Error("Expected control was not reachable through the keyboard focus order");
 }
@@ -84,6 +97,16 @@ test("detail reserves its own navigation-safe column at desktop and narrow width
   expect(desktop[0]!.right).toBeLessThanOrEqual(desktop[1]!.left + 1);
   await page.screenshot({ path: `${evidence}/desktop-detail.png`, fullPage: true });
 
+  await page.setViewportSize({ width: 1024, height: 720 });
+  const guardrail = page.locator(".assignment-bar--guardrail");
+  await expect(guardrail).toBeVisible();
+  await assertNoHorizontalOverflow(page, guardrail);
+  const compact = await Promise.all([page.locator(".canvas-panel"), guardrail].map(
+    (locator) => locator.evaluate((node) => node.getBoundingClientRect()),
+  ));
+  expect(compact[1]!.left).toBeGreaterThanOrEqual(compact[0]!.left);
+  expect(compact[1]!.right).toBeLessThanOrEqual(compact[0]!.right);
+
   await page.setViewportSize({ width: 390, height: 844 });
   const narrow = await Promise.all([page.locator(".rail"), panel(page)].map(
     (locator) => locator.evaluate((node) => node.getBoundingClientRect()),
@@ -106,7 +129,7 @@ test("spaced Korean cards use strict CJK typography, exactly three visual lines,
       wordBreak: style.wordBreak,
       lineBreak: style.lineBreak,
       hyphens: style.hyphens,
-      lines: Math.round(node.getBoundingClientRect().height / parseFloat(style.lineHeight)),
+      lines: Math.round(node.clientHeight / parseFloat(style.lineHeight)),
     };
   });
   await page.screenshot({ path: `${evidence}/spaced-korean-card.png`, fullPage: true });
@@ -252,6 +275,8 @@ test("keyboard-only focus order completes origin setup, assignment, technical di
   await page.screenshot({ path: `${evidence}/keyboard-node-focus.png`, fullPage: true });
   await page.keyboard.press("Enter");
   await detailLoaded;
+  const detail = panel(page);
+  await expect(detail).toBeFocused();
   const assignment = assignmentBar(page);
   await expect(assignment).toBeVisible();
   const choices = assignment.locator('input[type="radio"]');
@@ -266,7 +291,6 @@ test("keyboard-only focus order completes origin setup, assignment, technical di
   await page.keyboard.press("Enter");
   await assignmentSaved;
 
-  const detail = panel(page);
   await tabTo(page, detail.locator("summary"));
   await page.keyboard.press("Space");
   const copy = detail.locator(".activity-detail__technical button").first();
@@ -277,6 +301,7 @@ test("keyboard-only focus order completes origin setup, assignment, technical di
   await tabTo(page, detail.locator("header button"));
   await page.keyboard.press("Enter");
   await expect(detail).toHaveCount(0);
+  await expect(node).toBeFocused();
   await page.screenshot({ path: `${evidence}/keyboard-lifecycle.png`, fullPage: true });
 });
 

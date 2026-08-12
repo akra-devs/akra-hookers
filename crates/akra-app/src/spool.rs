@@ -30,7 +30,16 @@ pub struct CaptureEnvelope {
     provider: String,
     captured_at_us: i64,
     origin: ProjectOriginSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capture_source: Option<CaptureSource>,
     payload: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureSource {
+    target: String,
+    client: String,
 }
 
 impl CaptureEnvelope {
@@ -45,6 +54,30 @@ impl CaptureEnvelope {
             provider: provider.to_owned(),
             captured_at_us,
             origin,
+            capture_source: None,
+            payload,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn new_with_source(
+        provider: &str,
+        captured_at_us: i64,
+        origin: ProjectOriginSnapshot,
+        payload: serde_json::Value,
+        target: &str,
+        client: &str,
+    ) -> Result<Self, CaptureEnvelopeError> {
+        let envelope = Self {
+            schema_version: CAPTURE_ENVELOPE_SCHEMA_VERSION,
+            provider: provider.to_owned(),
+            captured_at_us,
+            origin,
+            capture_source: Some(CaptureSource {
+                target: target.to_owned(),
+                client: client.to_owned(),
+            }),
             payload,
         };
         envelope.validate()?;
@@ -74,6 +107,12 @@ impl CaptureEnvelope {
         &self.origin
     }
 
+    pub fn capture_source(&self) -> Option<(&str, &str)> {
+        self.capture_source
+            .as_ref()
+            .map(|source| (source.target.as_str(), source.client.as_str()))
+    }
+
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
     }
@@ -90,8 +129,21 @@ impl CaptureEnvelope {
         if self.origin.identity.trim().is_empty() {
             return Err(CaptureEnvelopeError::BlankOriginIdentity);
         }
+        if let Some(source) = &self.capture_source
+            && (!valid_source_token(&source.target, 128) || !valid_source_token(&source.client, 32))
+        {
+            return Err(CaptureEnvelopeError::InvalidCaptureSource);
+        }
         Ok(())
     }
+}
+
+fn valid_source_token(value: &str, max_len: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_len
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | ':')
+        })
 }
 
 #[derive(Debug)]
@@ -191,6 +243,8 @@ pub enum CaptureEnvelopeError {
     NegativeCaptureTime(i64),
     #[error("capture origin identity must not be blank")]
     BlankOriginIdentity,
+    #[error("capture source target or client identifier is invalid")]
+    InvalidCaptureSource,
     #[error("unsupported capture envelope schema version: {0}")]
     UnsupportedSchemaVersion(u8),
     #[error("invalid capture envelope JSON: {0}")]

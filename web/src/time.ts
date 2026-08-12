@@ -17,7 +17,5 @@ export function formatActivityTime(
     timeStyle: "short",
     timeZone: options.timeZone,
   }).format(new Date(time.value));
-  return time.provenance === "legacy_recorded"
-    ? `기존 기록 · ${formatted}`
-    : formatted;
+  return formatted;
 }
