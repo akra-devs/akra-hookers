@@ -9,6 +9,7 @@ describe("toCanvasNodes", () => {
         {
           id: 9,
           provider: "codex",
+          activity_kind: "user",
           prompt: "Add a health endpoint",
           project: null,
           time: { value: null, provenance: "unknown" },
@@ -37,6 +38,7 @@ describe("toCanvasNodes", () => {
     ]);
     expect(Object.keys(nodes[0]?.data ?? {}).sort()).toEqual([
       "activityId",
+      "activityKind",
       "conversationIndex",
       "conversationTotal",
       "project",
@@ -51,6 +53,7 @@ describe("toCanvasNodes", () => {
       [{
         id: 9,
         provider: "codex",
+        activity_kind: "user",
         prompt: "keep",
         project: null,
         time: { value: null, provenance: "unknown" },
@@ -68,6 +71,7 @@ describe("toCanvasNodes", () => {
       [{
         id: 9,
         provider: "codex",
+        activity_kind: "user",
         prompt: "removed",
         project: null,
         time: { value: null, provenance: "unknown" },

@@ -1,5 +1,25 @@
 # akra-hookers
 
+## Codex activity kinds and canvas visibility
+
+Akra installs and trusts both `UserPromptSubmit` and `SubagentStart` in each detected
+Codex home. `SubagentStart` records Codex's official `agent_id` and `agent_type`; it
+does not infer delegated work from prompt text. Existing Codex App/CLI prompt capture
+continues through the shared `UserPromptSubmit` hook.
+
+The canvas visibility controls are independent from capture and never delete stored
+activity:
+
+- **Subagent activity** is visible by default and can be hidden independently.
+- **Codex internal activity** (ambient suggestions and background checks) is hidden
+  by default and can be shown independently.
+- Visibility choices are kept in local browser storage. Turning capture off or hiding
+  a kind does not remove historical records.
+
+Enabling capture writes exact trust hashes for both managed hooks to the matching
+Codex `config.toml`. Restart that Codex installation after a hook definition changes;
+the normal **Hooks need review** prompt should not appear for Akra-managed commands.
+
 여러 터미널에서 Codex에 지시한 작업을 로컬에 기록하고, 캔버스에서 다시 찾기 위한 도구입니다.
 
 - Codex `UserPromptSubmit` 훅을 받아 프롬프트와 작업 위치를 로컬 SQLite에 저장합니다.

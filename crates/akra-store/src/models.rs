@@ -1,9 +1,11 @@
+use akra_core::ingress::ActivityKind;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub struct ActivitySummary {
     pub id: i64,
     pub provider: String,
+    pub activity_kind: ActivityKind,
     pub prompt: String,
     pub project: Option<ActivityProjectSummary>,
     pub time: ActivityTimeSummary,
@@ -35,6 +37,7 @@ pub enum ActivityTimeProvenance {
 pub struct ActivityDetail {
     pub id: i64,
     pub provider: String,
+    pub activity_kind: ActivityKind,
     pub prompt: String,
     pub project: Option<ActivityProjectSummary>,
     pub captured_at: ActivityTimeSummary,
@@ -62,11 +65,14 @@ pub struct ActivityOriginDetail {
 pub struct ActivityTechnicalDetail {
     pub session_id: String,
     pub turn_id: String,
+    pub agent_id: Option<String>,
+    pub agent_type: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ActivityConversationTurn {
     pub id: i64,
+    pub activity_kind: ActivityKind,
     pub prompt: String,
     pub project: Option<ActivityProjectSummary>,
     pub time: ActivityTimeSummary,

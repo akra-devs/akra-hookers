@@ -63,9 +63,16 @@ export function ActivityNode({
       )}
       <p className="activity-node__prompt">{data.prompt}</p>
       <div className="activity-node__meta">
-        <span className="activity-node__provider">
-          <span className="activity-node__provider-dot" aria-hidden="true" />
-          {data.provider}
+        <span className="activity-node__source">
+          <span className="activity-node__provider">
+            <span className="activity-node__provider-dot" aria-hidden="true" />
+            {data.provider}
+          </span>
+          {data.activityKind !== "user" && (
+            <span className={`activity-node__kind activity-node__kind--${data.activityKind}`}>
+              {data.activityKind}
+            </span>
+          )}
         </span>
         <time dateTime={data.time.value ?? undefined}>{displayTime}</time>
       </div>

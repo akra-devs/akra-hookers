@@ -115,6 +115,7 @@ async fn scopes_use_effective_projects_and_keep_global_conversation_numbers() {
     assert_eq!(
         keys,
         [
+            "activity_kind",
             "conversation_index",
             "conversation_total",
             "id",

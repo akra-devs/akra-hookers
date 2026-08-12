@@ -31,6 +31,56 @@ test("fixture setup rejects unauthenticated mutation and accepts authenticated s
   });
 });
 
+test("canvas visibility independently filters subagent and Codex internal nodes", async ({
+  page,
+  api,
+}) => {
+  const template = api.state.activities[0]!;
+  api.state.activities.push(
+    {
+      ...structuredClone(template),
+      id: 3,
+      activity_kind: "subagent",
+      prompt: "Subagent started: reviewer",
+    },
+    {
+      ...structuredClone(template),
+      id: 4,
+      activity_kind: "internal",
+      prompt: "Ambient suggestion evaluation",
+    },
+  );
+  api.state.canvasNodes.push(
+    { id: 13, activity_event_id: 3, position_x: 720, position_y: 120 },
+    { id: 14, activity_event_id: 4, position_x: 720, position_y: 360 },
+  );
+  api.state.canvasEdges.push(
+    { id: 22, source_node_id: 11, target_node_id: 13 },
+    { id: 23, source_node_id: 13, target_node_id: 14 },
+  );
+
+  await page.goto("/");
+
+  const subagentToggle = page.getByRole("checkbox", { name: /Subagent activity/ });
+  const internalToggle = page.getByRole("checkbox", { name: /Codex internal activity/ });
+  await expect(subagentToggle).toBeChecked();
+  await expect(internalToggle).not.toBeChecked();
+  await expect(page.getByTestId("activity-node-3")).toBeVisible();
+  await expect(page.getByTestId("activity-node-4")).toHaveCount(0);
+
+  await subagentToggle.uncheck();
+  await expect(page.getByTestId("activity-node-3")).toHaveCount(0);
+  await internalToggle.check();
+  await expect(page.getByTestId("activity-node-4")).toBeVisible();
+  expect(api.state.activities.map(({ id }) => id)).toEqual([1, 2, 3, 4]);
+
+  await page.reload();
+  await expect(page.getByRole("checkbox", { name: /Subagent activity/ })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /Codex internal activity/ })).toBeChecked();
+  await expect(page.getByTestId("activity-node-3")).toHaveCount(0);
+  await expect(page.getByTestId("activity-node-4")).toBeVisible();
+});
+
 test("the newest bounded page discovers activity 101 and older pages load explicitly", async ({
   page,
   api,

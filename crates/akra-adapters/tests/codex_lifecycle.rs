@@ -69,6 +69,12 @@ fn enable_then_disable_manages_only_akra_hook_entry() {
 
     lifecycle.disable().expect("disable");
     assert!(!lifecycle.is_enabled().expect("status"));
+    assert!(
+        read_hooks(&hooks_path)["hooks"]["SubagentStart"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "disable must remove the managed SubagentStart hook"
+    );
     assert_eq!(
         commands(&read_hooks(&hooks_path)),
         vec![
@@ -104,10 +110,15 @@ fn enable_creates_missing_hooks_configuration() {
             .is_none(),
         "akra capture must be synchronous because Codex skips async hooks"
     );
+    assert_eq!(
+        hooks["hooks"]["SubagentStart"][0]["hooks"][0]["command"],
+        "C:\\tools\\akra-hookers.exe capture --data-dir C:\\data"
+    );
 
     let config =
         fs::read_to_string(home.path().join(".codex").join("config.toml")).expect("trusted config");
     assert!(config.contains("enabled = true"));
+    assert!(config.contains("subagent_start:0:0"));
     assert!(
         config.contains("sha256:e94def78b62a7838e51bc8b77e885b5e85c89162fc063bc9a3c4cfd4c8237f36")
     );

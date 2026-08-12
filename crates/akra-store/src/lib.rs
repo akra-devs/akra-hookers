@@ -19,6 +19,8 @@ mod migration_v2;
 mod migration_v3;
 mod migration_v4;
 mod migration_v5;
+mod migration_v6;
+mod migration_v7;
 mod models;
 mod origin_transitions;
 mod origins;

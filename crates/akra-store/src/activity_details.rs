@@ -1,3 +1,5 @@
+use akra_core::ingress::ActivityKind;
+
 use crate::{
     ActivityConversationTurn, ActivityDetail, ActivityOriginDetail, ActivityStore,
     ActivityTechnicalDetail, StoreError,
@@ -10,6 +12,9 @@ struct DetailRow {
     provider: String,
     provider_session_id: String,
     provider_turn_id: String,
+    activity_kind: String,
+    agent_id: Option<String>,
+    agent_type: Option<String>,
     prompt: String,
     submitted_cwd: Option<String>,
     captured_at_us: Option<i64>,
@@ -30,6 +35,7 @@ struct DetailRow {
 #[derive(sqlx::FromRow)]
 struct TimelineRow {
     id: i64,
+    activity_kind: String,
     prompt: String,
     project_id: Option<i64>,
     project_name: Option<String>,
@@ -71,7 +77,9 @@ impl ActivityStore {
                  WHERE activity_events.id = ?
              )
              SELECT selected.id, selected.provider, selected.provider_session_id,
-                    selected.provider_turn_id, selected.prompt, selected.submitted_cwd,
+                    selected.provider_turn_id, selected.activity_kind,
+                    selected.agent_id, selected.agent_type,
+                    selected.prompt, selected.submitted_cwd,
                     selected.captured_at_us, selected.captured_at_provenance,
                     selected.first_recorded_at_us, selected.first_recorded_at_provenance,
                     selected.origin_id, selected.origin_kind, selected.origin_resolution_source,
@@ -110,6 +118,7 @@ impl ActivityStore {
         }
         let selected_turn = ActivityConversationTurn {
             id: row.id,
+            activity_kind: parse_activity_kind(&row.activity_kind)?,
             prompt: row.prompt.clone(),
             project: project_summary(row.project_id, row.project_name.clone())?,
             time: activity_time(row.captured_at_us, row.first_recorded_at_us)?,
@@ -119,6 +128,7 @@ impl ActivityStore {
         Ok(ActivityDetail {
             id: row.id,
             provider: row.provider,
+            activity_kind: parse_activity_kind(&row.activity_kind)?,
             prompt: row.prompt,
             project: project_summary(row.project_id, row.project_name)?,
             captured_at: explicit_activity_time(
@@ -141,6 +151,8 @@ impl ActivityStore {
             technical: ActivityTechnicalDetail {
                 session_id: row.provider_session_id,
                 turn_id: row.provider_turn_id,
+                agent_id: row.agent_id,
+                agent_type: row.agent_type,
             },
             selected_turn,
             conversation,
@@ -159,7 +171,8 @@ impl ActivityStore {
     ) -> Result<Vec<ActivityConversationTurn>, StoreError> {
         let rows = sqlx::query_as::<_, TimelineRow>(
             "WITH effective AS (
-                 SELECT activity_events.id, activity_events.prompt,
+                 SELECT activity_events.id, activity_events.activity_kind,
+                        activity_events.prompt,
                         activity_events.captured_at_us,
                         activity_events.first_recorded_at_us,
                         CASE
@@ -199,7 +212,7 @@ impl ActivityStore {
              cursor AS (
                  SELECT conversation_index FROM numbered WHERE id = ?
              )
-             SELECT id, prompt, project_id, project_name,
+             SELECT id, activity_kind, prompt, project_id, project_name,
                     captured_at_us, first_recorded_at_us, on_canvas
              FROM numbered
              WHERE ? IS NULL
@@ -221,6 +234,7 @@ impl ActivityStore {
             .map(|row| {
                 Ok(ActivityConversationTurn {
                     id: row.id,
+                    activity_kind: parse_activity_kind(&row.activity_kind)?,
                     prompt: row.prompt,
                     project: project_summary(row.project_id, row.project_name)?,
                     time: activity_time(row.captured_at_us, row.first_recorded_at_us)?,
@@ -230,4 +244,9 @@ impl ActivityStore {
             })
             .collect()
     }
+}
+
+fn parse_activity_kind(value: &str) -> Result<ActivityKind, StoreError> {
+    ActivityKind::from_storage(value)
+        .ok_or_else(|| StoreError::Invariant(format!("invalid activity kind: {value}")))
 }

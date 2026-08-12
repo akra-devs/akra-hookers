@@ -188,7 +188,7 @@ async fn main() {
             });
             let event =
                 akra_adapters::codex::CodexAdapter::normalize(input).unwrap_or_else(|error| {
-                    eprintln!("invalid Codex UserPromptSubmit payload: {error}");
+                    eprintln!("invalid Codex hook payload: {error}");
                     std::process::exit(2);
                 });
             let elapsed = SystemTime::now()
@@ -206,23 +206,35 @@ async fn main() {
                     eprintln!("unable to capture project origin: {error}");
                     std::process::exit(2);
                 });
-            let capture_client = capture_target
-                .as_ref()
-                .map(|_| akra_app::capture_source::codex_client(&payload, wsl_distro.as_deref()));
+            let capture_context = match capture_target.as_ref() {
+                Some(_) => akra_app::capture_source::codex_managed_capture_context(
+                    &payload,
+                    wsl_distro.as_deref(),
+                ),
+                None => {
+                    akra_app::capture_source::codex_capture_context(&payload, wsl_distro.as_deref())
+                }
+            };
             let envelope = match capture_target.as_deref() {
-                Some(target) => akra_app::spool::CaptureEnvelope::new_with_source(
+                Some(target) => akra_app::spool::CaptureEnvelope::new_with_source_and_activity(
                     event.provider().as_str(),
                     captured_at_us,
                     origin,
                     payload,
                     target,
-                    capture_client.expect("capture client accompanies target"),
+                    capture_context.client,
+                    capture_context.activity_kind,
+                    capture_context.agent_id,
+                    capture_context.agent_type,
                 ),
-                None => akra_app::spool::CaptureEnvelope::new(
+                None => akra_app::spool::CaptureEnvelope::new_with_activity(
                     event.provider().as_str(),
                     captured_at_us,
                     origin,
                     payload,
+                    capture_context.activity_kind,
+                    capture_context.agent_id,
+                    capture_context.agent_type,
                 ),
             }
             .unwrap_or_else(|error| {
