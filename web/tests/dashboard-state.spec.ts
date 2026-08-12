@@ -172,6 +172,8 @@ test("detected Codex installations expose independent hook controls", async ({ p
   await expect(page.getByText("2개 중 1개 hook 설치")).toBeVisible();
   await expect(page.getByText("C:\\Users\\fixture\\.codex\\hooks.json")).toBeVisible();
   await expect(page.getByText("/home/fixture/.codex/hooks.json")).toBeVisible();
+  await expect(page.getByText(/Akra가 현재 hook 정의만 자동으로 신뢰/)).toBeVisible();
+  await expect(page.getByText("/hooks", { exact: true })).toHaveCount(0);
 
   const wslCapture = page.getByRole("checkbox", { name: "Codex · Ubuntu capture" });
   const wslEnabled = responseFor(
