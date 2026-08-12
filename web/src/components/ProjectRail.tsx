@@ -339,8 +339,8 @@ export function ProjectRail({
         )}
         {codexTargets.length > 0 && (
           <small className="capture-restart-note">
-            Windows App과 CLI는 같은 hook 파일을 공유합니다. 설치 후 각 Codex를
-            재시작하고 <code>/hooks</code>에서 승인하세요.
+            Windows App과 CLI는 같은 hook 파일을 공유합니다. Akra가 현재 hook
+            정의만 자동으로 신뢰하므로 설치 후 각 Codex만 재시작하세요.
           </small>
         )}
       </section>
