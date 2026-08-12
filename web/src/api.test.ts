@@ -185,6 +185,7 @@ describe("createApiClient", () => {
     await client.updateCanvasPosition(4, { x: 12, y: 13 });
     await client.provider("codex");
     await client.setProviderEnabled("codex", false);
+    await client.setProviderTargetEnabled("codex", "wsl:Ubuntu", true);
 
     expect(fetcher.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
       [`${base}/v1/canvas`, undefined],
@@ -197,6 +198,7 @@ describe("createApiClient", () => {
       [`${base}/v1/canvas/4`, "PATCH"],
       [`${base}/v1/providers/codex`, undefined],
       [`${base}/v1/providers/codex`, "PATCH"],
+      [`${base}/v1/providers/codex/targets/wsl%3AUbuntu`, "PATCH"],
     ]);
   });
 

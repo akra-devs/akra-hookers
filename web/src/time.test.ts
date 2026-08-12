@@ -22,14 +22,14 @@ describe("formatActivityTime", () => {
     })).toBe("2026. 8. 8. 오후 9:00");
   });
 
-  it("labels migrated timestamps without claiming capture precision", () => {
+  it("formats migrated timestamps without adding provenance copy to the UI", () => {
     expect(formatActivityTime({
       ...captured,
       provenance: "legacy_recorded",
     }, {
       locale: "ko-KR",
       timeZone: "UTC",
-    })).toBe("기존 기록 · 2026. 8. 8. 오후 12:00");
+    })).toBe("2026. 8. 8. 오후 12:00");
   });
 
   it("uses one truthful label for unknown or absent time", () => {

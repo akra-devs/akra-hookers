@@ -133,7 +133,8 @@ async fn canvas_graph_deletions_roll_back_edges_when_node_deletion_aborts() {
     let pool = test_pool(&database).await;
     sqlx::query(
         "CREATE TRIGGER abort_canvas_node_delete
-         BEFORE DELETE ON canvas_nodes
+         BEFORE UPDATE OF deleted_at_us ON canvas_nodes
+         WHEN NEW.deleted_at_us IS NOT NULL
          BEGIN
              SELECT RAISE(ABORT, 'injected node delete failure');
          END",

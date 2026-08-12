@@ -16,7 +16,7 @@ export function useFitFlow<NodeType extends Node, EdgeType extends Edge>(
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         frame = 0;
-        void flow.fitView({ padding: 0.16 });
+        void flow.fitView({ padding: 0.12, minZoom: 0.64 });
       });
     };
     const onResize = () => {

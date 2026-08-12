@@ -24,7 +24,7 @@ use crate::{
     },
     http_origins::{configure_origin, origins, project_origins},
     http_projects::{create_project, merge_project, projects, rename_project},
-    http_providers::{provider, toggle_provider},
+    http_providers::{provider, toggle_provider, toggle_provider_target},
 };
 
 #[derive(Deserialize)]
@@ -37,20 +37,17 @@ struct IngressPayload {
 
 #[derive(Clone)]
 pub struct CodexLifecycleControl {
-    pub(crate) lifecycle: Arc<akra_adapters::codex::CodexHookLifecycleSet>,
-    pub(crate) command: Arc<str>,
+    pub(crate) targets: Arc<crate::codex_targets::CodexTargetRegistry>,
     pub(crate) capture_gate: crate::capture_gate::CaptureGate,
 }
 
 impl CodexLifecycleControl {
     pub fn new(
-        lifecycle: Arc<akra_adapters::codex::CodexHookLifecycleSet>,
-        command: String,
+        targets: Arc<crate::codex_targets::CodexTargetRegistry>,
         capture_gate: crate::capture_gate::CaptureGate,
     ) -> Self {
         Self {
-            lifecycle,
-            command: Arc::from(command),
+            targets,
             capture_gate,
         }
     }
@@ -81,11 +78,27 @@ pub fn app_with_codex_lifecycle(
     command: String,
     capture_gate: crate::capture_gate::CaptureGate,
 ) -> Router {
+    app_with_codex_targets(
+        token,
+        store,
+        Arc::new(crate::codex_targets::CodexTargetRegistry::legacy(
+            lifecycle, command,
+        )),
+        capture_gate,
+    )
+}
+
+pub fn app_with_codex_targets(
+    token: &'static str,
+    store: Arc<akra_store::ActivityStore>,
+    targets: Arc<crate::codex_targets::CodexTargetRegistry>,
+    capture_gate: crate::capture_gate::CaptureGate,
+) -> Router {
     router(
         token,
         AppState {
             store,
-            codex: Some(CodexLifecycleControl::new(lifecycle, command, capture_gate)),
+            codex: Some(CodexLifecycleControl::new(targets, capture_gate)),
             provider_toggle_lock: Arc::new(Mutex::new(())),
         },
     )
@@ -123,6 +136,10 @@ fn router(token: &'static str, state: AppState) -> Router {
         .route(
             "/v1/providers/{provider}",
             get(provider).post(toggle_provider).patch(toggle_provider),
+        )
+        .route(
+            "/v1/providers/{provider}/targets/{target_id}",
+            axum::routing::patch(toggle_provider_target),
         )
         .route(
             "/v1/canvas/{node_id}",

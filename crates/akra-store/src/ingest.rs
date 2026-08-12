@@ -12,8 +12,17 @@ pub struct RecordActivity {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CaptureProvenance {
-    Captured(i64),
+    Captured {
+        captured_at_us: i64,
+        source: Option<CaptureSource>,
+    },
     LegacyResolved,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CaptureSource {
+    target: String,
+    client: String,
 }
 
 impl RecordActivity {
@@ -25,7 +34,30 @@ impl RecordActivity {
         Self {
             event,
             origin,
-            capture: CaptureProvenance::Captured(captured_at_us),
+            capture: CaptureProvenance::Captured {
+                captured_at_us,
+                source: None,
+            },
+        }
+    }
+
+    pub fn captured_from(
+        event: IngressEvent,
+        origin: ProjectOriginSnapshot,
+        captured_at_us: i64,
+        target: impl Into<String>,
+        client: impl Into<String>,
+    ) -> Self {
+        Self {
+            event,
+            origin,
+            capture: CaptureProvenance::Captured {
+                captured_at_us,
+                source: Some(CaptureSource {
+                    target: target.into(),
+                    client: client.into(),
+                }),
+            },
         }
     }
 
@@ -46,15 +78,26 @@ impl RecordActivity {
     }
 
     const fn captured_at_us(&self) -> Option<i64> {
-        match self.capture {
-            CaptureProvenance::Captured(captured_at_us) => Some(captured_at_us),
+        match &self.capture {
+            CaptureProvenance::Captured { captured_at_us, .. } => Some(*captured_at_us),
             CaptureProvenance::LegacyResolved => None,
         }
     }
 
+    fn capture_source(&self) -> Option<(&str, &str)> {
+        match &self.capture {
+            CaptureProvenance::Captured {
+                source: Some(source),
+                ..
+            } => Some((&source.target, &source.client)),
+            CaptureProvenance::Captured { source: None, .. }
+            | CaptureProvenance::LegacyResolved => None,
+        }
+    }
+
     pub(crate) const fn resolution_source(&self) -> &'static str {
-        match self.capture {
-            CaptureProvenance::Captured(_) => "captured",
+        match &self.capture {
+            CaptureProvenance::Captured { .. } => "captured",
             CaptureProvenance::LegacyResolved => "legacy_resolved",
         }
     }
@@ -91,6 +134,11 @@ impl ActivityStore {
                 .fetch_one(&mut *transaction)
                 .await?;
         let captured_at_us = command.captured_at_us();
+        let (capture_target, capture_client) = command
+            .capture_source()
+            .map_or((None, None), |(target, client)| {
+                (Some(target), Some(client))
+            });
         let captured_provenance = captured_at_us.map(|_| "captured");
         let first_recorded_provenance = if captured_at_us.is_some() {
             "captured"
@@ -101,11 +149,12 @@ impl ActivityStore {
             "INSERT INTO activity_events (
                  provider, provider_session_id, provider_turn_id, project_identity, prompt,
                  origin_id, submitted_cwd, captured_at_us, captured_at_provenance,
-                 first_recorded_at_us, first_recorded_at_provenance, global_sequence
+                 first_recorded_at_us, first_recorded_at_provenance, global_sequence,
+                 capture_target, capture_client
              ) VALUES (
                  ?, ?, ?, ?, ?, ?, ?, ?, ?,
                  CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER),
-                 ?, ?
+                 ?, ?, ?, ?
              )
              RETURNING id",
         )
@@ -120,6 +169,8 @@ impl ActivityStore {
         .bind(captured_provenance)
         .bind(first_recorded_provenance)
         .bind(global_sequence)
+        .bind(capture_target)
+        .bind(capture_client)
         .fetch_one(&mut *transaction)
         .await?;
         sqlx::query(

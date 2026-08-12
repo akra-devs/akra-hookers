@@ -157,6 +157,36 @@ export class FixtureApi {
       this.canvasRevision += 1;
       return { status: 204 };
     }
+    const providerTarget = /^\/v1\/providers\/([^/]+)\/targets\/([^/]+)$/.exec(path);
+    if (providerTarget !== null && method === "PATCH") {
+      const provider = decodeURIComponent(providerTarget[1] ?? "");
+      const targetId = decodeURIComponent(providerTarget[2] ?? "");
+      if (provider !== "codex") {
+        return error(404, "not_found", "Provider was not found");
+      }
+      const target = this.state.provider.targets.find(({ id }) => id === targetId);
+      if (!target) {
+        return error(404, "not_found", "Codex capture target was not found");
+      }
+      if (!target.available) {
+        return error(
+          422,
+          "codex_target_unavailable",
+          "Codex capture target is unavailable",
+        );
+      }
+      target.enabled = boolean(body, "enabled");
+      target.activation = target.enabled ? "awaiting_capture" : "disabled";
+      target.clients = target.clients.map((client) => ({
+        ...client,
+        verified: false,
+        last_captured_at_us: null,
+      }));
+      this.state.provider.enabled = this.state.provider.targets.some(
+        (candidate) => candidate.enabled,
+      );
+      return { status: 204 };
+    }
     const provider = matchText(path, /^\/v1\/providers\/([^/]+)$/);
     if (provider !== null && method === "GET") {
       return provider === "codex"
@@ -167,7 +197,27 @@ export class FixtureApi {
       if (provider !== "codex") {
         return error(404, "not_found", "Provider was not found");
       }
-      this.state.provider.enabled = boolean(body, "enabled");
+      const enabled = boolean(body, "enabled");
+      const availableTargets = this.state.provider.targets.filter(
+        (target) => target.available,
+      );
+      if (enabled && availableTargets.length === 0) {
+        return error(
+          422,
+          "codex_target_unavailable",
+          "No available Codex installations were detected",
+        );
+      }
+      this.state.provider.enabled = enabled;
+      for (const target of availableTargets) {
+        target.enabled = enabled;
+        target.activation = enabled ? "awaiting_capture" : "disabled";
+        target.clients = target.clients.map((client) => ({
+          ...client,
+          verified: false,
+          last_captured_at_us: null,
+        }));
+      }
       return { status: 204 };
     }
     throw new Error(`Unexpected API request: ${method} ${path}`);

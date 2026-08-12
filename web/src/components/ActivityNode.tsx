@@ -1,3 +1,4 @@
+import { createContext, useContext } from "react";
 import {
   Handle,
   Position,
@@ -7,15 +8,22 @@ import {
 
 import type { ActivityNodeData } from "../canvas";
 import { formatActivityTime } from "../time";
+import { UiIcon } from "./UiIcon";
 
 export type ActivityFlowNode = Node<ActivityNodeData, "activity">;
+
+export const ActivityNodeActionsContext = createContext<{
+  removeNode: (nodeId: string) => void;
+} | null>(null);
 
 export function ActivityNode({
   data,
   isConnectable,
 }: NodeProps<ActivityFlowNode>) {
+  const actions = useContext(ActivityNodeActionsContext);
   const projectName = data.project?.name ?? "분류 필요";
   const displayTime = formatActivityTime(data.time);
+  const nodeId = `activity-${data.activityId}`;
 
   return (
     <article
@@ -37,6 +45,22 @@ export function ActivityNode({
           {data.conversationIndex}/{data.conversationTotal}
         </span>
       </div>
+      {actions && (
+        <button
+          className="activity-node__remove nodrag nopan"
+          type="button"
+          aria-label="캔버스에서 제거"
+          title="캔버스에서 제거"
+          onPointerDown={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            actions.removeNode(nodeId);
+          }}
+        >
+          <UiIcon name="trash" size={15} />
+        </button>
+      )}
       <p className="activity-node__prompt">{data.prompt}</p>
       <div className="activity-node__meta">
         <span className="activity-node__provider">

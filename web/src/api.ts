@@ -7,6 +7,8 @@ import type {
   ApiErrorBody,
   CanvasEdge,
   CanvasNode,
+  CodexCaptureTarget,
+  CodexCaptureClient,
   OriginRoutingRequest,
   OriginSummary,
   ProjectSummary,
@@ -26,6 +28,8 @@ export type {
   ApiErrorBody,
   CanvasEdge,
   CanvasNode,
+  CodexCaptureTarget,
+  CodexCaptureClient,
   FutureRoute,
   OriginRoutingRequest,
   OriginSummary,
@@ -75,6 +79,7 @@ export type ApiClient = {
   edges(): Promise<CanvasEdge[]>;
   updateCanvasPosition(nodeId: number, position: { x: number; y: number }): Promise<void>;
   setProviderEnabled(provider: string, enabled: boolean): Promise<void>;
+  setProviderTargetEnabled(provider: string, targetId: string, enabled: boolean): Promise<void>;
   provider(provider: string): Promise<ProviderIntegration>;
 };
 
@@ -157,6 +162,12 @@ export function createApiClient(
       }),
     setProviderEnabled: (provider, enabled) =>
       request<void>(`/v1/providers/${encodeURIComponent(provider)}`, "PATCH", { enabled }),
+    setProviderTargetEnabled: (provider, targetId, enabled) =>
+      request<void>(
+        `/v1/providers/${encodeURIComponent(provider)}/targets/${encodeURIComponent(targetId)}`,
+        "PATCH",
+        { enabled },
+      ),
     provider: (provider) =>
       request<ProviderIntegration>(`/v1/providers/${encodeURIComponent(provider)}`),
   };

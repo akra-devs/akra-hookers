@@ -45,7 +45,8 @@ test("activity cards show context hierarchy and truthful time states", async ({ 
   await expect(projectCard.locator(".activity-node__prompt")).toHaveCSS("-webkit-line-clamp", "3");
 
   await expect(page.getByTestId("activity-node-2").getByText("분류 필요")).toBeVisible();
-  await expect(page.getByTestId("activity-node-2").getByText(/기존 기록/)).toBeVisible();
+  await expect(page.getByTestId("activity-node-2").getByText("2026. 8. 8. 오후 9:00")).toBeVisible();
+  await expect(page.getByTestId("activity-node-2")).not.toContainText("기존 기록");
   await expect(page.getByTestId("activity-node-3").getByText("시간 정보 없음")).toBeVisible();
   await page.screenshot({
     path: "../.omo/evidence/task-13-project-context-and-conversation.png",
@@ -117,6 +118,95 @@ test("selecting a custom card creates no edge", async ({ page, api }) => {
   await expect(card.locator("..")).toHaveClass(/selected/);
   expect(api.state.canvasEdges).toHaveLength(0);
   await expect(page.locator(".react-flow__edge")).toHaveCount(0);
+});
+
+test("the card remove control hides a node before persistence finishes", async ({ page, api }) => {
+  let releaseDelete!: () => void;
+  let markRequested!: () => void;
+  const requested = new Promise<void>((resolve) => { markRequested = resolve; });
+  const released = new Promise<void>((resolve) => { releaseDelete = resolve; });
+  await page.route("**/v1/canvas/11", async (route) => {
+    if (route.request().method() !== "DELETE") {
+      await route.fallback();
+      return;
+    }
+    markRequested();
+    await released;
+    await route.fallback();
+  });
+  await page.goto("/");
+
+  const card = page.getByTestId("activity-node-1");
+  await card.getByRole("button", { name: "캔버스에서 제거" }).click();
+  await requested;
+
+  await expect(card).toHaveCount(0);
+  expect(api.state.canvasNodes.some((node) => node.activity_event_id === 1)).toBe(true);
+  releaseDelete();
+  await expect.poll(() => api.state.canvasNodes.some(
+    (node) => node.activity_event_id === 1,
+  )).toBe(false);
+  expect(api.state.activities.some((activity) => activity.id === 1)).toBe(true);
+});
+
+test("a failed card removal restores the node and explains the failure", async ({ page }) => {
+  await page.route("**/v1/canvas/11", async (route) => {
+    if (route.request().method() !== "DELETE") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify({
+        code: "canvas_delete_failed",
+        message: "삭제 요청을 처리하지 못했습니다.",
+      }),
+    });
+  });
+  await page.goto("/");
+
+  const card = page.getByTestId("activity-node-1");
+  const failed = page.waitForResponse((response) =>
+    response.request().method() === "DELETE"
+    && new URL(response.url()).pathname === "/v1/canvas/11");
+  await card.getByRole("button", { name: "캔버스에서 제거" }).click();
+  await failed;
+
+  await expect(card).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("삭제 요청을 처리하지 못했습니다.");
+});
+
+test("double-clicking a node preserves its canvas placement", async ({ page, api }) => {
+    const deletes: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "DELETE") {
+        deletes.push(new URL(request.url()).pathname);
+      }
+    });
+
+    await page.goto("/");
+    const card = page.getByTestId("activity-node-2");
+
+    await card.dblclick();
+    await expect(page.getByTestId("activity-detail-panel")).toBeVisible();
+    await expect(card).toBeVisible();
+    expect(deletes).toEqual([]);
+    expect(api.state.canvasNodes.some((node) => node.activity_event_id === 2)).toBe(true);
+  });
+
+test("double-clicking an edge removes the connection", async ({ page, api }) => {
+  await page.goto("/");
+  const edge = page.locator(".react-flow__edge").first();
+  const deleted = page.waitForResponse((response) =>
+    response.request().method() === "DELETE"
+    && new URL(response.url()).pathname === "/v1/canvas/edges/21");
+
+  await edge.locator(".react-flow__edge-interaction").dblclick({ force: true });
+  await expect(edge).toHaveCount(0);
+  expect((await deleted).status()).toBe(204);
+  expect(api.state.canvasNodes).toHaveLength(2);
 });
 
 test("dragging a custom card persists its changed canvas position", async ({ page, api }) => {

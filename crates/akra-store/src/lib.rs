@@ -12,10 +12,13 @@ mod activities;
 mod activity_assignments;
 mod activity_details;
 mod canvas;
+mod capture_sources;
 mod ingest;
 mod migration;
 mod migration_v2;
 mod migration_v3;
+mod migration_v4;
+mod migration_v5;
 mod models;
 mod origin_transitions;
 mod origins;
@@ -29,6 +32,7 @@ pub use activity_assignments::{
     ActivityAssignmentCommand, ActivityAssignmentResult, AssignmentDestination, FutureRouteAction,
     MAX_ACTIVITY_ASSIGNMENT_BATCH,
 };
+pub use capture_sources::CaptureClientObservation;
 pub use ingest::RecordActivity;
 pub use models::{
     ActivityConversationTurn, ActivityDetail, ActivityOriginDetail, ActivityProjectSummary,

@@ -209,7 +209,7 @@ async fn provider_toggle_synchronizes_the_global_codex_manifest() {
         akra_hook.get("async").is_none(),
         "Codex skips unsupported async hooks"
     );
-    assert_eq!(akra_hook["timeout"], 1);
+    assert_eq!(akra_hook["timeout"], 5);
 }
 
 #[tokio::test]
@@ -328,6 +328,11 @@ async fn lifecycle_gate_is_authoritative_for_provider_status_and_ingest() {
         serde_json::from_slice::<serde_json::Value>(&status_body).expect("status JSON")["enabled"],
         false
     );
+    let status_json =
+        serde_json::from_slice::<serde_json::Value>(&status_body).expect("status JSON");
+    assert_eq!(status_json["targets"][0]["id"], "default");
+    assert_eq!(status_json["targets"][0]["enabled"], false);
+    assert_eq!(status_json["targets"][0]["activation"], "disabled");
 
     let ingest = router
         .oneshot(
@@ -357,6 +362,86 @@ async fn lifecycle_gate_is_authoritative_for_provider_status_and_ingest() {
             .expect("activities")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn individual_capture_target_toggle_updates_hook_gate_and_status() {
+    let home = tempfile::TempDir::new().expect("temporary home");
+    let codex_home = home.path().join(".codex");
+    let lifecycle = Arc::new(CodexHookLifecycleSet::from_codex_homes(
+        [codex_home.clone()],
+    ));
+    let capture_gate = CaptureGate::new(home.path());
+    capture_gate.set_enabled(false).expect("disabled gate");
+    let store = Arc::new(akra_store::ActivityStore::in_memory().await.expect("store"));
+    store.migrate().await.expect("migration");
+    let router = app_with_codex_lifecycle(
+        "fixture-token",
+        Arc::clone(&store),
+        Arc::clone(&lifecycle),
+        "akra-hookers capture --data-dir state".to_owned(),
+        capture_gate.clone(),
+    );
+
+    let enabled = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/providers/codex/targets/default")
+                .header("authorization", "Bearer fixture-token")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"enabled":true}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("target toggle");
+    assert_eq!(enabled.status(), StatusCode::NO_CONTENT);
+    assert!(lifecycle.is_enabled().expect("hook enabled"));
+    assert!(capture_gate.is_enabled().expect("gate enabled"));
+    assert!(
+        store
+            .provider_enabled("codex")
+            .await
+            .expect("store enabled")
+    );
+
+    let status = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/providers/codex")
+                .header("authorization", "Bearer fixture-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("status");
+    let body = to_bytes(status.into_body(), usize::MAX)
+        .await
+        .expect("status body");
+    let status_json = serde_json::from_slice::<serde_json::Value>(&body).expect("status JSON");
+    assert_eq!(status_json["enabled"], true);
+    assert_eq!(status_json["targets"][0]["enabled"], true);
+    assert_eq!(status_json["targets"][0]["activation"], "awaiting_capture");
+    assert_eq!(status_json["targets"][0]["clients"][0]["id"], "cli");
+    assert_eq!(status_json["targets"][0]["clients"][0]["verified"], false);
+
+    let disabled = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/providers/codex/targets/default")
+                .header("authorization", "Bearer fixture-token")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"enabled":false}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("target toggle");
+    assert_eq!(disabled.status(), StatusCode::NO_CONTENT);
+    assert!(!lifecycle.is_enabled().expect("hook disabled"));
+    assert!(!capture_gate.is_enabled().expect("gate disabled"));
 }
 
 fn read_manifest(path: &std::path::Path) -> serde_json::Value {

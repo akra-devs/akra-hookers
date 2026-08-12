@@ -63,11 +63,20 @@ fn decode(payload: &[u8]) -> Result<RecordActivity, RecoveryError> {
         }
         let provider_payload = serde_json::to_string(envelope.payload())?;
         let event = CodexAdapter::normalize(&provider_payload)?;
-        Ok(RecordActivity::captured(
-            event,
-            envelope.origin().clone(),
-            envelope.captured_at_us(),
-        ))
+        Ok(match envelope.capture_source() {
+            Some((target, client)) => RecordActivity::captured_from(
+                event,
+                envelope.origin().clone(),
+                envelope.captured_at_us(),
+                target,
+                client,
+            ),
+            None => RecordActivity::captured(
+                event,
+                envelope.origin().clone(),
+                envelope.captured_at_us(),
+            ),
+        })
     } else {
         let input = std::str::from_utf8(payload)?;
         let event = CodexAdapter::normalize(input)?;

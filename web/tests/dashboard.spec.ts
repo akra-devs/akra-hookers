@@ -228,6 +228,41 @@ test("fixture unexpected endpoint fails immediately with method and path", async
   )).rejects.toThrow("Unexpected API request: GET /v1/unregistered");
 });
 
+test("fixture mirrors unavailable Codex capture target contracts", async ({ api }) => {
+  const wslTarget = api.state.provider.targets.find(({ id }) => id === "wsl:Ubuntu")!;
+  wslTarget.available = false;
+  wslTarget.enabled = false;
+  const targetResult = await api.dispatch(
+    "PATCH",
+    new URL(`${fixtureApiUrl}/v1/providers/codex/targets/wsl%3AUbuntu`),
+    auth(),
+    { enabled: true },
+  );
+  expect(targetResult).toMatchObject({
+    status: 422,
+    body: { code: "codex_target_unavailable" },
+  });
+  expect(wslTarget.enabled).toBe(false);
+
+  api.state.provider.enabled = false;
+  for (const target of api.state.provider.targets) {
+    target.available = false;
+    target.enabled = false;
+  }
+  const globalResult = await api.dispatch(
+    "PATCH",
+    new URL(`${fixtureApiUrl}/v1/providers/codex`),
+    auth(),
+    { enabled: true },
+  );
+  expect(globalResult).toMatchObject({
+    status: 422,
+    body: { code: "codex_target_unavailable" },
+  });
+  expect(api.state.provider.enabled).toBe(false);
+  expect(api.state.provider.targets.every(({ enabled }) => !enabled)).toBe(true);
+});
+
 async function browserRequest(
   page: Page,
   method: "PATCH" | "POST",
