@@ -46,13 +46,18 @@ function detail(
   origin: ActivityDetail["origin"],
 ): ActivityDetail {
   return {
-    id, provider, prompt: `prompt ${id}`, project: null,
+    id, provider, activity_kind: "user", prompt: `prompt ${id}`, project: null,
     captured_at: { value: null, provenance: "unknown" },
     first_recorded_at: { value: null, provenance: "unknown" },
     on_canvas: true, submitted_cwd: null, origin,
-    technical: { session_id: sessionId, turn_id: `turn-${id}` },
+    technical: {
+      session_id: sessionId,
+      turn_id: `turn-${id}`,
+      agent_id: null,
+      agent_type: null,
+    },
     selected_turn: {
-      id, prompt: `prompt-${id}`, project: null,
+      id, activity_kind: "user", prompt: `prompt-${id}`, project: null,
       time: { value: null, provenance: "unknown" }, on_canvas: true, selected: true,
     },
     conversation: [], conversation_total: 0, conversation_has_more: false,

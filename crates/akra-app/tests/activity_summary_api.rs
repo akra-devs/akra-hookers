@@ -93,7 +93,8 @@ async fn activities_scopes_omit_detail_metadata_and_keep_global_numbering() {
     assert!(find(all, legacy)["project"].is_null());
     for activity in all {
         let object = activity.as_object().expect("summary");
-        assert_eq!(object.len(), 7);
+        assert_eq!(object.len(), 8);
+        assert_eq!(object["activity_kind"], "user");
         for forbidden in ["session_id", "turn_id", "cwd", "origin", "global_sequence"] {
             assert!(
                 object.get(forbidden).is_none(),

@@ -21,6 +21,7 @@ test("activity cards show context hierarchy and truthful time states", async ({ 
   api.state.activities.push({
     id: 3,
     provider: "codex",
+    activity_kind: "user",
     prompt: "시간 정보가 없는 작업",
     project: null,
     time: { value: null, provenance: "unknown" },
@@ -76,10 +77,10 @@ test("activity card DOM and accessibility omit detail-only secrets", async ({ pa
     undefined,
   );
   expect(explicitDetail.body).toEqual(expect.objectContaining({
-    technical: {
+    technical: expect.objectContaining({
       session_id: "SESSION_SECRET_57",
       turn_id: "TURN_SECRET_91",
-    },
+    }),
     submitted_cwd: "C:\\SECRET\\WORKTREE\\PATH",
   }));
 });

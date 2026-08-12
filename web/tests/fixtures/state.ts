@@ -29,6 +29,7 @@ export function createFixtureState(): FixtureState {
     {
       id: 1,
       provider: "codex",
+      activity_kind: "user",
       prompt: "프로젝트 이름을 정리해 주세요",
       project: { id: 1, name: "기존 프로젝트" },
       time: captured,
@@ -38,6 +39,7 @@ export function createFixtureState(): FixtureState {
     {
       id: 2,
       provider: "codex",
+      activity_kind: "user",
       prompt: "Inbox 항목을 분류해 주세요",
       project: null,
       time: captured,
@@ -56,6 +58,7 @@ export function createFixtureState(): FixtureState {
     }
     selectedDetail.conversation = activities.map((activity) => ({
       id: activity.id,
+      activity_kind: activity.activity_kind,
       prompt: activity.prompt,
       project: activity.project,
       time: activity.time,
@@ -178,6 +181,7 @@ function detail(summary: ActivitySummary, turnId: string): ActivityDetail {
   return {
     id: summary.id,
     provider: summary.provider,
+    activity_kind: summary.activity_kind,
     prompt: summary.prompt,
     project: summary.project,
     captured_at: captured,
@@ -191,9 +195,15 @@ function detail(summary: ActivitySummary, turnId: string): ActivityDetail {
       display_path: "C:\\dev\\akra-hookers",
       activity_count: 2,
     },
-    technical: { session_id: "fixture-session", turn_id: turnId },
+    technical: {
+      session_id: "fixture-session",
+      turn_id: turnId,
+      agent_id: null,
+      agent_type: null,
+    },
     selected_turn: {
       id: summary.id,
+      activity_kind: summary.activity_kind,
       prompt: summary.prompt,
       project: summary.project,
       time: summary.time,

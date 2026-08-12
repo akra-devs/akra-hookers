@@ -63,6 +63,16 @@ fn decode(payload: &[u8]) -> Result<RecordActivity, RecoveryError> {
         }
         let provider_payload = serde_json::to_string(envelope.payload())?;
         let event = CodexAdapter::normalize(&provider_payload)?;
+        let (activity_kind, agent_id, agent_type) = envelope.activity_context();
+        let event = if activity_kind == akra_core::ingress::ActivityKind::User {
+            event
+        } else {
+            event.with_activity_context(
+                activity_kind,
+                agent_id.map(ToOwned::to_owned),
+                agent_type.map(ToOwned::to_owned),
+            )?
+        };
         Ok(match envelope.capture_source() {
             Some((target, client)) => RecordActivity::captured_from(
                 event,
@@ -100,6 +110,8 @@ enum RecoveryError {
     UnsupportedProvider(String),
     #[error("invalid Codex payload: {0}")]
     Codex(#[from] akra_adapters::codex::CodexAdapterError),
+    #[error("invalid captured activity context: {0}")]
+    Ingress(#[from] akra_core::ingress::IngressError),
     #[error("unable to resolve legacy spool origin: {0}")]
     Identity(#[from] akra_git::IdentityError),
 }

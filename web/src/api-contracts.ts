@@ -1,4 +1,5 @@
 export type ActivityTimeProvenance = "captured" | "legacy_recorded" | "unknown";
+export type ActivityKind = "user" | "subagent" | "internal";
 
 export type ActivityTime = {
   value: string | null;
@@ -13,6 +14,7 @@ export type ActivityProject = {
 export type ActivitySummary = {
   id: number;
   provider: string;
+  activity_kind: ActivityKind;
   prompt: string;
   project: ActivityProject | null;
   time: ActivityTime;
@@ -22,6 +24,7 @@ export type ActivitySummary = {
 
 export type ActivityConversationTurn = {
   id: number;
+  activity_kind: ActivityKind;
   prompt: string;
   project: ActivityProject | null;
   time: ActivityTime;
@@ -32,6 +35,7 @@ export type ActivityConversationTurn = {
 export type ActivityDetail = {
   id: number;
   provider: string;
+  activity_kind: ActivityKind;
   prompt: string;
   project: ActivityProject | null;
   captured_at: ActivityTime;
@@ -48,6 +52,8 @@ export type ActivityDetail = {
   technical: {
     session_id: string;
     turn_id: string;
+    agent_id: string | null;
+    agent_type: string | null;
   };
   selected_turn: ActivityConversationTurn;
   conversation: ActivityConversationTurn[];

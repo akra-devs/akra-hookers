@@ -5,6 +5,10 @@ import {
 import { useQueries, useQuery } from "@tanstack/react-query";
 
 import type { ActivityScope, ApiClient } from "../api";
+import {
+  isActivityKindVisible,
+  type ActivityVisibility,
+} from "../activity-visibility";
 import { toCanvasNodes, toVisibleEdges } from "../canvas";
 import type { ActivityFlowNode } from "../components/ActivityNode";
 
@@ -43,7 +47,11 @@ function reconcileNodes(
     : reconciled;
 }
 
-export function useDashboardData(client: ApiClient | null, activityScope: ActivityScope) {
+export function useDashboardData(
+  client: ApiClient | null,
+  activityScope: ActivityScope,
+  activityVisibility: ActivityVisibility,
+) {
   const [nodes, setNodes] = useState<ActivityFlowNode[]>([]);
   const [selectedActivityIds, setSelectedActivityIds] = useState<number[]>([]);
   const dirtyPositions = useRef(new Map<number, number>());
@@ -124,13 +132,18 @@ export function useDashboardData(client: ApiClient | null, activityScope: Activi
     setOlderActivitiesHaveMore(null);
     setOlderActivitiesError("");
   }, [client, scopeKey]);
-  const activityItems = useMemo(() => {
+  const allActivityItems = useMemo(() => {
     const byId = new Map(
       [...olderActivities, ...(activities.data ?? [])]
         .map((activity) => [activity.id, activity]),
     );
     return [...byId.values()];
   }, [activities.data, olderActivities]);
+  const activityItems = useMemo(
+    () => allActivityItems.filter((activity) =>
+      isActivityKindVisible(activity.activity_kind, activityVisibility)),
+    [activityVisibility, allActivityItems],
+  );
   const hasOlderActivities = olderActivitiesHaveMore
     ?? activities.data?.length === ACTIVITY_PAGE_SIZE;
   const loadOlderActivities = useCallback(async () => {

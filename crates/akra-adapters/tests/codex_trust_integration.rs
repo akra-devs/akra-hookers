@@ -83,19 +83,28 @@ fn list_hooks(codex_home: &Path, cwd: &Path) -> Result<Value, String> {
 }
 
 fn assert_trusted_hook(response: &Value, expected_command: &str) {
-    let hook = response["result"]["data"]
+    let hooks = response["result"]["data"]
         .as_array()
-        .and_then(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| entry["hooks"].as_array())
-                .flatten()
-                .find(|hook| hook["command"] == expected_command)
-        })
-        .unwrap_or_else(|| panic!("Akra hook missing from hooks/list response: {response}"));
-
-    assert_eq!(hook["trustStatus"], "trusted", "response: {response}");
-    assert_eq!(hook["enabled"], true, "response: {response}");
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry["hooks"].as_array())
+        .flatten()
+        .filter(|hook| hook["command"] == expected_command)
+        .collect::<Vec<_>>();
+    let hooks = if hooks.is_empty() {
+        panic!("Akra hook missing from hooks/list response: {response}");
+    } else {
+        hooks
+    };
+    assert_eq!(
+        hooks.len(),
+        2,
+        "UserPromptSubmit and SubagentStart must both be installed: {response}"
+    );
+    for hook in hooks {
+        assert_eq!(hook["trustStatus"], "trusted", "response: {response}");
+        assert_eq!(hook["enabled"], true, "response: {response}");
+    }
 }
 
 fn managed_hook_command(codex_home: &Path) -> Result<String, String> {

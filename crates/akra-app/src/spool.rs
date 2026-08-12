@@ -8,6 +8,7 @@ use std::{
     sync::{Mutex, atomic::AtomicUsize},
 };
 
+use akra_core::ingress::ActivityKind;
 use akra_git::ProjectOriginSnapshot;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -32,6 +33,8 @@ pub struct CaptureEnvelope {
     origin: ProjectOriginSnapshot,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capture_source: Option<CaptureSource>,
+    #[serde(default, skip_serializing_if = "CaptureActivity::is_user")]
+    activity: CaptureActivity,
     payload: serde_json::Value,
 }
 
@@ -40,6 +43,22 @@ pub struct CaptureEnvelope {
 pub struct CaptureSource {
     target: String,
     client: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CaptureActivity {
+    kind: ActivityKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_type: Option<String>,
+}
+
+impl CaptureActivity {
+    fn is_user(&self) -> bool {
+        self.kind == ActivityKind::User && self.agent_id.is_none() && self.agent_type.is_none()
+    }
 }
 
 impl CaptureEnvelope {
@@ -55,6 +74,7 @@ impl CaptureEnvelope {
             captured_at_us,
             origin,
             capture_source: None,
+            activity: CaptureActivity::default(),
             payload,
         };
         envelope.validate()?;
@@ -78,6 +98,65 @@ impl CaptureEnvelope {
                 target: target.to_owned(),
                 client: client.to_owned(),
             }),
+            activity: CaptureActivity::default(),
+            payload,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn new_with_activity(
+        provider: &str,
+        captured_at_us: i64,
+        origin: ProjectOriginSnapshot,
+        payload: serde_json::Value,
+        kind: ActivityKind,
+        agent_id: Option<String>,
+        agent_type: Option<String>,
+    ) -> Result<Self, CaptureEnvelopeError> {
+        let envelope = Self {
+            schema_version: CAPTURE_ENVELOPE_SCHEMA_VERSION,
+            provider: provider.to_owned(),
+            captured_at_us,
+            origin,
+            capture_source: None,
+            activity: CaptureActivity {
+                kind,
+                agent_id,
+                agent_type,
+            },
+            payload,
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_source_and_activity(
+        provider: &str,
+        captured_at_us: i64,
+        origin: ProjectOriginSnapshot,
+        payload: serde_json::Value,
+        target: &str,
+        client: &str,
+        kind: ActivityKind,
+        agent_id: Option<String>,
+        agent_type: Option<String>,
+    ) -> Result<Self, CaptureEnvelopeError> {
+        let envelope = Self {
+            schema_version: CAPTURE_ENVELOPE_SCHEMA_VERSION,
+            provider: provider.to_owned(),
+            captured_at_us,
+            origin,
+            capture_source: Some(CaptureSource {
+                target: target.to_owned(),
+                client: client.to_owned(),
+            }),
+            activity: CaptureActivity {
+                kind,
+                agent_id,
+                agent_type,
+            },
             payload,
         };
         envelope.validate()?;
@@ -113,6 +192,14 @@ impl CaptureEnvelope {
             .map(|source| (source.target.as_str(), source.client.as_str()))
     }
 
+    pub fn activity_context(&self) -> (ActivityKind, Option<&str>, Option<&str>) {
+        (
+            self.activity.kind,
+            self.activity.agent_id.as_deref(),
+            self.activity.agent_type.as_deref(),
+        )
+    }
+
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
     }
@@ -133,6 +220,22 @@ impl CaptureEnvelope {
             && (!valid_source_token(&source.target, 128) || !valid_source_token(&source.client, 32))
         {
             return Err(CaptureEnvelopeError::InvalidCaptureSource);
+        }
+        if self.activity.kind != ActivityKind::Subagent
+            && (self.activity.agent_id.is_some() || self.activity.agent_type.is_some())
+        {
+            return Err(CaptureEnvelopeError::InvalidActivityContext);
+        }
+        for value in [
+            self.activity.agent_id.as_deref(),
+            self.activity.agent_type.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if value.trim().is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
+                return Err(CaptureEnvelopeError::InvalidActivityContext);
+            }
         }
         Ok(())
     }
@@ -245,6 +348,8 @@ pub enum CaptureEnvelopeError {
     BlankOriginIdentity,
     #[error("capture source target or client identifier is invalid")]
     InvalidCaptureSource,
+    #[error("capture activity context is invalid")]
+    InvalidActivityContext,
     #[error("unsupported capture envelope schema version: {0}")]
     UnsupportedSchemaVersion(u8),
     #[error("invalid capture envelope JSON: {0}")]

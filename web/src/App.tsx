@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Node, type NodeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { createApiClient } from "./api";
+import {
+  loadActivityVisibility,
+  saveActivityVisibility,
+} from "./activity-visibility";
 import { getAssignmentSelection } from "./assignment-selection";
 import type { ActivityNodeData } from "./canvas";
 import { AppCommandBar } from "./components/AppCommandBar";
@@ -21,6 +25,9 @@ export function App() {
   const [pendingCodexTargetIds, setPendingCodexTargetIds] = useState<string[]>([]);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [filter, setFilter] = useState<ProjectFilter>("all");
+  const [activityVisibility, setActivityVisibility] = useState(
+    loadActivityVisibility,
+  );
   const [projectDialog, setProjectDialog] = useState<"new" | number | null>(null);
   const [originDialog, setOriginDialog] = useState<number | null>(null);
   const [detailActivityId, setDetailActivityId] = useState<number | null>(null);
@@ -44,7 +51,10 @@ export function App() {
     refreshProjectContext, refreshCanvas, refreshCanvasAuthoritatively,
     bootstrapError, retryBootstrap,
     hasOlderActivities, loadOlderActivities, loadingOlderActivities, olderActivitiesError,
-  } = useDashboardData(client, activityScope);
+  } = useDashboardData(client, activityScope, activityVisibility);
+  useEffect(() => {
+    saveActivityVisibility(activityVisibility);
+  }, [activityVisibility]);
   useEffect(() => {
     if (provider.data && !provider.isError) {
       setCodexEnabled(provider.data.enabled);
@@ -201,11 +211,14 @@ export function App() {
         codexTargets={currentTargets}
         pendingCodexTargetIds={pendingCodexTargetIds}
         captureError={captureError}
+        activityVisibility={activityVisibility}
         projects={currentProjects} origins={currentOrigins}
         inboxCount={inboxCount.data ?? 0} filter={filter}
         onCodexChange={(enabled) => void changeProvider(enabled)}
         onCodexTargetChange={(targetId, enabled) =>
           void changeProviderTarget(targetId, enabled)}
+        onActivityVisibilityChange={(kind, visible) =>
+          setActivityVisibility((current) => ({ ...current, [kind]: visible }))}
         onFilterChange={setFilter} onNewProject={() => setProjectDialog("new")}
         onManageProject={setProjectDialog} onManageOrigin={setOriginDialog}
       />

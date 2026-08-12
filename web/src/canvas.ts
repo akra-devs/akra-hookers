@@ -7,6 +7,7 @@ export type ActivityNodeData = {
   activityId: number;
   project: ActivitySummary["project"];
   provider: string;
+  activityKind: ActivitySummary["activity_kind"];
   prompt: string;
   time: ActivitySummary["time"];
   conversationIndex: number;
@@ -33,6 +34,7 @@ export function toCanvasNodes(
         activityId: activity.id,
         project: activity.project,
         provider: activity.provider,
+        activityKind: activity.activity_kind,
         prompt: activity.prompt,
         time: activity.time,
         conversationIndex: activity.conversation_index,

@@ -4,6 +4,7 @@ use akra_app::{
     recovery::drain,
     spool::{CaptureEnvelope, Spool},
 };
+use akra_core::ingress::ActivityKind;
 use akra_git::ProjectIdentity;
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -98,6 +99,52 @@ fn envelope_v1_round_trips_optional_capture_source() {
     let decoded = CaptureEnvelope::decode(&bytes).expect("decoded envelope");
 
     assert_eq!(decoded.capture_source(), Some(("windows-native", "app")));
+}
+
+#[tokio::test]
+async fn subagent_start_context_survives_spool_recovery() {
+    let directory = TempDir::new().expect("test directory");
+    let cwd = directory.path().join("subagent-cwd");
+    fs::create_dir(&cwd).expect("working directory");
+    let origin = ProjectIdentity::capture_snapshot_from_cwd(&cwd)
+        .expect("origin snapshot")
+        .origin;
+    let payload = json!({
+        "hook_event_name": "SubagentStart",
+        "session_id": "parent-session",
+        "turn_id": "parent-turn",
+        "cwd": cwd,
+        "agent_id": "agent-7",
+        "agent_type": "reviewer"
+    });
+    let envelope = CaptureEnvelope::new_with_source_and_activity(
+        "codex",
+        123_456,
+        origin,
+        payload,
+        "windows-native",
+        "app",
+        ActivityKind::Subagent,
+        Some("agent-7".to_owned()),
+        Some("reviewer".to_owned()),
+    )
+    .expect("subagent envelope");
+    let spool = Spool::open(&directory.path().join("spool")).expect("spool");
+    spool.enqueue_envelope(&envelope).expect("enqueue");
+    let store = akra_store::ActivityStore::in_memory().await.expect("store");
+    store.migrate().await.expect("migrations");
+
+    assert_eq!(drain(&spool, &store).await, 1);
+    let summary = store
+        .activities()
+        .await
+        .expect("activities")
+        .pop()
+        .expect("activity");
+    assert_eq!(summary.activity_kind, ActivityKind::Subagent);
+    let detail = store.activity_detail(summary.id).await.expect("detail");
+    assert_eq!(detail.technical.agent_id.as_deref(), Some("agent-7"));
+    assert_eq!(detail.technical.agent_type.as_deref(), Some("reviewer"));
 }
 
 #[tokio::test]

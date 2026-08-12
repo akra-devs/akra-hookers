@@ -9,7 +9,8 @@ use tempfile::NamedTempFile;
 
 use super::{
     CodexHookLifecycleSet, CodexHookUpdate, CodexLifecycleError, ManifestSnapshot,
-    append_akra_hook, is_wsl_unc, read_config_bytes, read_manifest_bytes, remove_akra_hooks, trust,
+    append_akra_hooks, is_wsl_unc, read_config_bytes, read_manifest_bytes, remove_akra_hooks,
+    trust,
 };
 
 pub(super) fn apply_updates(updates: &[CodexHookUpdate]) -> Result<(), CodexLifecycleError> {
@@ -39,8 +40,8 @@ fn apply_updates_with(
         } = update.lifecycle.read_snapshot()?;
         let previous_locations = remove_akra_hooks(&mut hooks);
         let installed = update.command.as_ref().map(|command| {
-            let location = append_akra_hook(&mut hooks, command);
-            (location, command)
+            let locations = append_akra_hooks(&mut hooks, command);
+            (locations, command)
         });
         let manifest_intended = if update.command.is_some() || manifest_original.is_some() {
             Some(serde_json::to_vec_pretty(&hooks)?)
@@ -57,7 +58,9 @@ fn apply_updates_with(
             &update.lifecycle.manifest_path,
             config_original.as_deref(),
             &previous_locations,
-            installed,
+            installed
+                .as_ref()
+                .map(|(locations, command)| (locations.as_slice(), *command)),
         )?;
 
         // Write trust first so a newly discovered hook never appears without its

@@ -317,44 +317,91 @@ fn is_wsl_unc(path: &Path) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum HookEvent {
+    UserPromptSubmit,
+    SubagentStart,
+}
+
+impl HookEvent {
+    const fn trust_label(self) -> &'static str {
+        match self {
+            Self::UserPromptSubmit => "user_prompt_submit",
+            Self::SubagentStart => "subagent_start",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct HookLocation {
+    event: HookEvent,
     group: usize,
     handler: usize,
 }
 
 impl HookLocation {
-    const fn new(group: usize, handler: usize) -> Self {
-        Self { group, handler }
+    const fn new(event: HookEvent, group: usize, handler: usize) -> Self {
+        Self {
+            event,
+            group,
+            handler,
+        }
     }
 }
 
 fn remove_akra_hooks(hooks: &mut CodexHooksFile) -> Vec<HookLocation> {
     let mut locations = Vec::new();
-    for (group_index, group) in hooks.hooks.user_prompt_submit.iter_mut().enumerate() {
+    remove_akra_event_hooks(
+        HookEvent::UserPromptSubmit,
+        &mut hooks.hooks.user_prompt_submit,
+        &mut locations,
+    );
+    remove_akra_event_hooks(
+        HookEvent::SubagentStart,
+        &mut hooks.hooks.subagent_start,
+        &mut locations,
+    );
+    locations
+}
+
+fn remove_akra_event_hooks(
+    event: HookEvent,
+    groups: &mut Vec<CodexMatcherGroup>,
+    locations: &mut Vec<HookLocation>,
+) {
+    for (group_index, group) in groups.iter_mut().enumerate() {
         let mut retained = Vec::with_capacity(group.hooks.len());
         for (handler_index, hook) in group.hooks.drain(..).enumerate() {
             if hook.is_akra_hook() {
-                locations.push(HookLocation::new(group_index, handler_index));
+                locations.push(HookLocation::new(event, group_index, handler_index));
             } else {
                 retained.push(hook);
             }
         }
         group.hooks = retained;
     }
-    hooks
-        .hooks
-        .user_prompt_submit
-        .retain(|group| !group.hooks.is_empty());
-    locations
+    groups.retain(|group| !group.hooks.is_empty());
 }
 
-fn append_akra_hook(hooks: &mut CodexHooksFile, command: &CodexHookCommand) -> HookLocation {
-    let location = HookLocation::new(hooks.hooks.user_prompt_submit.len(), 0);
+fn append_akra_hooks(hooks: &mut CodexHooksFile, command: &CodexHookCommand) -> Vec<HookLocation> {
+    let user_prompt = HookLocation::new(
+        HookEvent::UserPromptSubmit,
+        hooks.hooks.user_prompt_submit.len(),
+        0,
+    );
     hooks
         .hooks
         .user_prompt_submit
         .push(CodexMatcherGroup::akra_hook(command));
-    location
+    let subagent = HookLocation::new(
+        HookEvent::SubagentStart,
+        hooks.hooks.subagent_start.len(),
+        0,
+    );
+    hooks
+        .hooks
+        .subagent_start
+        .push(CodexMatcherGroup::akra_hook(command));
+    vec![user_prompt, subagent]
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -371,6 +418,8 @@ struct CodexHooksFile {
 struct CodexHookEvents {
     #[serde(rename = "UserPromptSubmit", default)]
     user_prompt_submit: Vec<CodexMatcherGroup>,
+    #[serde(rename = "SubagentStart", default)]
+    subagent_start: Vec<CodexMatcherGroup>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }

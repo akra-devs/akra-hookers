@@ -9,6 +9,34 @@ use thiserror::Error;
 #[serde(transparent)]
 pub struct ProviderId(String);
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityKind {
+    #[default]
+    User,
+    Subagent,
+    Internal,
+}
+
+impl ActivityKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Subagent => "subagent",
+            Self::Internal => "internal",
+        }
+    }
+
+    pub fn from_storage(value: &str) -> Option<Self> {
+        match value {
+            "user" => Some(Self::User),
+            "subagent" => Some(Self::Subagent),
+            "internal" => Some(Self::Internal),
+            _ => None,
+        }
+    }
+}
+
 impl ProviderId {
     pub fn as_str(&self) -> &str {
         &self.0
@@ -23,6 +51,12 @@ pub struct IngressEvent {
     cwd: String,
     prompt: String,
     model: Option<String>,
+    #[serde(default)]
+    activity_kind: ActivityKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_type: Option<String>,
 }
 
 impl IngressEvent {
@@ -63,7 +97,27 @@ impl IngressEvent {
             cwd,
             prompt,
             model,
+            activity_kind: ActivityKind::User,
+            agent_id: None,
+            agent_type: None,
         })
+    }
+
+    pub fn with_activity_context(
+        mut self,
+        activity_kind: ActivityKind,
+        agent_id: Option<String>,
+        agent_type: Option<String>,
+    ) -> Result<Self, IngressError> {
+        validate_optional_context("agent id", agent_id.as_deref())?;
+        validate_optional_context("agent type", agent_type.as_deref())?;
+        if activity_kind != ActivityKind::Subagent && (agent_id.is_some() || agent_type.is_some()) {
+            return Err(IngressError::UnexpectedAgentContext);
+        }
+        self.activity_kind = activity_kind;
+        self.agent_id = agent_id;
+        self.agent_type = agent_type;
+        Ok(self)
     }
 
     pub fn provider(&self) -> &ProviderId {
@@ -85,6 +139,27 @@ impl IngressEvent {
     pub fn cwd(&self) -> &str {
         &self.cwd
     }
+
+    pub const fn activity_kind(&self) -> ActivityKind {
+        self.activity_kind
+    }
+
+    pub fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
+    }
+
+    pub fn agent_type(&self) -> Option<&str> {
+        self.agent_type.as_deref()
+    }
+}
+
+fn validate_optional_context(label: &'static str, value: Option<&str>) -> Result<(), IngressError> {
+    if let Some(value) = value
+        && (value.trim().is_empty() || value.len() > 512 || value.chars().any(char::is_control))
+    {
+        return Err(IngressError::InvalidActivityContext(label));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Error)]
@@ -99,6 +174,10 @@ pub enum IngressError {
     BlankWorkingDirectory,
     #[error("prompt must not be blank")]
     BlankPrompt,
+    #[error("{0} must be non-blank, at most 512 bytes, and contain no control characters")]
+    InvalidActivityContext(&'static str),
+    #[error("agent metadata is only valid for subagent activity")]
+    UnexpectedAgentContext,
 }
 
 impl fmt::Display for ProviderId {

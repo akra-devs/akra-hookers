@@ -150,11 +150,11 @@ impl ActivityStore {
                  provider, provider_session_id, provider_turn_id, project_identity, prompt,
                  origin_id, submitted_cwd, captured_at_us, captured_at_provenance,
                  first_recorded_at_us, first_recorded_at_provenance, global_sequence,
-                 capture_target, capture_client
+                 capture_target, capture_client, activity_kind, agent_id, agent_type
              ) VALUES (
                  ?, ?, ?, ?, ?, ?, ?, ?, ?,
                  CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER),
-                 ?, ?, ?, ?
+                 ?, ?, ?, ?, ?, ?, ?
              )
              RETURNING id",
         )
@@ -171,6 +171,9 @@ impl ActivityStore {
         .bind(global_sequence)
         .bind(capture_target)
         .bind(capture_client)
+        .bind(event.activity_kind().as_str())
+        .bind(event.agent_id())
+        .bind(event.agent_type())
         .fetch_one(&mut *transaction)
         .await?;
         sqlx::query(

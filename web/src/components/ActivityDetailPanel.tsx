@@ -226,6 +226,29 @@ export function ActivityDetailPanel({
               </button>
             </dd>
           </div>
+          {detail.technical.agent_id && (
+            <div>
+              <dt>Agent ID</dt>
+              <dd>
+                <code>{detail.technical.agent_id}</code>
+                <button
+                  type="button"
+                  onClick={() => void copyTechnicalValue(
+                    "Agent ID",
+                    detail.technical.agent_id!,
+                  )}
+                >
+                  Agent ID copy
+                </button>
+              </dd>
+            </div>
+          )}
+          {detail.technical.agent_type && (
+            <div>
+              <dt>Agent type</dt>
+              <dd><code>{detail.technical.agent_type}</code></dd>
+            </div>
+          )}
         </dl>}
         <span className="sr-only" aria-live="polite">{copyStatus}</span>
       </details>

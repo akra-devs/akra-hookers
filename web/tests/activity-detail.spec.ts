@@ -73,6 +73,7 @@ function syncDetails(api: FixtureApi) {
       detail.on_canvas = visible.has(activity.id);
       detail.selected_turn = {
         id: activity.id,
+        activity_kind: activity.activity_kind,
         prompt: activity.prompt,
         project: activity.project,
         time: activity.time,
@@ -85,7 +86,8 @@ function syncDetails(api: FixtureApi) {
   }
   for (const detail of Object.values(details)) {
     detail.conversation = activities.map((activity) => ({
-      id: activity.id, prompt: activity.prompt, project: activity.project, time: activity.time,
+      id: activity.id, activity_kind: activity.activity_kind,
+      prompt: activity.prompt, project: activity.project, time: activity.time,
       on_canvas: visible.has(activity.id), selected: activity.id === detail.id,
     }));
   }
@@ -147,7 +149,12 @@ test("a card opens a right detail column with truthful Korean metadata and guard
   detail.prompt = "전체 한국어 프롬프트는 카드에서 잘려도 상세 패널에서는 한 글자도 생략되지 않습니다.";
   detail.submitted_cwd = "C:\\submitted\\worktree";
   detail.origin.display_path = "C:\\detected\\repository";
-  detail.technical = { session_id: "SESSION_DETAIL_ONLY", turn_id: "TURN_DETAIL_ONLY" };
+  detail.technical = {
+    session_id: "SESSION_DETAIL_ONLY",
+    turn_id: "TURN_DETAIL_ONLY",
+    agent_id: null,
+    agent_type: null,
+  };
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/");
   await open(page, 2);

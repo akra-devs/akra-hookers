@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { CodexCaptureTarget, OriginSummary, ProjectSummary } from "../api";
+import type { ActivityVisibility } from "../activity-visibility";
 import { UiIcon } from "./UiIcon";
 
 export type ProjectFilter = "all" | "inbox" | `project:${number}`;
@@ -12,12 +13,17 @@ type ProjectRailProps = {
   codexTargets: CodexCaptureTarget[];
   pendingCodexTargetIds: string[];
   captureError: string | null;
+  activityVisibility: ActivityVisibility;
   projects: ProjectSummary[];
   origins: OriginSummary[];
   inboxCount: number;
   filter: ProjectFilter;
   onCodexChange: (enabled: boolean) => void;
   onCodexTargetChange: (targetId: string, enabled: boolean) => void;
+  onActivityVisibilityChange: (
+    kind: keyof ActivityVisibility,
+    visible: boolean,
+  ) => void;
   onFilterChange: (filter: ProjectFilter) => void;
   onNewProject: () => void;
   onManageProject: (projectId: number) => void;
@@ -62,12 +68,14 @@ export function ProjectRail({
   codexTargets,
   pendingCodexTargetIds,
   captureError,
+  activityVisibility,
   projects,
   origins,
   inboxCount,
   filter,
   onCodexChange,
   onCodexTargetChange,
+  onActivityVisibilityChange,
   onFilterChange,
   onNewProject,
   onManageProject,
@@ -219,6 +227,47 @@ export function ProjectRail({
             })}
           </ul>
         </nav>
+      </section>
+
+      <section className="rail-section activity-visibility" aria-labelledby="activity-visibility-heading">
+        <header className="rail-section__heading">
+          <div>
+            <h2 id="activity-visibility-heading">Canvas visibility</h2>
+            <p>Choose which Codex activity appears as nodes.</p>
+          </div>
+        </header>
+        <div className="activity-visibility__options">
+          <label>
+            <span>
+              <strong>Subagent activity</strong>
+              <small id="subagent-visibility-description">
+                Delegated agent starts with a stable agent ID
+              </small>
+            </span>
+            <input
+              type="checkbox"
+              checked={activityVisibility.subagent}
+              aria-describedby="subagent-visibility-description"
+              onChange={(event) =>
+                onActivityVisibilityChange("subagent", event.target.checked)}
+            />
+          </label>
+          <label>
+            <span>
+              <strong>Codex internal activity</strong>
+              <small id="internal-visibility-description">
+                Ambient suggestions and background checks
+              </small>
+            </span>
+            <input
+              type="checkbox"
+              checked={activityVisibility.internal}
+              aria-describedby="internal-visibility-description"
+              onChange={(event) =>
+                onActivityVisibilityChange("internal", event.target.checked)}
+            />
+          </label>
+        </div>
       </section>
 
       <section

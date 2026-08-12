@@ -4,9 +4,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, Table, TableLike, value};
 
-use super::{CAPTURE_HOOK_TIMEOUT_SECONDS, CodexHookCommand, CodexLifecycleError, HookLocation};
-
-const HOOK_EVENT_LABEL: &str = "user_prompt_submit";
+use super::{
+    CAPTURE_HOOK_TIMEOUT_SECONDS, CodexHookCommand, CodexLifecycleError, HookEvent, HookLocation,
+};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum HookPlatform {
@@ -25,7 +25,7 @@ pub(super) fn prepare_config(
     manifest_path: &Path,
     original: Option<&[u8]>,
     previous_locations: &[HookLocation],
-    installed: Option<(HookLocation, &CodexHookCommand)>,
+    installed: Option<(&[HookLocation], &CodexHookCommand)>,
 ) -> Result<Option<Vec<u8>>, CodexLifecycleError> {
     if original.is_none() && installed.is_none() {
         return Ok(None);
@@ -58,20 +58,25 @@ pub(super) fn prepare_config(
         }
     }
 
-    if let Some((location, command)) = installed {
+    if let Some((locations, command)) = installed {
         let state = ensure_state_table(&mut document, config_path)?;
         for source in &sources {
-            let hash = trusted_hash(command.command_for(source.platform));
             for hook_path in source_path_aliases(source) {
-                let key = hook_state_key(&hook_path, location);
-                let entry = state
-                    .entry(&key)
-                    .or_insert_with(|| Item::Table(Table::new()));
-                let entry = entry.as_table_like_mut().ok_or_else(|| {
-                    CodexLifecycleError::InvalidConfigShape(config_path.to_path_buf())
-                })?;
-                entry.insert("enabled", value(true));
-                entry.insert("trusted_hash", value(hash.clone()));
+                for location in locations {
+                    let hash = trusted_hash_for_event(
+                        location.event,
+                        command.command_for(source.platform),
+                    );
+                    let key = hook_state_key(&hook_path, *location);
+                    let entry = state
+                        .entry(&key)
+                        .or_insert_with(|| Item::Table(Table::new()));
+                    let entry = entry.as_table_like_mut().ok_or_else(|| {
+                        CodexLifecycleError::InvalidConfigShape(config_path.to_path_buf())
+                    })?;
+                    entry.insert("enabled", value(true));
+                    entry.insert("trusted_hash", value(hash.clone()));
+                }
             }
         }
     }
@@ -137,8 +142,10 @@ fn state_keys(sources: &[TrustSource], locations: &[HookLocation]) -> BTreeSet<S
 
 fn hook_state_key(hook_path: &str, location: HookLocation) -> String {
     format!(
-        "{hook_path}:{HOOK_EVENT_LABEL}:{}:{}",
-        location.group, location.handler
+        "{hook_path}:{}:{}:{}",
+        location.event.trust_label(),
+        location.group,
+        location.handler
     )
 }
 
@@ -263,9 +270,14 @@ struct NormalizedCommandHook<'a> {
     hook_type: &'static str,
 }
 
+#[cfg(test)]
 fn trusted_hash(command: &str) -> String {
+    trusted_hash_for_event(HookEvent::UserPromptSubmit, command)
+}
+
+fn trusted_hash_for_event(event: HookEvent, command: &str) -> String {
     let identity = NormalizedHookIdentity {
-        event_name: HOOK_EVENT_LABEL,
+        event_name: event.trust_label(),
         hooks: [NormalizedCommandHook {
             asynchronous: false,
             command,
@@ -302,6 +314,10 @@ fn canonical_json(value: serde_json::Value) -> serde_json::Value {
 mod tests {
     use super::*;
 
+    const fn user_location(group: usize, handler: usize) -> HookLocation {
+        HookLocation::new(HookEvent::UserPromptSubmit, group, handler)
+    }
+
     #[test]
     fn hash_matches_codex_0_147_normalized_hook_algorithm() {
         assert_eq!(
@@ -327,7 +343,7 @@ trusted_hash = "sha256:other"
             manifest_path,
             Some(original),
             &[],
-            Some((HookLocation::new(1, 0), &command)),
+            Some((&[user_location(1, 0)], &command)),
         )
         .expect("config update")
         .expect("config bytes");
@@ -360,7 +376,7 @@ trusted_hash = "sha256:other"
             config_path,
             manifest_path,
             Some(original),
-            &[HookLocation::new(1, 0)],
+            &[user_location(1, 0)],
             None,
         )
         .expect("config update")
@@ -422,8 +438,8 @@ trusted_hash = "sha256:stale"
             config_path,
             manifest_path,
             Some(original),
-            &[HookLocation::new(0, 0)],
-            Some((HookLocation::new(0, 0), &command)),
+            &[user_location(0, 0)],
+            Some((&[user_location(0, 0)], &command)),
         )
         .expect("config update")
         .expect("config bytes");
@@ -454,7 +470,7 @@ trusted_hash = "sha256:stale"
             manifest_path,
             None,
             &[],
-            Some((HookLocation::new(0, 0), &command)),
+            Some((&[user_location(0, 0)], &command)),
         )
         .expect("config update")
         .expect("config bytes");

@@ -1,5 +1,7 @@
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+use akra_core::ingress::ActivityKind;
+
 use crate::{
     ActivityProjectSummary, ActivityStore, ActivitySummary, ActivityTimeProvenance,
     ActivityTimeSummary, StoreError,
@@ -22,6 +24,7 @@ pub enum ActivityOrder {
 
 type SummaryRow = (
     i64,
+    String,
     String,
     String,
     Option<i64>,
@@ -88,6 +91,7 @@ impl ActivityStore {
         let rows = sqlx::query_as::<_, SummaryRow>(
             "WITH effective AS (
                  SELECT activity_events.id, activity_events.provider,
+                        activity_events.activity_kind,
                         activity_events.provider_session_id, activity_events.prompt,
                         activity_events.captured_at_us,
                         activity_events.first_recorded_at_us,
@@ -129,7 +133,7 @@ impl ActivityStore {
                  FROM activity_events
                  WHERE id = ?
              )
-             SELECT id, provider, prompt, effective_project_id, project_name,
+             SELECT id, provider, activity_kind, prompt, effective_project_id, project_name,
                     captured_at_us, first_recorded_at_us,
                     conversation_index, conversation_total
              FROM numbered
@@ -242,6 +246,7 @@ impl ActivityStore {
              ),
              effective AS (
                  SELECT activity_events.id, activity_events.provider,
+                        activity_events.activity_kind,
                         activity_events.provider_session_id,
                         substr(activity_events.prompt, 1, 281) AS prompt,
                         activity_events.captured_at_us,
@@ -321,7 +326,7 @@ impl ActivityStore {
                           CASE WHEN ?4 = 'newest' THEN id END DESC
                  LIMIT ?5
              )
-             SELECT page.id, page.provider, page.prompt,
+             SELECT page.id, page.provider, page.activity_kind, page.prompt,
                     page.effective_project_id, projects.name,
                     page.captured_at_us, page.first_recorded_at_us,
                     (
@@ -441,6 +446,7 @@ fn summary_from_row(row: SummaryRow) -> Result<ActivitySummary, StoreError> {
     let (
         id,
         provider,
+        activity_kind,
         prompt,
         project_id,
         project_name,
@@ -453,6 +459,9 @@ fn summary_from_row(row: SummaryRow) -> Result<ActivitySummary, StoreError> {
     Ok(ActivitySummary {
         id,
         provider,
+        activity_kind: ActivityKind::from_storage(&activity_kind).ok_or_else(|| {
+            StoreError::Invariant(format!("invalid activity kind: {activity_kind}"))
+        })?,
         prompt: prompt_preview(&prompt),
         project,
         time: activity_time(captured_at_us, first_recorded_at_us)?,

@@ -34,7 +34,7 @@
 
 * { box-sizing: border-box; }
 
-html { min-width: 320px; background: var(--color-bg); }
+html { min-width: 320px; overflow: hidden; background: var(--color-bg); }
 
 body {
   margin: 0;
@@ -417,7 +417,8 @@ button.command-control {
 .provider-master,
 .capture-target__toggle { display: flex; align-items: center; }
 
-.provider-control input[type="checkbox"] {
+.provider-control input[type="checkbox"],
+.activity-visibility input[type="checkbox"] {
   position: relative;
   width: 32px;
   height: 18px;
@@ -431,7 +432,8 @@ button.command-control {
   transition: border-color 140ms ease, background-color 140ms ease;
 }
 
-.provider-control input[type="checkbox"]::after {
+.provider-control input[type="checkbox"]::after,
+.activity-visibility input[type="checkbox"]::after {
   position: absolute;
   top: 2px;
   left: 2px;
@@ -445,13 +447,49 @@ button.command-control {
 }
 
 .provider-control input[type="checkbox"]:checked,
-.provider-control input[type="checkbox"]:indeterminate {
+.provider-control input[type="checkbox"]:indeterminate,
+.activity-visibility input[type="checkbox"]:checked {
   border-color: #74ad86;
   background: #5f9f73;
 }
 
-.provider-control input[type="checkbox"]:checked::after { transform: translateX(14px); }
+.provider-control input[type="checkbox"]:checked::after,
+.activity-visibility input[type="checkbox"]:checked::after { transform: translateX(14px); }
 .provider-control input[type="checkbox"]:indeterminate::after { transform: translateX(7px); }
+
+.provider-control input[type="checkbox"]:focus-visible,
+.activity-visibility input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 3px;
+}
+
+.activity-visibility { gap: 10px; }
+.activity-visibility .rail-section__heading p {
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.activity-visibility__options {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: #0d1416;
+}
+.activity-visibility__options label {
+  display: grid;
+  min-height: 52px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.activity-visibility__options label + label { border-top: 1px solid var(--color-border); }
+.activity-visibility__options label > span { display: grid; min-width: 0; gap: 2px; }
+.activity-visibility__options strong { color: #dfe6e2; font-size: 11px; font-weight: 620; }
+.activity-visibility__options small { color: var(--color-muted); font-size: 10px; line-height: 1.35; }
 
 .capture-target-list {
   display: grid;
@@ -873,8 +911,22 @@ button.command-control {
   line-height: 1.15;
 }
 
-.activity-node__provider { display: inline-flex; align-items: center; gap: 6px; color: #bac5c2; text-transform: lowercase; }
+.activity-node__source,
+.activity-node__provider { display: inline-flex; align-items: center; gap: 6px; }
+.activity-node__source { min-width: 0; }
+.activity-node__provider { color: #bac5c2; text-transform: lowercase; }
 .activity-node__provider-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
+.activity-node__kind {
+  padding: 2px 5px;
+  border: 1px solid #476369;
+  border-radius: 3px;
+  color: #a9c8cd;
+  font: 600 8px var(--font-mono);
+  letter-spacing: .04em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.activity-node__kind--internal { border-color: #6c6250; color: #d0ba8c; }
 
 .activity-node .react-flow__handle {
   width: 11px;
@@ -1204,6 +1256,7 @@ select:not([aria-label="프로젝트 필터"]) {
 }
 
 @media (max-width: 900px) {
+  html:has(.app-shell--detail) { overflow: auto; }
   body { overflow: auto; }
   .app-shell--detail {
     grid-template-areas:
@@ -1230,6 +1283,7 @@ select:not([aria-label="프로젝트 필터"]) {
 }
 
 @media (max-width: 720px) {
+  html { overflow: auto; }
   body { overflow: auto; }
   .app-shell,
   .app-shell--detail {
