@@ -1,4 +1,4 @@
-use akra_core::ingress::{ActivityKind, IngressEvent};
+use akra_core::ingress::{ActivityKind, IngressEvent, ResultEvent};
 use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
@@ -14,19 +14,44 @@ pub use lifecycle::{
 #[derive(Debug)]
 pub struct CodexAdapter;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CodexCapture {
+    Activity(IngressEvent),
+    Result(ResultEvent),
+}
+
 impl CodexAdapter {
+    /// Normalizes prompt-producing hooks for callers that predate result capture.
     pub fn normalize(input: &str) -> Result<IngressEvent, CodexAdapterError> {
         let value: Value = serde_json::from_str(input)?;
-        let hook_event_name = value
-            .get("hook_event_name")
-            .and_then(Value::as_str)
-            .ok_or(CodexAdapterError::MissingHookName)?;
-        match hook_event_name {
+        match hook_event_name(&value)? {
             "UserPromptSubmit" => normalize_user_prompt(serde_json::from_value(value)?),
             "SubagentStart" => normalize_subagent_start(serde_json::from_value(value)?),
             other => Err(CodexAdapterError::UnexpectedHook(other.to_owned())),
         }
     }
+
+    /// Normalizes every hook consumed by the capture pipeline.
+    pub fn normalize_capture(input: &str) -> Result<CodexCapture, CodexAdapterError> {
+        let value: Value = serde_json::from_str(input)?;
+        match hook_event_name(&value)? {
+            "UserPromptSubmit" => {
+                normalize_user_prompt(serde_json::from_value(value)?).map(CodexCapture::Activity)
+            }
+            "SubagentStart" => {
+                normalize_subagent_start(serde_json::from_value(value)?).map(CodexCapture::Activity)
+            }
+            "Stop" => normalize_stop(serde_json::from_value(value)?).map(CodexCapture::Result),
+            other => Err(CodexAdapterError::UnexpectedHook(other.to_owned())),
+        }
+    }
+}
+
+fn hook_event_name(value: &Value) -> Result<&str, CodexAdapterError> {
+    value
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .ok_or(CodexAdapterError::MissingHookName)
 }
 
 #[derive(Deserialize)]
@@ -46,6 +71,16 @@ struct SubagentStart {
     model: Option<String>,
     agent_id: String,
     agent_type: String,
+}
+
+#[derive(Deserialize)]
+struct Stop {
+    session_id: String,
+    turn_id: String,
+    cwd: String,
+    model: Option<String>,
+    #[serde(default)]
+    last_assistant_message: Option<String>,
 }
 
 fn normalize_user_prompt(payload: UserPromptSubmit) -> Result<IngressEvent, CodexAdapterError> {
@@ -75,6 +110,21 @@ fn normalize_subagent_start(payload: SubagentStart) -> Result<IngressEvent, Code
         ActivityKind::Subagent,
         Some(payload.agent_id),
         Some(payload.agent_type),
+    )
+    .map_err(CodexAdapterError::Ingress)
+}
+
+fn normalize_stop(payload: Stop) -> Result<ResultEvent, CodexAdapterError> {
+    let result = payload
+        .last_assistant_message
+        .filter(|message| !message.trim().is_empty());
+    ResultEvent::try_new(
+        "codex",
+        payload.session_id,
+        payload.turn_id,
+        payload.cwd,
+        result,
+        payload.model,
     )
     .map_err(CodexAdapterError::Ingress)
 }

@@ -3,6 +3,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::atomic::Ordering,
+    time::UNIX_EPOCH,
 };
 
 use fs2::FileExt;
@@ -95,6 +96,66 @@ impl Spool {
             .collect())
     }
 
+    /// Remove raw assistant-result payloads after their bounded retention window.
+    /// New result items carry a filename marker so even malformed envelopes can
+    /// be scrubbed using their filesystem timestamp on the next recovery pass.
+    pub(crate) fn expire_result_items(
+        &self,
+        now_us: i64,
+        retention_us: i64,
+    ) -> Result<usize, SpoolError> {
+        let cutoff_us = now_us.saturating_sub(retention_us);
+        let _admission = self.lock_admission()?;
+        let paths = self.pending_paths(|_| true)?;
+        let mut expired = Vec::new();
+
+        for path in paths {
+            let marked_result = is_result_pending(&path);
+            let decoded = self
+                .read(&SpoolItem { path: path.clone() })
+                .ok()
+                .and_then(|payload| super::CaptureEnvelope::decode(&payload).ok());
+            let decoded_result = decoded.as_ref().is_some_and(|envelope| {
+                envelope
+                    .payload
+                    .get("hook_event_name")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("Stop")
+            });
+            if !marked_result && !decoded_result {
+                continue;
+            }
+            let captured_at_us = decoded
+                .as_ref()
+                .filter(|_| decoded_result)
+                .map(super::CaptureEnvelope::captured_at_us)
+                .or_else(|| modified_at_us(&path));
+            if captured_at_us.is_some_and(|captured| captured <= cutoff_us) {
+                expired.push(path);
+            }
+        }
+
+        if expired.is_empty() {
+            return Ok(0);
+        }
+        let mut deferred = self
+            .deferred
+            .lock()
+            .map_err(|_| SpoolError::StatePoisoned)?;
+        let mut removed = 0;
+        for path in expired {
+            deferred.remove(&path);
+            match fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        drop(deferred);
+        super::sync_directory(&self.directory)?;
+        Ok(removed)
+    }
+
     fn pending_paths(
         &self,
         include: impl Fn(&PathBuf) -> bool,
@@ -175,4 +236,20 @@ impl Spool {
 fn is_pending(path: &Path) -> bool {
     path.extension()
         .is_some_and(|extension| extension == "pending")
+}
+
+fn is_result_pending(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".result.pending"))
+}
+
+fn modified_at_us(path: &Path) -> Option<i64> {
+    let elapsed = fs::symlink_metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?;
+    i64::try_from(elapsed.as_micros()).ok()
 }

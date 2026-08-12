@@ -27,6 +27,7 @@ test("activity cards show context hierarchy and truthful time states", async ({ 
     time: { value: null, provenance: "unknown" },
     conversation_index: 1,
     conversation_total: 1,
+    result_summary_status: "unavailable",
   });
   api.state.canvasNodes.push({
     id: 13,

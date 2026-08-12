@@ -34,6 +34,7 @@ export function App() {
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const detailTriggerRef = useRef<HTMLElement | null>(null);
+  const clearCanvasTriggerRef = useRef<HTMLButtonElement | null>(null);
   const client = useMemo(() => {
     const url = import.meta.env.VITE_AKRA_URL;
     const token = import.meta.env.VITE_AKRA_TOKEN;
@@ -110,6 +111,10 @@ export function App() {
     });
     return true;
   }, [clearCanvas]);
+  const cancelClearCanvas = useCallback(() => {
+    setClearConfirmOpen(false);
+    requestAnimationFrame(() => clearCanvasTriggerRef.current?.focus());
+  }, []);
   const changeProvider = useCallback(async (enabled: boolean) => {
     if (!client || provider.isError || codexPending || pendingCodexTargetIds.length > 0) {
       return;
@@ -240,6 +245,7 @@ export function App() {
             )}
             {nodes.length > 0 && (
               <button
+                ref={clearCanvasTriggerRef}
                 className="canvas-clear"
                 type="button"
                 onClick={() => setClearConfirmOpen(true)}
@@ -305,6 +311,7 @@ export function App() {
         <ActivityDetailPanel
           key={detailActivityId}
           activityId={detailActivityId}
+          activityVisibility={activityVisibility}
           client={client}
           onClose={closeActivity}
         />
@@ -312,7 +319,7 @@ export function App() {
       {clearConfirmOpen && (
         <ClearCanvasDialog
           nodeCount={nodes.length}
-          onCancel={() => setClearConfirmOpen(false)}
+          onCancel={cancelClearCanvas}
           onConfirm={confirmClearCanvas}
         />
       )}

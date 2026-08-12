@@ -63,30 +63,36 @@ export function useDashboardData(
   >>([]);
   const [olderActivitiesHaveMore, setOlderActivitiesHaveMore] =
     useState<boolean | null>(null);
+  const [olderActivityPageCursors, setOlderActivityPageCursors] = useState<number[]>([]);
   const [loadingOlderActivities, setLoadingOlderActivities] = useState(false);
   const [olderActivitiesError, setOlderActivitiesError] = useState("");
   const scopeKey = activityScope.scope === "project"
     ? `project:${activityScope.projectId}`
     : activityScope.scope;
+  const visibilityQuery = useMemo(() => ({
+    includeSubagent: activityVisibility.subagent,
+    includeInternal: activityVisibility.internal,
+  }), [activityVisibility.internal, activityVisibility.subagent]);
 
   const activities = useQuery({
-    queryKey: ["activities", activityScope],
+    queryKey: ["activities", activityScope, visibilityQuery],
     queryFn: () => client!.activities(activityScope, {
       limit: ACTIVITY_PAGE_SIZE,
       order: "newest",
+      ...visibilityQuery,
     }),
     enabled: client !== null,
     refetchInterval: 500,
   });
   const inboxCount = useQuery({
-    queryKey: ["activity-count", { scope: "inbox" }],
-    queryFn: () => client!.activityCount({ scope: "inbox" }),
+    queryKey: ["activity-count", { scope: "inbox" }, visibilityQuery],
+    queryFn: () => client!.activityCount({ scope: "inbox" }, visibilityQuery),
     enabled: client !== null,
     refetchInterval: 500,
   });
   const projects = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => client!.projects(),
+    queryKey: ["projects", visibilityQuery],
+    queryFn: () => client!.projects(visibilityQuery),
     enabled: client !== null,
     refetchInterval: 500,
   });
@@ -122,16 +128,17 @@ export function useDashboardData(
   });
   const selectedDetails = useQueries({
     queries: selectedActivityIds.map((activityId) => ({
-      queryKey: ["activity", activityId],
-      queryFn: () => client!.activity(activityId),
+      queryKey: ["activity", activityId, visibilityQuery],
+      queryFn: () => client!.activity(activityId, visibilityQuery),
       enabled: client !== null,
     })),
   });
   useEffect(() => {
     setOlderActivities([]);
     setOlderActivitiesHaveMore(null);
+    setOlderActivityPageCursors([]);
     setOlderActivitiesError("");
-  }, [client, scopeKey]);
+  }, [client, scopeKey, visibilityQuery]);
   const allActivityItems = useMemo(() => {
     const byId = new Map(
       [...olderActivities, ...(activities.data ?? [])]
@@ -156,6 +163,7 @@ export function useDashboardData(
         limit: ACTIVITY_PAGE_SIZE,
         afterId: cursor,
         order: "newest",
+        ...visibilityQuery,
       });
       setOlderActivities((current) => {
         const byId = new Map(
@@ -164,6 +172,9 @@ export function useDashboardData(
         );
         return [...byId.values()];
       });
+      setOlderActivityPageCursors((current) =>
+        current.includes(cursor) ? current : [...current, cursor]
+      );
       setOlderActivitiesHaveMore(page.length === ACTIVITY_PAGE_SIZE);
     } catch (cause) {
       setOlderActivitiesError(
@@ -172,7 +183,53 @@ export function useDashboardData(
     } finally {
       setLoadingOlderActivities(false);
     }
-  }, [activities.data, activityScope, client, hasOlderActivities, olderActivities]);
+  }, [
+    activities.data,
+    activityScope,
+    client,
+    hasOlderActivities,
+    olderActivities,
+    visibilityQuery,
+  ]);
+
+  useEffect(() => {
+    if (!client || olderActivityPageCursors.length === 0) return;
+    let cancelled = false;
+    let refreshInFlight = false;
+    const refreshOlderPages = async () => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      try {
+        const pages = await Promise.all(olderActivityPageCursors.map((afterId) =>
+          client.activities(activityScope, {
+            limit: ACTIVITY_PAGE_SIZE,
+            afterId,
+            order: "newest",
+            ...visibilityQuery,
+          })
+        ));
+        if (cancelled) return;
+        setOlderActivities((current) => {
+          const byId = new Map(current.map((activity) => [activity.id, activity]));
+          for (const activity of pages.flat()) byId.set(activity.id, activity);
+          return [...byId.values()];
+        });
+        setOlderActivitiesHaveMore(
+          pages.at(-1)?.length === ACTIVITY_PAGE_SIZE,
+        );
+      } catch {
+        // The primary activity poll remains authoritative and the next interval retries.
+      } finally {
+        refreshInFlight = false;
+      }
+    };
+    void refreshOlderPages();
+    const interval = window.setInterval(() => void refreshOlderPages(), 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activityScope, client, olderActivityPageCursors, visibilityQuery]);
 
   useEffect(() => {
     if (!activities.data || !canvas.data) return;
@@ -215,6 +272,7 @@ export function useDashboardData(
   const refreshProjectContext = useCallback(async () => {
     setOlderActivities([]);
     setOlderActivitiesHaveMore(null);
+    setOlderActivityPageCursors([]);
     setOlderActivitiesError("");
     await Promise.all([
       activities.refetch(),

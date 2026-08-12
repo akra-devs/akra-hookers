@@ -1,4 +1,4 @@
-use akra_adapters::codex::CodexAdapter;
+use akra_adapters::codex::{CodexAdapter, CodexCapture};
 use akra_core::ingress::ActivityKind;
 
 #[test]
@@ -34,6 +34,75 @@ fn normalizes_subagent_start_with_stable_agent_identity() {
     assert_eq!(
         event.turn_id(),
         "parent-turn:subagent:019ff551-8f05-7f42-a014-b787ede069cc"
+    );
+}
+
+#[test]
+fn normalizes_stop_with_the_final_assistant_result() {
+    let capture = CodexAdapter::normalize_capture(
+        r#"{
+            "hook_event_name":"Stop",
+            "session_id":"session-1",
+            "turn_id":"turn-1",
+            "cwd":"C:\\dev\\project",
+            "model":"gpt-5.3-codex",
+            "last_assistant_message":"Implemented the feature and verified the tests."
+        }"#,
+    )
+    .expect("Stop fixture normalizes");
+
+    let CodexCapture::Result(event) = capture else {
+        panic!("Stop must normalize as a result capture");
+    };
+    assert_eq!(event.provider().as_str(), "codex");
+    assert_eq!(event.session_id(), "session-1");
+    assert_eq!(event.turn_id(), "turn-1");
+    assert_eq!(event.cwd(), r"C:\dev\project");
+    assert_eq!(event.model(), Some("gpt-5.3-codex"));
+    assert_eq!(
+        event.result(),
+        Some("Implemented the feature and verified the tests.")
+    );
+}
+
+#[test]
+fn normalizes_stop_without_a_final_assistant_result() {
+    for last_message in ["null", r#""   ""#] {
+        let payload = format!(
+            r#"{{
+                "hook_event_name":"Stop",
+                "session_id":"session-1",
+                "turn_id":"turn-1",
+                "cwd":"/work/project",
+                "model":null,
+                "last_assistant_message":{last_message}
+            }}"#
+        );
+        let capture = CodexAdapter::normalize_capture(&payload).expect("Stop normalizes");
+        let CodexCapture::Result(event) = capture else {
+            panic!("Stop must normalize as a result capture");
+        };
+        assert_eq!(event.result(), None);
+    }
+}
+
+#[test]
+fn existing_prompt_normalizer_still_rejects_stop() {
+    let error = CodexAdapter::normalize(
+        r#"{
+            "hook_event_name":"Stop",
+            "session_id":"session-1",
+            "turn_id":"turn-1",
+            "cwd":"/work/project",
+            "last_assistant_message":"done"
+        }"#,
+    )
+    .expect_err("legacy normalizer accepts only activity hooks");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unexpected Codex hook event: Stop")
     );
 }
 

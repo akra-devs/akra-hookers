@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use akra_core::ingress::IngressEvent;
+use akra_core::ingress::{ActivityKind, IngressEvent};
 use akra_store::{
     ActivityAssignmentCommand, AssignmentDestination, FutureRouteAction, OriginRoutingCommand,
     RecordActivity,
@@ -93,8 +93,9 @@ async fn activities_scopes_omit_detail_metadata_and_keep_global_numbering() {
     assert!(find(all, legacy)["project"].is_null());
     for activity in all {
         let object = activity.as_object().expect("summary");
-        assert_eq!(object.len(), 8);
+        assert_eq!(object.len(), 9);
         assert_eq!(object["activity_kind"], "user");
+        assert_eq!(object["result_summary_status"], "unavailable");
         for forbidden in ["session_id", "turn_id", "cwd", "origin", "global_sequence"] {
             assert!(
                 object.get(forbidden).is_none(),
@@ -209,6 +210,71 @@ async fn activities_scope_validation_and_authentication_are_explicit() {
     );
 }
 
+#[tokio::test]
+async fn activity_kind_filters_apply_to_pages_details_counts_and_projects() {
+    let harness = harness().await;
+    let cwd = Path::new(r"C:\kind-filter");
+    let user = record_kind(
+        &harness.store,
+        cwd,
+        "mixed-session",
+        "user-turn",
+        ActivityKind::User,
+        100,
+    )
+    .await;
+    record_kind(
+        &harness.store,
+        cwd,
+        "mixed-session",
+        "subagent-turn",
+        ActivityKind::Subagent,
+        200,
+    )
+    .await;
+    record_kind(
+        &harness.store,
+        cwd,
+        "mixed-session",
+        "internal-turn",
+        ActivityKind::Internal,
+        300,
+    )
+    .await;
+
+    let visibility = "include_subagent=false&include_internal=false";
+    let (_, activities) = get(
+        &harness.app,
+        &format!("/v1/activities?scope=all&{visibility}"),
+    )
+    .await;
+    let activities = activities.as_array().expect("activities");
+    assert_eq!(ids(activities), vec![user]);
+    assert_position(activities, user, 1, 1);
+
+    let (_, count) = get(
+        &harness.app,
+        &format!("/v1/activities/count?scope=all&{visibility}"),
+    )
+    .await;
+    assert_eq!(count["count"], 1);
+
+    let (_, detail) = get(&harness.app, &format!("/v1/activities/{user}?{visibility}")).await;
+    assert_eq!(detail["conversation_total"], 1);
+    assert_eq!(
+        detail["conversation"]
+            .as_array()
+            .expect("conversation")
+            .len(),
+        1
+    );
+
+    let (_, projects) = get(&harness.app, &format!("/v1/projects?{visibility}")).await;
+    let projects = projects.as_array().expect("projects");
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0]["activity_count"], 1);
+}
+
 async fn get(app: &axum::Router, uri: &str) -> (StatusCode, Value) {
     call(app, Method::GET, uri, None, true).await
 }
@@ -230,6 +296,31 @@ async fn record(
         None => RecordActivity::legacy_resolved(event, origin),
     };
     store.record(command).await.expect("record")
+}
+
+async fn record_kind(
+    store: &akra_store::ActivityStore,
+    cwd: &Path,
+    session: &str,
+    turn: &str,
+    kind: ActivityKind,
+    captured_at_us: i64,
+) -> i64 {
+    let event = IngressEvent::try_new("codex", session, turn, cwd.to_string_lossy(), turn, None)
+        .expect("event")
+        .with_activity_context(
+            kind,
+            (kind == ActivityKind::Subagent).then(|| format!("agent-{turn}")),
+            (kind == ActivityKind::Subagent).then(|| "reviewer".to_owned()),
+        )
+        .expect("activity context");
+    let origin = akra_git::ProjectIdentity::capture_snapshot_from_cwd(cwd)
+        .expect("origin")
+        .origin;
+    store
+        .record(RecordActivity::captured(event, origin, captured_at_us))
+        .await
+        .expect("record")
 }
 
 fn ids(activities: &[Value]) -> Vec<i64> {

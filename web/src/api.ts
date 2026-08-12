@@ -20,7 +20,9 @@ export type {
   ActivityAssignmentResult,
   ActivityConversationTurn,
   ActivityDetail,
+  ActivityKind,
   ActivityProject,
+  ActivityResultSummary,
   ActivityScope,
   ActivitySummary,
   ActivityTime,
@@ -36,6 +38,7 @@ export type {
   ProjectDestination,
   ProjectSummary,
   ProviderIntegration,
+  ResultSummaryStatus,
 } from "./api-contracts";
 
 export class ApiError extends Error {
@@ -52,17 +55,33 @@ export class ApiError extends Error {
   }
 }
 
+export type ActivityVisibilityQuery = {
+  includeSubagent?: boolean;
+  includeInternal?: boolean;
+};
+
+type ActivityPageQuery = ActivityVisibilityQuery & {
+  limit?: number;
+  afterId?: number;
+  order?: "oldest" | "newest";
+};
+
+type ConversationPageQuery = ActivityVisibilityQuery & {
+  limit?: number;
+  afterId?: number;
+};
+
 export type ApiClient = {
   activities(
     scope: ActivityScope,
-    page?: { limit?: number; afterId?: number; order?: "oldest" | "newest" },
+    page?: ActivityPageQuery,
   ): Promise<ActivitySummary[]>;
-  activityCount(scope: ActivityScope): Promise<number>;
+  activityCount(scope: ActivityScope, visibility?: ActivityVisibilityQuery): Promise<number>;
   activity(
     activityId: number,
-    page?: { limit?: number; afterId?: number },
+    page?: ConversationPageQuery,
   ): Promise<ActivityDetail>;
-  projects(): Promise<ProjectSummary[]>;
+  projects(visibility?: ActivityVisibilityQuery): Promise<ProjectSummary[]>;
   createProject(name: string): Promise<ProjectSummary>;
   renameProject(projectId: number, name: string): Promise<ProjectSummary>;
   mergeProject(sourceProjectId: number, targetProjectId: number): Promise<ProjectSummary>;
@@ -119,13 +138,14 @@ export function createApiClient(
   return {
     activities: (scope, page) =>
       request<ActivitySummary[]>(activityPath(scope, page)),
-    activityCount: async (scope) => {
-      const result = await request<{ count: number }>(activityCountPath(scope));
+    activityCount: async (scope, visibility) => {
+      const result = await request<{ count: number }>(activityCountPath(scope, visibility));
       return result.count;
     },
     activity: (activityId, page) =>
       request<ActivityDetail>(conversationPath(activityId, page)),
-    projects: () => request<ProjectSummary[]>("/v1/projects"),
+    projects: (visibility) =>
+      request<ProjectSummary[]>(appendActivityVisibility("/v1/projects", visibility)),
     createProject: (name) => request<ProjectSummary>("/v1/projects", "POST", { name }),
     renameProject: (projectId, name) =>
       request<ProjectSummary>(`/v1/projects/${projectId}`, "PATCH", { name }),
@@ -175,7 +195,7 @@ export function createApiClient(
 
 function activityPath(
   scope: ActivityScope,
-  page?: { limit?: number; afterId?: number; order?: "oldest" | "newest" },
+  page?: ActivityPageQuery,
 ): string {
   let path: string;
   switch (scope.scope) {
@@ -194,7 +214,7 @@ function activityPath(
 
 function conversationPath(
   activityId: number,
-  page?: { limit?: number; afterId?: number },
+  page?: ConversationPageQuery,
 ): string {
   return appendPage(
     `/v1/activities/${activityId}`,
@@ -204,13 +224,17 @@ function conversationPath(
   );
 }
 
-function activityCountPath(scope: ActivityScope): string {
-  return activityPath(scope).replace("/v1/activities?", "/v1/activities/count?");
+function activityCountPath(
+  scope: ActivityScope,
+  visibility?: ActivityVisibilityQuery,
+): string {
+  return activityPath(scope, visibility)
+    .replace("/v1/activities?", "/v1/activities/count?");
 }
 
 function appendPage(
   path: string,
-  page: { limit?: number; afterId?: number; order?: "oldest" | "newest" } | undefined,
+  page: ActivityPageQuery | ConversationPageQuery | undefined,
   cursorName: string,
   limitName = "limit",
 ): string {
@@ -218,11 +242,35 @@ function appendPage(
   const parameters = new URLSearchParams();
   if (page.limit !== undefined) parameters.set(limitName, String(page.limit));
   if (page.afterId !== undefined) parameters.set(cursorName, String(page.afterId));
-  if (page.order !== undefined) parameters.set("order", page.order);
+  if ("order" in page && page.order !== undefined) parameters.set("order", page.order);
+  appendVisibilityParameters(parameters, page);
   const query = parameters.toString();
   return query.length === 0
     ? path
     : `${path}${path.includes("?") ? "&" : "?"}${query}`;
+}
+
+function appendActivityVisibility(
+  path: string,
+  visibility: ActivityVisibilityQuery | undefined,
+): string {
+  if (!visibility) return path;
+  const parameters = new URLSearchParams();
+  appendVisibilityParameters(parameters, visibility);
+  const query = parameters.toString();
+  return query ? `${path}?${query}` : path;
+}
+
+function appendVisibilityParameters(
+  parameters: URLSearchParams,
+  visibility: ActivityVisibilityQuery,
+) {
+  if (visibility.includeSubagent !== undefined) {
+    parameters.set("include_subagent", String(visibility.includeSubagent));
+  }
+  if (visibility.includeInternal !== undefined) {
+    parameters.set("include_internal", String(visibility.includeInternal));
+  }
 }
 
 async function apiError(response: Response): Promise<ApiError> {

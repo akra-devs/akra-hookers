@@ -33,12 +33,18 @@ project assignment, and future routing remain user-controlled organization.
   dedicated work locations.
 - The dashboard is a localhost-only operational workspace used alongside coding
   sessions, not a cloud analytics product.
-- Hook installation changes require restarting the affected Codex runtime and
-  approving the hook through `/hooks`.
+- Hook installation changes require restarting the affected Codex runtime; Akra
+  writes trust state for its exact managed commands so a separate `/hooks`
+  approval is not required.
 
 ## Capabilities and Constraints
 
-- Captures Codex `UserPromptSubmit` payloads into local spool and SQLite storage.
+- Captures Codex `UserPromptSubmit` payloads into local spool and SQLite storage,
+  then joins the matching `Stop` result by provider, session, and turn.
+- Summarizes the final assistant result into exactly three stored lines with a
+  shared 180-character limit through local `codex exec` with
+  `gpt-5.3-codex-spark`; captured user prompts are never included in that
+  summarization request.
 - Discovers Windows and WSL Codex homes and manages the akra hook independently
   per installation without removing unrelated hooks.
 - Groups linked Git worktrees under a shared project identity.
@@ -46,8 +52,11 @@ project assignment, and future routing remain user-controlled organization.
   future routing, editable canvas positions, node connections, and detailed
   conversation history.
 - Disabling future capture never removes historical activity.
-- Binds to `127.0.0.1` by default and does not send telemetry, upload prompt data,
-  or modify Git repositories.
+- Binds to `127.0.0.1` by default, sends no telemetry or captured prompt data,
+  and does not modify Git repositories. Final assistant result text is sent only
+  to the authenticated Codex Spark summarization run, scrubbed on success or
+  terminal failure, and deleted before recovery once a pending copy is older
+  than 24 hours.
 - The interface must remain useful at desktop and narrow widths without horizontal
   page scrolling.
 

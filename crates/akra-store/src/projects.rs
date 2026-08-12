@@ -1,29 +1,35 @@
 use sqlx::SqliteConnection;
 
-use crate::{ActivityStore, ProjectName, ProjectSummary, StoreError};
+use crate::{ActivityKindFilter, ActivityStore, ProjectName, ProjectSummary, StoreError};
 
 const PROJECT_SUMMARY_SELECT: &str = "
     SELECT projects.id, projects.name,
            (SELECT COUNT(*) FROM activity_origins
             WHERE default_project_id = projects.id),
            (SELECT COUNT(*) FROM activity_events
-            WHERE EXISTS (
-                SELECT 1 FROM activity_project_assignments
-                WHERE activity_event_id = activity_events.id
-                  AND project_id = projects.id
-            ) OR EXISTS (
-                SELECT 1 FROM activity_origins
-                WHERE id = activity_events.origin_id
-                  AND routing_mode = 'dedicated'
-                  AND default_project_id = projects.id
-            ) OR (
-                origin_id IS NULL
-                AND
-                project_identity = projects.identity
-                AND NOT EXISTS (
+            WHERE (
+                EXISTS (
                     SELECT 1 FROM activity_project_assignments
                     WHERE activity_event_id = activity_events.id
+                      AND project_id = projects.id
+                ) OR EXISTS (
+                    SELECT 1 FROM activity_origins
+                    WHERE id = activity_events.origin_id
+                      AND routing_mode = 'dedicated'
+                      AND default_project_id = projects.id
+                ) OR (
+                    origin_id IS NULL
+                    AND
+                    project_identity = projects.identity
+                    AND NOT EXISTS (
+                        SELECT 1 FROM activity_project_assignments
+                        WHERE activity_event_id = activity_events.id
+                    )
                 )
+            ) AND (
+                   activity_events.activity_kind = 'user'
+                OR (?1 = 1 AND activity_events.activity_kind = 'subagent')
+                OR (?2 = 1 AND activity_events.activity_kind = 'internal')
             )),
            CASE WHEN EXISTS (
                SELECT 1 FROM activity_origins
@@ -32,23 +38,29 @@ const PROJECT_SUMMARY_SELECT: &str = "
            ) THEN 1 ELSE 0 END,
            (SELECT MAX(COALESCE(captured_at_us, first_recorded_at_us))
             FROM activity_events
-            WHERE EXISTS (
-                SELECT 1 FROM activity_project_assignments
-                WHERE activity_event_id = activity_events.id
-                  AND project_id = projects.id
-            ) OR EXISTS (
-                SELECT 1 FROM activity_origins
-                WHERE id = activity_events.origin_id
-                  AND routing_mode = 'dedicated'
-                  AND default_project_id = projects.id
-            ) OR (
-                origin_id IS NULL
-                AND
-                project_identity = projects.identity
-                AND NOT EXISTS (
+            WHERE (
+                EXISTS (
                     SELECT 1 FROM activity_project_assignments
                     WHERE activity_event_id = activity_events.id
+                      AND project_id = projects.id
+                ) OR EXISTS (
+                    SELECT 1 FROM activity_origins
+                    WHERE id = activity_events.origin_id
+                      AND routing_mode = 'dedicated'
+                      AND default_project_id = projects.id
+                ) OR (
+                    origin_id IS NULL
+                    AND
+                    project_identity = projects.identity
+                    AND NOT EXISTS (
+                        SELECT 1 FROM activity_project_assignments
+                        WHERE activity_event_id = activity_events.id
+                    )
                 )
+            ) AND (
+                   activity_events.activity_kind = 'user'
+                OR (?1 = 1 AND activity_events.activity_kind = 'subagent')
+                OR (?2 = 1 AND activity_events.activity_kind = 'internal')
             ))
     FROM projects";
 
@@ -62,9 +74,18 @@ impl ActivityStore {
     }
 
     pub async fn projects(&self) -> Result<Vec<ProjectSummary>, StoreError> {
+        self.projects_filtered(ActivityKindFilter::ALL).await
+    }
+
+    pub async fn projects_filtered(
+        &self,
+        activity_filter: ActivityKindFilter,
+    ) -> Result<Vec<ProjectSummary>, StoreError> {
         let statement =
             format!("{PROJECT_SUMMARY_SELECT} ORDER BY projects.normalized_name, projects.id");
         let rows = sqlx::query_as::<_, ProjectRow>(&statement)
+            .bind(activity_filter.include_subagent())
+            .bind(activity_filter.include_internal())
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().map(project_summary).collect())
@@ -138,8 +159,10 @@ impl ActivityStore {
     }
 
     async fn project(&self, project_id: i64) -> Result<ProjectSummary, StoreError> {
-        let statement = format!("{PROJECT_SUMMARY_SELECT} WHERE projects.id = ?");
+        let statement = format!("{PROJECT_SUMMARY_SELECT} WHERE projects.id = ?3");
         let row = sqlx::query_as::<_, ProjectRow>(&statement)
+            .bind(ActivityKindFilter::ALL.include_subagent())
+            .bind(ActivityKindFilter::ALL.include_internal())
             .bind(project_id)
             .fetch_optional(&self.pool)
             .await?

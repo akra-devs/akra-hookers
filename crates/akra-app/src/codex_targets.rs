@@ -34,6 +34,36 @@ struct CodexTarget {
     lifecycle: Arc<CodexHookLifecycleSet>,
     command: Option<Arc<CodexHookCommand>>,
     enable_error: Option<String>,
+    summary_runtimes: Vec<CodexRuntimeDescriptor>,
+}
+
+/// Exact Codex installation used to summarize a captured result. Keeping this
+/// alongside the hook target prevents a Windows capture from accidentally using
+/// a different PATH installation (and likewise prevents WSL from falling back to
+/// the distribution's non-login `codex`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CodexRuntimeDescriptor {
+    Native {
+        capture_target: String,
+        executable: PathBuf,
+        codex_home: PathBuf,
+    },
+    Wsl {
+        capture_target: String,
+        distro: String,
+        executable: String,
+        codex_home: String,
+    },
+}
+
+impl CodexRuntimeDescriptor {
+    fn capture_target(&self) -> &str {
+        match self {
+            Self::Native { capture_target, .. } | Self::Wsl { capture_target, .. } => {
+                capture_target
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -91,27 +121,48 @@ impl CodexTargetRegistry {
                 lifecycle,
                 command: Some(Arc::new(CodexHookCommand::same(command))),
                 enable_error: None,
+                summary_runtimes: native_runtime("default", paths::codex_home())
+                    .into_iter()
+                    .collect(),
             }]),
         }
     }
 
     pub fn explicit(codex_home: PathBuf, command: String) -> Self {
         let display_home = codex_home.to_string_lossy().into_owned();
+        let mut target = target_from_home(
+            "explicit",
+            "Codex",
+            "local",
+            codex_home.clone(),
+            display_home,
+            Ok(CodexHookCommand::same(command)),
+        );
+        target.summary_runtimes = native_runtime("explicit", codex_home).into_iter().collect();
         Self {
-            targets: Arc::from([target_from_home(
-                "explicit",
-                "Codex",
-                "local",
-                codex_home,
-                display_home,
-                Ok(CodexHookCommand::same(command)),
-            )]),
+            targets: Arc::from([target]),
         }
     }
 
     pub fn detect(executable: &Path, data_dir: &Path) -> Self {
         Self {
             targets: Arc::from(detect_targets(executable, data_dir)),
+        }
+    }
+
+    /// Resolves the runtime that owns a captured result. A missing target is
+    /// supported for pre-target records and deterministically selects the first
+    /// detected runtime; an unknown explicit target never crosses installations.
+    pub fn summary_runtime(&self, capture_target: Option<&str>) -> Option<CodexRuntimeDescriptor> {
+        let mut runtimes = self
+            .targets
+            .iter()
+            .flat_map(|target| target.summary_runtimes.iter());
+        match capture_target {
+            Some(capture_target) => runtimes
+                .find(|runtime| runtime.capture_target() == capture_target)
+                .cloned(),
+            None => runtimes.next().cloned(),
         }
     }
 
@@ -125,10 +176,10 @@ impl CodexTargetRegistry {
     ) -> Vec<CodexTargetStatus> {
         self.targets
             .iter()
-            .map(|target| match target.lifecycle.is_enabled() {
-                Ok(enabled) => target.status(
-                    enabled,
-                    enabled || target.command.is_some(),
+            .map(|target| match target_is_installed(target) {
+                Ok(installed) => target.status(
+                    installed,
+                    installed || target.command.is_some(),
                     target.enable_error.clone(),
                     observations,
                 ),
@@ -198,7 +249,7 @@ impl CodexTargetRegistry {
                 .any(|other| {
                     // A broken or temporarily offline installation must not cause a
                     // healthy target toggle to turn off the shared admission gate.
-                    other.lifecycle.is_enabled().unwrap_or(true)
+                    target_is_installed(other).unwrap_or(true)
                 });
         gate.set_enabled(desired_gate)?;
         if let Err(source) = self.write_target(target, enabled) {
@@ -244,14 +295,7 @@ impl CodexTargetRegistry {
             .iter()
             .find(|target| target.id == id)
             .ok_or_else(|| CodexTargetError::UnknownTarget(id.to_owned()))?;
-        let enabled =
-            target
-                .lifecycle
-                .is_enabled()
-                .map_err(|source| CodexTargetError::TargetLifecycle {
-                    target: id.to_owned(),
-                    source: Box::new(source),
-                })?;
+        let enabled = target_is_installed(target)?;
         Ok(CodexTargetSnapshot {
             gate_enabled: gate.is_enabled()?,
             commands: if enabled && target.command.is_none() {
@@ -319,12 +363,7 @@ impl CodexTargetRegistry {
     fn read_states(&self) -> Result<BTreeMap<String, bool>, CodexTargetError> {
         let mut states = BTreeMap::new();
         for target in self.targets.iter() {
-            let enabled = target.lifecycle.is_enabled().map_err(|source| {
-                CodexTargetError::TargetLifecycle {
-                    target: target.id.clone(),
-                    source: Box::new(source),
-                }
-            })?;
+            let enabled = target_is_installed(target)?;
             states.insert(target.id.clone(), enabled);
         }
         Ok(states)
@@ -537,6 +576,17 @@ impl CodexTarget {
     }
 }
 
+fn target_is_installed(target: &CodexTarget) -> Result<bool, CodexTargetError> {
+    target
+        .lifecycle
+        .managed_command()
+        .map(|command| command.is_some())
+        .map_err(|source| CodexTargetError::TargetLifecycle {
+            target: target.id.clone(),
+            source: Box::new(source),
+        })
+}
+
 fn target_from_home(
     id: impl Into<String>,
     label: impl Into<String>,
@@ -569,40 +619,172 @@ fn target_from_home(
         lifecycle: Arc::new(CodexHookLifecycleSet::from_codex_homes([codex_home])),
         command,
         enable_error: configuration_error,
+        summary_runtimes: Vec::new(),
     }
+}
+
+fn native_runtime(
+    capture_target: impl Into<String>,
+    codex_home: PathBuf,
+) -> Option<CodexRuntimeDescriptor> {
+    find_native_codex_binary().map(|executable| CodexRuntimeDescriptor::Native {
+        capture_target: capture_target.into(),
+        executable,
+        codex_home,
+    })
+}
+
+#[cfg(windows)]
+fn find_native_codex_binary() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(explicit) = std::env::var_os("AKRA_CODEX_EXECUTABLE") {
+        let explicit = PathBuf::from(explicit);
+        return codex_binary_is_usable(&explicit)
+            .then(|| explicit.canonicalize().unwrap_or(explicit));
+    }
+
+    // Codex Desktop keeps its launchable CLI outside the access-controlled
+    // WindowsApps package. Prefer it over package aliases that pass metadata
+    // checks but fail CreateProcess with AccessDenied.
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        let bin_root = PathBuf::from(local_app_data)
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin");
+        candidates.extend(codex_binaries_below(&bin_root));
+    }
+
+    for directory in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        candidates.push(
+            directory
+                .join("node_modules")
+                .join("@openai")
+                .join("codex")
+                .join("node_modules")
+                .join("@openai")
+                .join("codex-win32-x64")
+                .join("vendor")
+                .join("x86_64-pc-windows-msvc")
+                .join("bin")
+                .join("codex.exe"),
+        );
+        candidates.push(directory.join("codex.exe"));
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    candidates.into_iter().find_map(|candidate| {
+        let identity = candidate
+            .to_string_lossy()
+            .replace('/', "\\")
+            .to_ascii_lowercase();
+        if !seen.insert(identity) || !codex_binary_is_usable(&candidate) {
+            return None;
+        }
+        Some(candidate.canonicalize().unwrap_or(candidate))
+    })
+}
+
+#[cfg(windows)]
+fn codex_binaries_below(root: &Path) -> Vec<PathBuf> {
+    let mut candidates = std::fs::read_dir(root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .flat_map(|entry| {
+            let path = entry.path();
+            [path.join("codex.exe"), path.join("bin").join("codex.exe")]
+        })
+        .collect::<Vec<_>>();
+    candidates.push(root.join("codex.exe"));
+    candidates.sort_by(|left, right| {
+        let modified = |path: &PathBuf| path.metadata().and_then(|meta| meta.modified()).ok();
+        modified(right).cmp(&modified(left))
+    });
+    candidates
+}
+
+#[cfg(windows)]
+fn codex_binary_is_usable(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    output_bounded(Command::new(path).arg("--version"), Duration::from_secs(2))
+        .is_some_and(|output| output.status.success())
+}
+
+#[cfg(not(windows))]
+fn find_native_codex_binary() -> Option<PathBuf> {
+    if let Some(explicit) = std::env::var_os("AKRA_CODEX_EXECUTABLE") {
+        let explicit = PathBuf::from(explicit);
+        return explicit
+            .is_file()
+            .then(|| explicit.canonicalize().unwrap_or(explicit));
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join("codex"))
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| candidate.canonicalize().unwrap_or(candidate))
 }
 
 #[cfg(windows)]
 fn detect_targets(executable: &Path, data_dir: &Path) -> Vec<CodexTarget> {
     let mut targets = Vec::new();
     let default_home = paths::user_home().join(".codex");
-    push_detected_target(
-        &mut targets,
-        target_from_home(
+    let native_executable = find_native_codex_binary();
+    let default_display_home = default_home.to_string_lossy().into_owned();
+    let mut default_target = target_from_home(
+        "windows-native",
+        "Codex App + CLI",
+        "windows",
+        default_home.clone(),
+        default_display_home.clone(),
+        paths::hook_command_for_target_and_home(
+            executable,
+            data_dir,
             "windows-native",
-            "Codex App + CLI",
-            "windows",
-            default_home.clone(),
-            default_home.to_string_lossy().into_owned(),
-            paths::hook_command_for_target(executable, data_dir, "windows-native")
-                .map(CodexHookCommand::same),
-        ),
+            &default_display_home,
+        )
+        .map(CodexHookCommand::same),
     );
+    default_target.summary_runtimes = native_executable
+        .as_ref()
+        .map(|executable| CodexRuntimeDescriptor::Native {
+            capture_target: "windows-native".to_owned(),
+            executable: executable.clone(),
+            codex_home: default_home.clone(),
+        })
+        .into_iter()
+        .collect();
+    push_detected_target(&mut targets, default_target);
 
     let configured_home = paths::codex_home();
     if home_identity(&configured_home) != home_identity(&default_home) {
-        push_detected_target(
-            &mut targets,
-            target_from_home(
+        let configured_display_home = configured_home.to_string_lossy().into_owned();
+        let mut configured_target = target_from_home(
+            "windows-custom",
+            "Codex custom home",
+            "windows",
+            configured_home.clone(),
+            configured_display_home.clone(),
+            paths::hook_command_for_target_and_home(
+                executable,
+                data_dir,
                 "windows-custom",
-                "Codex custom home",
-                "windows",
-                configured_home.clone(),
-                configured_home.to_string_lossy().into_owned(),
-                paths::hook_command_for_target(executable, data_dir, "windows-custom")
-                    .map(CodexHookCommand::same),
-            ),
+                &configured_display_home,
+            )
+            .map(CodexHookCommand::same),
         );
+        configured_target.summary_runtimes = native_executable
+            .as_ref()
+            .map(|executable| CodexRuntimeDescriptor::Native {
+                capture_target: "windows-custom".to_owned(),
+                executable: executable.clone(),
+                codex_home: configured_home.clone(),
+            })
+            .into_iter()
+            .collect();
+        push_detected_target(&mut targets, configured_target);
     }
 
     // Explicit --home isolation is handled by CodexTargetRegistry::explicit;
@@ -622,15 +804,29 @@ fn detect_targets(executable: &Path, data_dir: &Path) -> Vec<CodexTarget> {
             continue;
         }
         let target_id = format!("wsl:{}", probe.distro);
-        let target = target_from_home(
+        let mut target = target_from_home(
             target_id.clone(),
             format!("Codex · {}", probe.distro),
             "wsl",
             codex_home,
-            probe.codex_home,
-            paths::wsl_hook_command_for_target(executable, data_dir, &probe.distro, &target_id)
-                .map(CodexHookCommand::posix),
+            probe.codex_home.clone(),
+            paths::wsl_hook_command_for_target_and_home(
+                executable,
+                data_dir,
+                &probe.distro,
+                &target_id,
+                &probe.codex_home,
+            )
+            .map(CodexHookCommand::posix),
         );
+        if probe.codex_binary.starts_with('/') && probe.codex_home.starts_with('/') {
+            target.summary_runtimes.push(CodexRuntimeDescriptor::Wsl {
+                capture_target: target_id,
+                distro: probe.distro,
+                executable: probe.codex_binary,
+                codex_home: probe.codex_home,
+            });
+        }
         merge_or_push_wsl_target(&mut targets, target, executable, data_dir);
     }
     targets
@@ -639,14 +835,18 @@ fn detect_targets(executable: &Path, data_dir: &Path) -> Vec<CodexTarget> {
 #[cfg(not(windows))]
 fn detect_targets(executable: &Path, data_dir: &Path) -> Vec<CodexTarget> {
     let codex_home = paths::codex_home();
-    vec![target_from_home(
+    let display_home = codex_home.to_string_lossy().into_owned();
+    let mut target = target_from_home(
         "local",
         "Codex CLI",
         "posix",
         codex_home.clone(),
-        codex_home.to_string_lossy().into_owned(),
-        paths::hook_command_for_target(executable, data_dir, "local").map(CodexHookCommand::same),
-    )]
+        display_home.clone(),
+        paths::hook_command_for_target_and_home(executable, data_dir, "local", &display_home)
+            .map(CodexHookCommand::same),
+    );
+    target.summary_runtimes = native_runtime("local", codex_home).into_iter().collect();
+    vec![target]
 }
 
 #[cfg(windows)]
@@ -665,6 +865,8 @@ fn merge_or_push_wsl_target(
     executable: &Path,
     data_dir: &Path,
 ) {
+    let wsl_codex_home = target.codex_home.clone().unwrap_or_default();
+    let wsl_runtimes = target.summary_runtimes.clone();
     let Some(existing) = targets.iter_mut().find(|existing| {
         home_identity(&existing.physical_codex_home) == home_identity(&target.physical_codex_home)
     }) else {
@@ -677,12 +879,22 @@ fn merge_or_push_wsl_target(
     } else {
         "Codex shared home".to_owned()
     };
-    match paths::shared_wsl_hook_command_for_target(executable, data_dir, &existing.id).and_then(
-        |command| {
-            paths::hook_command_for_target(executable, data_dir, &existing.id)
-                .map(|command_windows| CodexHookCommand::with_windows(command, command_windows))
-        },
-    ) {
+    let windows_codex_home = existing.codex_home.clone().unwrap_or_default();
+    match paths::shared_wsl_hook_command_for_target_and_home(
+        executable,
+        data_dir,
+        &existing.id,
+        &wsl_codex_home,
+    )
+    .and_then(|command| {
+        paths::hook_command_for_target_and_home(
+            executable,
+            data_dir,
+            &existing.id,
+            &windows_codex_home,
+        )
+        .map(|command_windows| CodexHookCommand::with_windows(command, command_windows))
+    }) {
         Ok(command) => {
             existing.command = Some(Arc::new(command));
             existing.enable_error = None;
@@ -692,6 +904,7 @@ fn merge_or_push_wsl_target(
             existing.enable_error = Some(error.to_string());
         }
     }
+    existing.summary_runtimes.extend(wsl_runtimes);
 }
 
 #[cfg(windows)]
@@ -915,6 +1128,46 @@ mod tests {
     }
 
     #[test]
+    fn summary_runtime_lookup_preserves_target_binary_and_home() {
+        let home = TempDir::new().expect("Codex home");
+        let mut target = target_from_home(
+            "windows-custom",
+            "Custom Codex",
+            "test",
+            home.path().to_path_buf(),
+            home.path().to_string_lossy().into_owned(),
+            Ok(CodexHookCommand::same("capture command")),
+        );
+        target
+            .summary_runtimes
+            .push(CodexRuntimeDescriptor::Native {
+                capture_target: "windows-custom".to_owned(),
+                executable: PathBuf::from(r"C:\exact\codex.exe"),
+                codex_home: PathBuf::from(r"D:\exact\.codex"),
+            });
+        target.summary_runtimes.push(CodexRuntimeDescriptor::Wsl {
+            capture_target: "wsl:Ubuntu".to_owned(),
+            distro: "Ubuntu".to_owned(),
+            executable: "/home/alex/.local/bin/codex".to_owned(),
+            codex_home: "/home/alex/.codex-custom".to_owned(),
+        });
+        let registry = CodexTargetRegistry {
+            targets: Arc::from([target]),
+        };
+
+        assert_eq!(
+            registry.summary_runtime(Some("wsl:Ubuntu")),
+            Some(CodexRuntimeDescriptor::Wsl {
+                capture_target: "wsl:Ubuntu".to_owned(),
+                distro: "Ubuntu".to_owned(),
+                executable: "/home/alex/.local/bin/codex".to_owned(),
+                codex_home: "/home/alex/.codex-custom".to_owned(),
+            })
+        );
+        assert!(registry.summary_runtime(Some("wsl:Debian")).is_none());
+    }
+
+    #[test]
     fn individual_targets_keep_the_global_gate_enabled_until_the_last_hook_is_off() {
         let homes = TempDir::new().expect("Codex homes");
         let state = TempDir::new().expect("capture state");
@@ -1114,6 +1367,78 @@ mod tests {
         let statuses = registry.statuses();
         assert!(statuses[0].enabled);
         assert!(!statuses[1].enabled);
+    }
+
+    #[test]
+    fn reconcile_preserves_the_selected_target_when_legacy_manifest_has_two_hooks() {
+        let homes = TempDir::new().expect("Codex homes");
+        let state = TempDir::new().expect("capture state");
+        let first_home = homes.path().join("first");
+        let selected_home = homes.path().join("selected");
+        std::fs::create_dir_all(&selected_home).expect("selected home");
+        std::fs::write(
+            selected_home.join("hooks.json"),
+            br#"{
+  "hooks": {
+    "UserPromptSubmit": [{ "hooks": [{
+      "type": "command",
+      "command": "legacy selected command",
+      "commandWindows": "legacy selected command",
+      "akraHookersManaged": true,
+      "timeout": 5
+    }] }],
+    "SubagentStart": [{ "hooks": [{
+      "type": "command",
+      "command": "legacy selected command",
+      "commandWindows": "legacy selected command",
+      "akraHookersManaged": true,
+      "timeout": 5
+    }] }]
+  }
+}"#,
+        )
+        .expect("legacy two-hook manifest");
+        let registry = CodexTargetRegistry {
+            targets: Arc::from([
+                target_from_home(
+                    "first",
+                    "First Codex",
+                    "test",
+                    first_home.clone(),
+                    first_home.to_string_lossy().into_owned(),
+                    Ok(CodexHookCommand::same("first current command")),
+                ),
+                target_from_home(
+                    "selected",
+                    "Selected Codex",
+                    "test",
+                    selected_home.clone(),
+                    selected_home.to_string_lossy().into_owned(),
+                    Ok(CodexHookCommand::same("selected current command")),
+                ),
+            ]),
+        };
+        let gate = CaptureGate::new(state.path());
+        gate.set_enabled(true).expect("gate on");
+
+        registry
+            .reconcile(&gate)
+            .expect("upgrade selected target in place");
+
+        assert!(
+            !first_home.join("hooks.json").exists(),
+            "reconcile must not move selection to the first available target"
+        );
+        assert!(
+            registry.targets[1]
+                .lifecycle
+                .is_enabled()
+                .expect("selected target is now complete")
+        );
+        let manifest =
+            std::fs::read_to_string(selected_home.join("hooks.json")).expect("selected manifest");
+        assert!(manifest.contains("selected current command"));
+        assert!(manifest.contains("Stop"));
     }
 
     #[test]

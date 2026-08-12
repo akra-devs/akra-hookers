@@ -4,7 +4,7 @@ use akra_core::ingress::ActivityKind;
 
 use crate::{
     ActivityProjectSummary, ActivityStore, ActivitySummary, ActivityTimeProvenance,
-    ActivityTimeSummary, StoreError,
+    ActivityTimeSummary, ResultSummaryStatus, StoreError,
 };
 
 const MAX_SUMMARY_PROMPT_CHARS: usize = 280;
@@ -22,6 +22,37 @@ pub enum ActivityOrder {
     Newest,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivityKindFilter {
+    include_subagent: bool,
+    include_internal: bool,
+}
+
+impl ActivityKindFilter {
+    pub const ALL: Self = Self::new(true, true);
+
+    pub const fn new(include_subagent: bool, include_internal: bool) -> Self {
+        Self {
+            include_subagent,
+            include_internal,
+        }
+    }
+
+    pub(crate) const fn include_subagent(self) -> i64 {
+        self.include_subagent as i64
+    }
+
+    pub(crate) const fn include_internal(self) -> i64 {
+        self.include_internal as i64
+    }
+}
+
+impl Default for ActivityKindFilter {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
 type SummaryRow = (
     i64,
     String,
@@ -33,6 +64,7 @@ type SummaryRow = (
     Option<i64>,
     i64,
     i64,
+    String,
 );
 
 impl ActivityStore {
@@ -135,7 +167,14 @@ impl ActivityStore {
              )
              SELECT id, provider, activity_kind, prompt, effective_project_id, project_name,
                     captured_at_us, first_recorded_at_us,
-                    conversation_index, conversation_total
+                    conversation_index, conversation_total,
+                    COALESCE(
+                        (
+                            SELECT state FROM activity_result_summaries
+                            WHERE activity_event_id = numbered.id
+                        ),
+                        'unavailable'
+                    ) AS result_summary_state
              FROM numbered
              WHERE (
                     (? = 'all')
@@ -222,6 +261,24 @@ impl ActivityStore {
         limit: i64,
         order: ActivityOrder,
     ) -> Result<Vec<ActivitySummary>, StoreError> {
+        self.activity_summaries_indexed_page_filtered(
+            scope,
+            cursor_id,
+            limit,
+            order,
+            ActivityKindFilter::ALL,
+        )
+        .await
+    }
+
+    pub async fn activity_summaries_indexed_page_filtered(
+        &self,
+        scope: ActivityScope,
+        cursor_id: Option<i64>,
+        limit: i64,
+        order: ActivityOrder,
+        activity_filter: ActivityKindFilter,
+    ) -> Result<Vec<ActivitySummary>, StoreError> {
         let (scope_name, project_id) = match scope {
             ActivityScope::All => ("all", None),
             ActivityScope::Inbox => ("inbox", None),
@@ -270,6 +327,11 @@ impl ActivityStore {
                         (?2 = 'all')
                      OR (?2 = 'inbox' AND effective_project_id IS NULL)
                      OR (?2 = 'project' AND effective_project_id = ?3)
+                 )
+                 AND (
+                        effective.activity_kind = 'user'
+                     OR (?6 = 1 AND effective.activity_kind = 'subagent')
+                     OR (?7 = 1 AND effective.activity_kind = 'internal')
                  )
                  AND (
                      ?1 IS NULL
@@ -334,6 +396,11 @@ impl ActivityStore {
                         WHERE turn.provider = page.provider
                           AND turn.provider_session_id = page.provider_session_id
                           AND (
+                                 turn.activity_kind = 'user'
+                              OR (?6 = 1 AND turn.activity_kind = 'subagent')
+                              OR (?7 = 1 AND turn.activity_kind = 'internal')
+                          )
+                          AND (
                               (
                                   COALESCE(page.captured_at_us, page.first_recorded_at_us) IS NULL
                                   AND (
@@ -381,7 +448,19 @@ impl ActivityStore {
                         SELECT COUNT(*) FROM activity_events AS turn
                         WHERE turn.provider = page.provider
                           AND turn.provider_session_id = page.provider_session_id
-                    ) AS conversation_total
+                          AND (
+                                 turn.activity_kind = 'user'
+                              OR (?6 = 1 AND turn.activity_kind = 'subagent')
+                              OR (?7 = 1 AND turn.activity_kind = 'internal')
+                          )
+                    ) AS conversation_total,
+                    COALESCE(
+                        (
+                            SELECT state FROM activity_result_summaries
+                            WHERE activity_event_id = page.id
+                        ),
+                        'unavailable'
+                    ) AS result_summary_state
              FROM page
              LEFT JOIN projects ON projects.id = page.effective_project_id
              ORDER BY page.global_sequence IS NULL,
@@ -395,12 +474,23 @@ impl ActivityStore {
         .bind(project_id)
         .bind(order_name)
         .bind(limit)
+        .bind(activity_filter.include_subagent())
+        .bind(activity_filter.include_internal())
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(summary_from_row).collect()
     }
 
     pub async fn activity_summary_count(&self, scope: ActivityScope) -> Result<i64, StoreError> {
+        self.activity_summary_count_filtered(scope, ActivityKindFilter::ALL)
+            .await
+    }
+
+    pub async fn activity_summary_count_filtered(
+        &self,
+        scope: ActivityScope,
+        activity_filter: ActivityKindFilter,
+    ) -> Result<i64, StoreError> {
         let (scope_name, project_id) = match scope {
             ActivityScope::All => ("all", None),
             ActivityScope::Inbox => ("inbox", None),
@@ -417,7 +507,8 @@ impl ActivityStore {
         };
         Ok(sqlx::query_scalar(
             "WITH effective AS (
-                 SELECT CASE
+                 SELECT activity_events.activity_kind,
+                        CASE
                             WHEN activity_origins.routing_mode = 'dedicated'
                             THEN activity_origins.default_project_id
                             ELSE activity_project_assignments.project_id
@@ -429,14 +520,23 @@ impl ActivityStore {
                    ON activity_project_assignments.activity_event_id = activity_events.id
              )
              SELECT COUNT(*) FROM effective
-             WHERE (? = 'all')
-                OR (? = 'inbox' AND effective_project_id IS NULL)
-                OR (? = 'project' AND effective_project_id = ?)",
+             WHERE (
+                    (?1 = 'all')
+                 OR (?2 = 'inbox' AND effective_project_id IS NULL)
+                 OR (?3 = 'project' AND effective_project_id = ?4)
+             )
+             AND (
+                    activity_kind = 'user'
+                 OR (?5 = 1 AND activity_kind = 'subagent')
+                 OR (?6 = 1 AND activity_kind = 'internal')
+             )",
         )
         .bind(scope_name)
         .bind(scope_name)
         .bind(scope_name)
         .bind(project_id)
+        .bind(activity_filter.include_subagent())
+        .bind(activity_filter.include_internal())
         .fetch_one(&self.pool)
         .await?)
     }
@@ -454,6 +554,7 @@ fn summary_from_row(row: SummaryRow) -> Result<ActivitySummary, StoreError> {
         first_recorded_at_us,
         conversation_index,
         conversation_total,
+        result_summary_state,
     ) = row;
     let project = project_summary(project_id, project_name)?;
     Ok(ActivitySummary {
@@ -467,7 +568,20 @@ fn summary_from_row(row: SummaryRow) -> Result<ActivitySummary, StoreError> {
         time: activity_time(captured_at_us, first_recorded_at_us)?,
         conversation_index,
         conversation_total,
+        result_summary_status: result_summary_status(&result_summary_state)?,
     })
+}
+
+pub(crate) fn result_summary_status(value: &str) -> Result<ResultSummaryStatus, StoreError> {
+    match value {
+        "pending" | "running" | "retry_wait" => Ok(ResultSummaryStatus::Pending),
+        "succeeded" => Ok(ResultSummaryStatus::Ready),
+        "failed" => Ok(ResultSummaryStatus::Failed),
+        "skipped" | "unavailable" => Ok(ResultSummaryStatus::Unavailable),
+        _ => Err(StoreError::Invariant(format!(
+            "invalid result summary state: {value}"
+        ))),
+    }
 }
 
 fn prompt_preview(prompt: &str) -> String {

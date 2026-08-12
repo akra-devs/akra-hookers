@@ -17,12 +17,16 @@ pub(crate) struct ActivityQuery {
     limit: Option<i64>,
     after_id: Option<i64>,
     order: Option<String>,
+    include_subagent: Option<bool>,
+    include_internal: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
 pub(crate) struct ActivityDetailQuery {
     conversation_limit: Option<i64>,
     conversation_after_id: Option<i64>,
+    include_subagent: Option<bool>,
+    include_internal: Option<bool>,
 }
 
 pub(crate) async fn activities(
@@ -32,10 +36,17 @@ pub(crate) async fn activities(
     let scope = activity_scope(&query)?;
     let limit = page_limit(query.limit)?;
     let order = activity_order(query.order.as_deref())?;
+    let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
     validate_cursor(query.after_id)?;
     state
         .store
-        .activity_summaries_indexed_page(scope, query.after_id, limit, order)
+        .activity_summaries_indexed_page_filtered(
+            scope,
+            query.after_id,
+            limit,
+            order,
+            activity_filter,
+        )
         .await
         .map(Json)
         .map_err(ApiError::from_store)
@@ -51,9 +62,10 @@ pub(crate) async fn activity_count(
     Query(query): Query<ActivityQuery>,
 ) -> Result<Json<ActivityCountResponse>, ApiError> {
     let scope = activity_scope(&query)?;
+    let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
     state
         .store
-        .activity_summary_count(scope)
+        .activity_summary_count_filtered(scope, activity_filter)
         .await
         .map(|count| Json(ActivityCountResponse { count }))
         .map_err(ApiError::from_store)
@@ -65,10 +77,16 @@ pub(crate) async fn activity_detail(
     Query(query): Query<ActivityDetailQuery>,
 ) -> Result<Json<akra_store::ActivityDetail>, ApiError> {
     let limit = page_limit(query.conversation_limit)?;
+    let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
     validate_cursor(query.conversation_after_id)?;
     state
         .store
-        .activity_detail_page(activity_id, query.conversation_after_id, limit)
+        .activity_detail_page_filtered(
+            activity_id,
+            query.conversation_after_id,
+            limit,
+            activity_filter,
+        )
         .await
         .map(Json)
         .map_err(ApiError::from_store)
@@ -99,6 +117,16 @@ fn activity_order(order: Option<&str>) -> Result<akra_store::ActivityOrder, ApiE
         "newest" => Ok(akra_store::ActivityOrder::Newest),
         _ => Err(invalid_pagination("Activity page order is invalid.")),
     }
+}
+
+fn activity_kind_filter(
+    include_subagent: Option<bool>,
+    include_internal: Option<bool>,
+) -> akra_store::ActivityKindFilter {
+    akra_store::ActivityKindFilter::new(
+        include_subagent.unwrap_or(true),
+        include_internal.unwrap_or(true),
+    )
 }
 
 fn page_limit(requested: Option<i64>) -> Result<i64, ApiError> {

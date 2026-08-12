@@ -6,6 +6,7 @@ use toml_edit::{DocumentMut, Item, Table, TableLike, value};
 
 use super::{
     CAPTURE_HOOK_TIMEOUT_SECONDS, CodexHookCommand, CodexLifecycleError, HookEvent, HookLocation,
+    HookLocationMove,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -25,6 +26,7 @@ pub(super) fn prepare_config(
     manifest_path: &Path,
     original: Option<&[u8]>,
     previous_locations: &[HookLocation],
+    retained_moves: &[HookLocationMove],
     installed: Option<(&[HookLocation], &CodexHookCommand)>,
 ) -> Result<Option<Vec<u8>>, CodexLifecycleError> {
     if original.is_none() && installed.is_none() {
@@ -50,12 +52,10 @@ pub(super) fn prepare_config(
     };
     let sources = trust_sources(manifest_path);
 
-    if !previous_locations.is_empty()
+    if (!previous_locations.is_empty() || !retained_moves.is_empty())
         && let Some(state) = existing_state_table(&mut document, config_path)?
     {
-        for key in state_keys(&sources, previous_locations) {
-            state.remove(&key);
-        }
+        rewrite_existing_state(state, &sources, previous_locations, retained_moves);
     }
 
     if let Some((locations, command)) = installed {
@@ -86,6 +86,42 @@ pub(super) fn prepare_config(
         Ok(original.map(ToOwned::to_owned))
     } else {
         Ok(Some(intended))
+    }
+}
+
+fn rewrite_existing_state(
+    state: &mut dyn TableLike,
+    sources: &[TrustSource],
+    removed_locations: &[HookLocation],
+    retained_moves: &[HookLocationMove],
+) {
+    for source in sources {
+        for hook_path in source_path_aliases(source) {
+            // Snapshot every source before deleting any destination. Location
+            // moves can form chains such as group 2 -> 1 and group 1 -> 0.
+            let moved = retained_moves
+                .iter()
+                .map(|movement| {
+                    let previous = hook_state_key(&hook_path, movement.previous);
+                    let current = hook_state_key(&hook_path, movement.current);
+                    (current, state.remove(&previous))
+                })
+                .collect::<Vec<_>>();
+
+            for location in removed_locations {
+                state.remove(&hook_state_key(&hook_path, *location));
+            }
+            for (current, _) in &moved {
+                // A moved hook must never inherit stale trust from the hook that
+                // previously occupied its destination location.
+                state.remove(current);
+            }
+            for (current, item) in moved {
+                if let Some(item) = item {
+                    state.insert(&current, item);
+                }
+            }
+        }
     }
 }
 
@@ -125,19 +161,6 @@ fn ensure_state_table<'a>(
     state
         .as_table_like_mut()
         .ok_or_else(|| CodexLifecycleError::InvalidConfigShape(config_path.to_path_buf()))
-}
-
-fn state_keys(sources: &[TrustSource], locations: &[HookLocation]) -> BTreeSet<String> {
-    sources
-        .iter()
-        .flat_map(source_path_aliases)
-        .flat_map(|path| {
-            locations
-                .iter()
-                .copied()
-                .map(move |location| hook_state_key(&path, location))
-        })
-        .collect()
 }
 
 fn hook_state_key(hook_path: &str, location: HookLocation) -> String {
@@ -327,6 +350,14 @@ mod tests {
     }
 
     #[test]
+    fn stop_hash_uses_the_codex_stop_event_identity() {
+        assert_eq!(
+            trusted_hash_for_event(HookEvent::Stop, "akra-hookers capture"),
+            "sha256:4f7f1f0694961d4fca79850f24d092f60ab4f723b0faa91adb452073449a5ac2"
+        );
+    }
+
+    #[test]
     fn config_update_preserves_unrelated_settings_and_trust_entries() {
         let config_path = Path::new("/tmp/.codex/config.toml");
         let manifest_path = Path::new("/tmp/.codex/hooks.json");
@@ -342,6 +373,7 @@ trusted_hash = "sha256:other"
             config_path,
             manifest_path,
             Some(original),
+            &[],
             &[],
             Some((&[user_location(1, 0)], &command)),
         )
@@ -377,6 +409,7 @@ trusted_hash = "sha256:other"
             manifest_path,
             Some(original),
             &[user_location(1, 0)],
+            &[],
             None,
         )
         .expect("config update")
@@ -439,6 +472,7 @@ trusted_hash = "sha256:stale"
             manifest_path,
             Some(original),
             &[user_location(0, 0)],
+            &[],
             Some((&[user_location(0, 0)], &command)),
         )
         .expect("config update")
@@ -469,6 +503,7 @@ trusted_hash = "sha256:stale"
             config_path,
             manifest_path,
             None,
+            &[],
             &[],
             Some((&[user_location(0, 0)], &command)),
         )

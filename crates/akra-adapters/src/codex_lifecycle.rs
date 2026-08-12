@@ -107,12 +107,18 @@ impl CodexHookLifecycle {
 
     pub fn is_enabled(&self) -> Result<bool, CodexLifecycleError> {
         let hooks = self.read_hooks()?;
-        Ok(hooks
-            .hooks
-            .user_prompt_submit
-            .iter()
-            .flat_map(|group| &group.hooks)
-            .any(CodexHook::is_akra_hook))
+        Ok([
+            &hooks.hooks.user_prompt_submit,
+            &hooks.hooks.subagent_start,
+            &hooks.hooks.stop,
+        ]
+        .into_iter()
+        .all(|groups| {
+            groups
+                .iter()
+                .flat_map(|group| &group.hooks)
+                .any(CodexHook::is_akra_hook)
+        }))
     }
 
     fn managed_command(&self) -> Result<Option<CodexHookCommand>, CodexLifecycleError> {
@@ -320,6 +326,7 @@ fn is_wsl_unc(path: &Path) -> bool {
 enum HookEvent {
     UserPromptSubmit,
     SubagentStart,
+    Stop,
 }
 
 impl HookEvent {
@@ -327,6 +334,7 @@ impl HookEvent {
         match self {
             Self::UserPromptSubmit => "user_prompt_submit",
             Self::SubagentStart => "subagent_start",
+            Self::Stop => "stop",
         }
     }
 }
@@ -336,6 +344,18 @@ struct HookLocation {
     event: HookEvent,
     group: usize,
     handler: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HookLocationMove {
+    previous: HookLocation,
+    current: HookLocation,
+}
+
+#[derive(Debug, Default)]
+struct RemovedAkraHooks {
+    managed_locations: Vec<HookLocation>,
+    retained_moves: Vec<HookLocationMove>,
 }
 
 impl HookLocation {
@@ -348,38 +368,60 @@ impl HookLocation {
     }
 }
 
-fn remove_akra_hooks(hooks: &mut CodexHooksFile) -> Vec<HookLocation> {
-    let mut locations = Vec::new();
+fn remove_akra_hooks(hooks: &mut CodexHooksFile) -> RemovedAkraHooks {
+    let mut removed = RemovedAkraHooks::default();
     remove_akra_event_hooks(
         HookEvent::UserPromptSubmit,
         &mut hooks.hooks.user_prompt_submit,
-        &mut locations,
+        &mut removed,
     );
     remove_akra_event_hooks(
         HookEvent::SubagentStart,
         &mut hooks.hooks.subagent_start,
-        &mut locations,
+        &mut removed,
     );
-    locations
+    remove_akra_event_hooks(HookEvent::Stop, &mut hooks.hooks.stop, &mut removed);
+    removed
 }
 
 fn remove_akra_event_hooks(
     event: HookEvent,
     groups: &mut Vec<CodexMatcherGroup>,
-    locations: &mut Vec<HookLocation>,
+    removed: &mut RemovedAkraHooks,
 ) {
-    for (group_index, group) in groups.iter_mut().enumerate() {
-        let mut retained = Vec::with_capacity(group.hooks.len());
-        for (handler_index, hook) in group.hooks.drain(..).enumerate() {
+    let mut retained_groups = Vec::with_capacity(groups.len());
+    for (previous_group, mut group) in groups.drain(..).enumerate() {
+        let mut retained_hooks = Vec::with_capacity(group.hooks.len());
+        for (previous_handler, hook) in group.hooks.drain(..).enumerate() {
             if hook.is_akra_hook() {
-                locations.push(HookLocation::new(event, group_index, handler_index));
+                removed.managed_locations.push(HookLocation::new(
+                    event,
+                    previous_group,
+                    previous_handler,
+                ));
             } else {
-                retained.push(hook);
+                retained_hooks.push((previous_handler, hook));
             }
         }
-        group.hooks = retained;
+        if retained_hooks.is_empty() {
+            continue;
+        }
+
+        let current_group = retained_groups.len();
+        group.hooks = Vec::with_capacity(retained_hooks.len());
+        for (current_handler, (previous_handler, hook)) in retained_hooks.into_iter().enumerate() {
+            let previous = HookLocation::new(event, previous_group, previous_handler);
+            let current = HookLocation::new(event, current_group, current_handler);
+            if previous != current {
+                removed
+                    .retained_moves
+                    .push(HookLocationMove { previous, current });
+            }
+            group.hooks.push(hook);
+        }
+        retained_groups.push(group);
     }
-    groups.retain(|group| !group.hooks.is_empty());
+    *groups = retained_groups;
 }
 
 fn append_akra_hooks(hooks: &mut CodexHooksFile, command: &CodexHookCommand) -> Vec<HookLocation> {
@@ -401,7 +443,9 @@ fn append_akra_hooks(hooks: &mut CodexHooksFile, command: &CodexHookCommand) -> 
         .hooks
         .subagent_start
         .push(CodexMatcherGroup::akra_hook(command));
-    vec![user_prompt, subagent]
+    let stop = HookLocation::new(HookEvent::Stop, hooks.hooks.stop.len(), 0);
+    hooks.hooks.stop.push(CodexMatcherGroup::akra_hook(command));
+    vec![user_prompt, subagent, stop]
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -420,6 +464,8 @@ struct CodexHookEvents {
     user_prompt_submit: Vec<CodexMatcherGroup>,
     #[serde(rename = "SubagentStart", default)]
     subagent_start: Vec<CodexMatcherGroup>,
+    #[serde(rename = "Stop", default)]
+    stop: Vec<CodexMatcherGroup>,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }

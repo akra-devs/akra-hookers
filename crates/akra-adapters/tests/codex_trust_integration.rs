@@ -98,8 +98,8 @@ fn assert_trusted_hook(response: &Value, expected_command: &str) {
     };
     assert_eq!(
         hooks.len(),
-        2,
-        "UserPromptSubmit and SubagentStart must both be installed: {response}"
+        3,
+        "UserPromptSubmit, SubagentStart, and Stop must all be installed: {response}"
     );
     for hook in hooks {
         assert_eq!(hook["trustStatus"], "trusted", "response: {response}");

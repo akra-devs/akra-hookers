@@ -21,15 +21,18 @@ mod migration_v4;
 mod migration_v5;
 mod migration_v6;
 mod migration_v7;
+mod migration_v8;
+mod migration_v9;
 mod models;
 mod origin_transitions;
 mod origins;
 mod project_names;
 mod projects;
 mod providers;
+mod result_summaries;
 mod routing;
 
-pub use activities::{ActivityOrder, ActivityScope};
+pub use activities::{ActivityKindFilter, ActivityOrder, ActivityScope};
 pub use activity_assignments::{
     ActivityAssignmentCommand, ActivityAssignmentResult, AssignmentDestination, FutureRouteAction,
     MAX_ACTIVITY_ASSIGNMENT_BATCH,
@@ -38,11 +41,18 @@ pub use capture_sources::CaptureClientObservation;
 pub use ingest::RecordActivity;
 pub use models::{
     ActivityConversationTurn, ActivityDetail, ActivityOriginDetail, ActivityProjectSummary,
-    ActivitySummary, ActivityTechnicalDetail, ActivityTimeProvenance, ActivityTimeSummary,
-    CanvasEdgeSummary, CanvasNodeSummary, OriginSummary, ProjectSummary, ProviderIntegration,
+    ActivityResultSummary, ActivitySummary, ActivityTechnicalDetail, ActivityTimeProvenance,
+    ActivityTimeSummary, CanvasEdgeSummary, CanvasNodeSummary, OriginSummary, ProjectSummary,
+    ProviderIntegration, ResultSummaryStatus,
 };
 pub use origin_transitions::{OriginRoutingCommand, OriginRoutingMode, ProjectDestination};
 pub use project_names::{ProjectName, ProjectNameError, ProjectNames};
+pub use result_summaries::{
+    MAX_RESULT_SOURCE_RETENTION_US, MAX_RESULT_SUMMARY_ATTEMPTS, MAX_RESULT_SUMMARY_CHARS,
+    RESULT_SUMMARY_MODEL, RecordResult, ResultCaptureOutcome, ResultSummary, ResultSummaryClaim,
+    ResultSummaryFailureDisposition, ResultSummaryLines, ResultSummaryState,
+    ResultSummaryValidationError,
+};
 
 #[derive(Debug)]
 pub struct ActivityStore {
@@ -93,4 +103,8 @@ pub enum StoreError {
     SameProjectMerge,
     #[error("store invariant violated: {0}")]
     Invariant(String),
+    #[error("result summary lease duration must be positive and must not overflow")]
+    InvalidResultSummaryLease,
+    #[error(transparent)]
+    InvalidResultSummary(#[from] ResultSummaryValidationError),
 }

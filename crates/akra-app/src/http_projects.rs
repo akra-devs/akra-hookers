@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use serde::Deserialize;
@@ -17,12 +17,22 @@ pub(crate) struct ProjectMergePayload {
     target_project_id: i64,
 }
 
+#[derive(Default, Deserialize)]
+pub(crate) struct ProjectQuery {
+    include_subagent: Option<bool>,
+    include_internal: Option<bool>,
+}
+
 pub(crate) async fn projects(
     State(state): State<AppState>,
+    Query(query): Query<ProjectQuery>,
 ) -> Result<Json<Vec<akra_store::ProjectSummary>>, ApiError> {
     state
         .store
-        .projects()
+        .projects_filtered(akra_store::ActivityKindFilter::new(
+            query.include_subagent.unwrap_or(true),
+            query.include_internal.unwrap_or(true),
+        ))
         .await
         .map(Json)
         .map_err(ApiError::from_store)

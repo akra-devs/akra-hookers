@@ -79,6 +79,9 @@ function syncDetails(api: FixtureApi) {
         time: activity.time,
         on_canvas: visible.has(activity.id),
         selected: true,
+        result_summary: activity.id === detail.id
+          ? detail.result_summary
+          : { status: "unavailable", lines: null },
       };
       detail.conversation_total = activities.length;
       detail.conversation_has_more = false;
@@ -89,6 +92,9 @@ function syncDetails(api: FixtureApi) {
       id: activity.id, activity_kind: activity.activity_kind,
       prompt: activity.prompt, project: activity.project, time: activity.time,
       on_canvas: visible.has(activity.id), selected: activity.id === detail.id,
+      result_summary: activity.id === detail.id
+        ? detail.result_summary
+        : { status: "unavailable", lines: null },
     }));
   }
 }
@@ -97,6 +103,7 @@ test("conversation pages load explicitly without duplicate turns", async ({ page
   const detail = api.state.details[1]!;
   const initial = structuredClone(detail.conversation[0]!);
   const later = structuredClone(detail.conversation[1]!);
+  later.result_summary = { status: "pending", lines: null };
   detail.conversation = [initial];
   detail.conversation_total = 2;
   detail.conversation_has_more = true;
@@ -125,6 +132,15 @@ test("conversation pages load explicitly without duplicate turns", async ({ page
   await expect(detailPanel.getByRole("heading", { name: "대화 기록 (2/2)" })).toBeVisible();
   await expect(detailPanel.locator(".activity-detail__turn")).toHaveCount(2);
   await expect(detailPanel.getByRole("button", { name: "대화 기록 더 보기" })).toHaveCount(0);
+  await expect(detailPanel.getByText("결과 요약 중", { exact: true })).toBeVisible();
+
+  later.result_summary = {
+    status: "ready",
+    lines: ["갱신된 첫 줄", "갱신된 둘째 줄", "갱신된 셋째 줄"],
+  };
+  await expect(detailPanel.getByText("결과 요약 보기", { exact: true })).toBeVisible({
+    timeout: 2_500,
+  });
 });
 
 test("a selected turn outside the first conversation page is visible immediately", async ({
@@ -185,7 +201,7 @@ test("a card opens a right detail column with truthful Korean metadata and guard
 
 test("a failed detail request renders an alert and supports an explicit retry", async ({ page }) => {
   let rejectDetail = true;
-  await page.route("**/v1/activities/1", async (route) => {
+  await page.route("**/v1/activities/1?*", async (route) => {
     if (!rejectDetail) {
       await route.fallback();
       return;
@@ -260,6 +276,115 @@ test("the detail panel stacks without horizontal overflow on a narrow Korean vie
   expect(bounds.right).toBeLessThanOrEqual(390);
   expect(await page.evaluate(() => document.documentElement.scrollWidth))
     .toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth));
+});
+
+test("a ready Spark result renders exactly three stored lines without expanding the node", async ({
+  page,
+  api,
+}) => {
+  const lines = [
+    "결과 캡처와 프롬프트를 같은 턴으로 연결했습니다.",
+    "요약 작업은 격리된 Codex Spark 실행기로 처리합니다.",
+    "전체 저장 및 UI 계약 검증을 통과했습니다.",
+  ] as [string, string, string];
+  expect(Array.from(lines.join("")).length).toBeLessThanOrEqual(180);
+  api.state.activities[0]!.result_summary_status = "ready";
+  api.state.details[1]!.result_summary = { status: "ready", lines };
+  api.state.details[1]!.selected_turn.result_summary = { status: "ready", lines };
+  await page.goto("/");
+
+  const card = page.getByTestId("activity-node-1");
+  await expect(card.getByText("요약 있음", { exact: true })).toBeVisible();
+  await expect(card).not.toContainText(lines[0]);
+  const detailPanel = await open(page, 1);
+  const result = detailPanel.getByTestId("activity-result-summary");
+  await expect(result).toHaveAttribute("data-status", "ready");
+  await expect(result.locator("li")).toHaveCount(3);
+  await expect(result.locator("li")).toHaveText(lines);
+  await expect(detailPanel.getByText("결과 요약 보기", { exact: true })).toHaveCount(0);
+});
+
+test("pending and failed result states remain non-blocking and update through polling", async ({
+  page,
+  api,
+}) => {
+  api.state.activities[0]!.result_summary_status = "pending";
+  api.state.details[1]!.result_summary = { status: "pending", lines: null };
+  api.state.details[1]!.selected_turn.result_summary = { status: "pending", lines: null };
+  await page.goto("/");
+  const detailPanel = await open(page, 1);
+  const result = detailPanel.getByTestId("activity-result-summary");
+  await expect(result).toHaveAttribute("data-status", "pending");
+  await expect(result).toHaveAttribute("aria-busy", "true");
+  await expect(result).toContainText("Codex Spark가 결과를 요약하는 중입니다.");
+
+  api.state.activities[0]!.result_summary_status = "failed";
+  api.state.details[1]!.result_summary = { status: "failed", lines: null };
+  api.state.details[1]!.selected_turn.result_summary = { status: "failed", lines: null };
+  await expect(result).toHaveAttribute("data-status", "failed", { timeout: 2_000 });
+  await expect(result).toContainText("결과 요약을 만들지 못했습니다.");
+  await expect(detailPanel.getByRole("heading", { name: "대화 기록 (2/2)" })).toBeVisible();
+  await expect(page.getByTestId("activity-node-1")).toContainText("요약 실패");
+});
+
+test("a historical ready result is disclosed on demand with the keyboard", async ({ page, api }) => {
+  const lines = ["첫 줄", "둘째 줄", "셋째 줄"] as [string, string, string];
+  const historical = api.state.details[1]!.conversation.find(({ id }) => id === 2)!;
+  historical.result_summary = { status: "ready", lines };
+  await page.goto("/");
+  const detailPanel = await open(page, 1);
+  const disclosure = detailPanel.getByText("결과 요약 보기", { exact: true });
+  await disclosure.focus();
+  await page.keyboard.press("Enter");
+  await expect(disclosure.locator("..")).toHaveAttribute("open", "");
+  await expect(disclosure.locator("..").locator("li")).toHaveText(lines);
+});
+
+test("a long selected prompt and bounded result preserve a usable conversation viewport", async ({
+  page,
+  api,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  api.state.details[1]!.prompt = Array.from(
+    { length: 36 },
+    (_, index) => `Long selected prompt line ${index + 1}: 상세 기록을 계속 확인합니다.`,
+  ).join("\n");
+  const longResult = [
+    "핵심 완료 사항과 사용자 영향을 한 문장으로 간결하게 정리했습니다.",
+    "중요한 변경과 판단 근거는 불필요한 세부 없이 짧게 기록했습니다.",
+    "검증 결과와 남은 주의점을 포함하면서 전체 180자 제한을 지켰습니다.",
+  ] as [string, string, string];
+  expect(Array.from(longResult.join("")).length).toBeLessThanOrEqual(180);
+  api.state.details[1]!.result_summary = { status: "ready", lines: longResult };
+  api.state.details[1]!.selected_turn.result_summary = { status: "ready", lines: longResult };
+  await page.goto("/");
+  const detailPanel = await open(page, 1);
+
+  const metrics = await detailPanel.evaluate((element) => {
+    const context = element.querySelector<HTMLElement>(".activity-detail__context")!;
+    const timeline = element.querySelector<HTMLElement>(".activity-detail__timeline")!;
+    const list = timeline.querySelector<HTMLOListElement>("ol")!;
+    const turns = Array.from(list.querySelectorAll<HTMLElement>(".activity-detail__turn"));
+    const firstTurn = turns[0]!.getBoundingClientRect();
+    const nextTurn = turns[1]!.getBoundingClientRect();
+    return {
+      contextClientHeight: context.clientHeight,
+      contextScrollHeight: context.scrollHeight,
+      listHeight: list.getBoundingClientRect().height,
+      panelBottom: element.getBoundingClientRect().bottom,
+      timelineBottom: timeline.getBoundingClientRect().bottom,
+      firstTurnHeight: firstTurn.height,
+      firstTurnScrollHeight: turns[0]!.scrollHeight,
+      firstTurnBottom: firstTurn.bottom,
+      nextTurnTop: nextTurn.top,
+    };
+  });
+
+  expect(metrics.contextScrollHeight).toBeGreaterThan(metrics.contextClientHeight);
+  expect(metrics.listHeight).toBeGreaterThanOrEqual(220);
+  expect(metrics.timelineBottom).toBeLessThanOrEqual(metrics.panelBottom + 1);
+  expect(metrics.firstTurnHeight).toBeGreaterThanOrEqual(metrics.firstTurnScrollHeight - 1);
+  expect(metrics.nextTurnTop).toBeGreaterThanOrEqual(metrics.firstTurnBottom - 1);
 });
 
 test("a long timeline reveals its initially selected immutable turn", async ({ page, api }) => {

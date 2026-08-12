@@ -43,7 +43,7 @@ pub fn user_home() -> PathBuf {
 
 #[cfg(windows)]
 pub fn hook_command(executable: &Path, data_dir: &Path) -> Result<String, HookCommandError> {
-    hook_command_with_target(executable, data_dir, None)
+    hook_command_with_target(executable, data_dir, None, None)
 }
 
 #[cfg(windows)]
@@ -53,7 +53,18 @@ pub fn hook_command_for_target(
     capture_target: &str,
 ) -> Result<String, HookCommandError> {
     validate_capture_target(capture_target)?;
-    hook_command_with_target(executable, data_dir, Some(capture_target))
+    hook_command_with_target(executable, data_dir, Some(capture_target), None)
+}
+
+#[cfg(windows)]
+pub fn hook_command_for_target_and_home(
+    executable: &Path,
+    data_dir: &Path,
+    capture_target: &str,
+    codex_home: &str,
+) -> Result<String, HookCommandError> {
+    validate_capture_target(capture_target)?;
+    hook_command_with_target(executable, data_dir, Some(capture_target), Some(codex_home))
 }
 
 #[cfg(windows)]
@@ -61,9 +72,10 @@ fn hook_command_with_target(
     executable: &Path,
     data_dir: &Path,
     capture_target: Option<&str>,
+    codex_home: Option<&str>,
 ) -> Result<String, HookCommandError> {
     let powershell = windows_powershell()?;
-    let encoded = encoded_capture_script(executable, data_dir, None, capture_target)?;
+    let encoded = encoded_capture_script(executable, data_dir, None, capture_target, codex_home)?;
     Ok(format!(
         "{} -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass \
          -EncodedCommand {}",
@@ -78,7 +90,7 @@ pub fn wsl_hook_command(
     data_dir: &Path,
     distro: &str,
 ) -> Result<String, HookCommandError> {
-    wsl_hook_command_with_target(executable, data_dir, distro, None)
+    wsl_hook_command_with_target(executable, data_dir, distro, None, None)
 }
 
 #[cfg(windows)]
@@ -89,7 +101,25 @@ pub fn wsl_hook_command_for_target(
     capture_target: &str,
 ) -> Result<String, HookCommandError> {
     validate_capture_target(capture_target)?;
-    wsl_hook_command_with_target(executable, data_dir, distro, Some(capture_target))
+    wsl_hook_command_with_target(executable, data_dir, distro, Some(capture_target), None)
+}
+
+#[cfg(windows)]
+pub fn wsl_hook_command_for_target_and_home(
+    executable: &Path,
+    data_dir: &Path,
+    distro: &str,
+    capture_target: &str,
+    codex_home: &str,
+) -> Result<String, HookCommandError> {
+    validate_capture_target(capture_target)?;
+    wsl_hook_command_with_target(
+        executable,
+        data_dir,
+        distro,
+        Some(capture_target),
+        Some(codex_home),
+    )
 }
 
 #[cfg(windows)]
@@ -98,6 +128,7 @@ fn wsl_hook_command_with_target(
     data_dir: &Path,
     distro: &str,
     capture_target: Option<&str>,
+    codex_home: Option<&str>,
 ) -> Result<String, HookCommandError> {
     validate_wsl_distro(distro)?;
     let mut command = format!(
@@ -109,6 +140,10 @@ fn wsl_hook_command_with_target(
         command.push_str(" --capture-target ");
         command.push_str(&posix_shell_text_argument(capture_target));
     }
+    if let Some(codex_home) = codex_home {
+        command.push_str(" --codex-home ");
+        command.push_str(&posix_shell_text_argument(codex_home));
+    }
     command.push_str(" --wsl-distro ");
     command.push_str(&posix_shell_text_argument(distro));
     Ok(command)
@@ -119,7 +154,7 @@ pub fn shared_wsl_hook_command(
     executable: &Path,
     data_dir: &Path,
 ) -> Result<String, HookCommandError> {
-    shared_wsl_hook_command_with_target(executable, data_dir, None)
+    shared_wsl_hook_command_with_target(executable, data_dir, None, None)
 }
 
 #[cfg(windows)]
@@ -129,7 +164,23 @@ pub fn shared_wsl_hook_command_for_target(
     capture_target: &str,
 ) -> Result<String, HookCommandError> {
     validate_capture_target(capture_target)?;
-    shared_wsl_hook_command_with_target(executable, data_dir, Some(capture_target))
+    shared_wsl_hook_command_with_target(executable, data_dir, Some(capture_target), None)
+}
+
+#[cfg(windows)]
+pub fn shared_wsl_hook_command_for_target_and_home(
+    executable: &Path,
+    data_dir: &Path,
+    capture_target: &str,
+    codex_home: &str,
+) -> Result<String, HookCommandError> {
+    validate_capture_target(capture_target)?;
+    shared_wsl_hook_command_with_target(
+        executable,
+        data_dir,
+        Some(capture_target),
+        Some(codex_home),
+    )
 }
 
 #[cfg(windows)]
@@ -137,6 +188,7 @@ fn shared_wsl_hook_command_with_target(
     executable: &Path,
     data_dir: &Path,
     capture_target: Option<&str>,
+    codex_home: Option<&str>,
 ) -> Result<String, HookCommandError> {
     let mut command = format!(
         "{} capture --data-dir {}",
@@ -147,13 +199,17 @@ fn shared_wsl_hook_command_with_target(
         command.push_str(" --capture-target ");
         command.push_str(&posix_shell_text_argument(capture_target));
     }
+    if let Some(codex_home) = codex_home {
+        command.push_str(" --codex-home ");
+        command.push_str(&posix_shell_text_argument(codex_home));
+    }
     command.push_str(" --wsl-distro \"${WSL_DISTRO_NAME:?WSL_DISTRO_NAME is unavailable}\"");
     Ok(command)
 }
 
 #[cfg(not(windows))]
 pub fn hook_command(executable: &Path, data_dir: &Path) -> Result<String, HookCommandError> {
-    hook_command_with_target(executable, data_dir, None)
+    hook_command_with_target(executable, data_dir, None, None)
 }
 
 #[cfg(not(windows))]
@@ -163,7 +219,18 @@ pub fn hook_command_for_target(
     capture_target: &str,
 ) -> Result<String, HookCommandError> {
     validate_capture_target(capture_target)?;
-    hook_command_with_target(executable, data_dir, Some(capture_target))
+    hook_command_with_target(executable, data_dir, Some(capture_target), None)
+}
+
+#[cfg(not(windows))]
+pub fn hook_command_for_target_and_home(
+    executable: &Path,
+    data_dir: &Path,
+    capture_target: &str,
+    codex_home: &str,
+) -> Result<String, HookCommandError> {
+    validate_capture_target(capture_target)?;
+    hook_command_with_target(executable, data_dir, Some(capture_target), Some(codex_home))
 }
 
 #[cfg(not(windows))]
@@ -171,6 +238,7 @@ fn hook_command_with_target(
     executable: &Path,
     data_dir: &Path,
     capture_target: Option<&str>,
+    codex_home: Option<&str>,
 ) -> Result<String, HookCommandError> {
     let mut command = format!(
         "{} capture --data-dir {}",
@@ -180,6 +248,10 @@ fn hook_command_with_target(
     if let Some(capture_target) = capture_target {
         command.push_str(" --capture-target ");
         command.push_str(&posix_shell_text_argument(capture_target));
+    }
+    if let Some(codex_home) = codex_home {
+        command.push_str(" --codex-home ");
+        command.push_str(&posix_shell_text_argument(codex_home));
     }
     Ok(command)
 }
@@ -200,6 +272,7 @@ fn encoded_capture_script(
     data_dir: &Path,
     wsl_distro: Option<&str>,
     capture_target: Option<&str>,
+    codex_home: Option<&str>,
 ) -> Result<String, HookCommandError> {
     let mut script = format!(
         "& {} capture --data-dir {}",
@@ -209,6 +282,10 @@ fn encoded_capture_script(
     if let Some(capture_target) = capture_target {
         script.push_str(" --capture-target ");
         script.push_str(&powershell_text_literal(capture_target));
+    }
+    if let Some(codex_home) = codex_home {
+        script.push_str(" --codex-home ");
+        script.push_str(&powershell_text_literal(codex_home));
     }
     if let Some(distro) = wsl_distro {
         script.push_str(" --wsl-distro ");
@@ -357,8 +434,9 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        HookCommandError, hook_command, hook_command_for_target, shared_wsl_hook_command,
-        wsl_cwd_to_windows, wsl_hook_command, wsl_hook_command_for_target,
+        HookCommandError, hook_command, hook_command_for_target, hook_command_for_target_and_home,
+        shared_wsl_hook_command, wsl_cwd_to_windows, wsl_hook_command, wsl_hook_command_for_target,
+        wsl_hook_command_for_target_and_home,
     };
 
     #[test]
@@ -410,6 +488,38 @@ mod tests {
             ),
             Err(HookCommandError::InvalidCaptureTarget(_))
         ));
+    }
+
+    #[test]
+    fn managed_hook_commands_carry_the_exact_codex_home() {
+        let command = hook_command_for_target_and_home(
+            Path::new(r"C:\tools\akra-hookers.exe"),
+            Path::new(r"C:\state"),
+            "windows-custom",
+            r"D:\Codex User\.codex",
+        )
+        .expect("Windows command");
+        let encoded = command.split_whitespace().last().expect("encoded command");
+        let bytes = STANDARD.decode(encoded).expect("base64");
+        let utf16 = bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        assert!(
+            String::from_utf16(&utf16)
+                .expect("PowerShell")
+                .contains("--codex-home 'D:\\Codex User\\.codex'")
+        );
+
+        let wsl_command = wsl_hook_command_for_target_and_home(
+            Path::new(r"C:\tools\akra-hookers.exe"),
+            Path::new(r"C:\state"),
+            "Ubuntu",
+            "wsl:Ubuntu",
+            "/home/alex/.codex-custom",
+        )
+        .expect("WSL command");
+        assert!(wsl_command.contains("--codex-home '/home/alex/.codex-custom'"));
     }
 
     #[test]

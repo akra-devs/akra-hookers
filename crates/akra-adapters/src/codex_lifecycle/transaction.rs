@@ -38,7 +38,7 @@ fn apply_updates_with(
             original: manifest_original,
             mut hooks,
         } = update.lifecycle.read_snapshot()?;
-        let previous_locations = remove_akra_hooks(&mut hooks);
+        let removed = remove_akra_hooks(&mut hooks);
         let installed = update.command.as_ref().map(|command| {
             let locations = append_akra_hooks(&mut hooks, command);
             (locations, command)
@@ -48,7 +48,10 @@ fn apply_updates_with(
         } else {
             None
         };
-        let config_original = if installed.is_some() || !previous_locations.is_empty() {
+        let config_original = if installed.is_some()
+            || !removed.managed_locations.is_empty()
+            || !removed.retained_moves.is_empty()
+        {
             read_config_bytes(&config_path)?
         } else {
             None
@@ -57,7 +60,8 @@ fn apply_updates_with(
             &config_path,
             &update.lifecycle.manifest_path,
             config_original.as_deref(),
-            &previous_locations,
+            &removed.managed_locations,
+            &removed.retained_moves,
             installed
                 .as_ref()
                 .map(|(locations, command)| (locations.as_slice(), *command)),

@@ -57,9 +57,10 @@ impl ApiError {
             akra_store::StoreError::SameProjectMerge => {
                 Self::unprocessable("same_project_merge", error.to_string())
             }
-            akra_store::StoreError::Sqlite(_) | akra_store::StoreError::Invariant(_) => {
-                Self::internal()
-            }
+            akra_store::StoreError::Sqlite(_)
+            | akra_store::StoreError::Invariant(_)
+            | akra_store::StoreError::InvalidResultSummaryLease
+            | akra_store::StoreError::InvalidResultSummary(_) => Self::internal(),
         }
     }
 

@@ -528,7 +528,7 @@ fn capture_rejects_oversized_valid_input_without_spooling() {
         .expect("oversized input writes");
 
     let output = child.wait_with_output().expect("capture exits");
-    assert_eq!(output.status.code(), Some(2), "capture output: {output:?}");
+    assert_eq!(output.status.code(), Some(1), "capture output: {output:?}");
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("exceeds"),
         "capture must report its finite input limit: {output:?}"
@@ -573,7 +573,7 @@ fn capture_reports_a_full_spool_without_overwriting_pending_items() {
         .expect("payload writes");
     let output = child.wait_with_output().expect("capture exits");
 
-    assert_eq!(output.status.code(), Some(2), "capture output: {output:?}");
+    assert_eq!(output.status.code(), Some(1), "capture output: {output:?}");
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("pending spool queue is full"),
         "capture must report aggregate admission failure: {output:?}"
@@ -614,7 +614,7 @@ fn capture_surfaces_gate_read_errors_instead_of_dropping_the_prompt() {
         .expect("payload writes");
 
     let output = child.wait_with_output().expect("capture exits");
-    assert_eq!(output.status.code(), Some(2), "capture output: {output:?}");
+    assert_eq!(output.status.code(), Some(1), "capture output: {output:?}");
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("unable to read capture gate"),
         "capture must surface the gate error: {output:?}"

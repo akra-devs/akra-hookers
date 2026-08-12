@@ -117,6 +117,14 @@ impl ActivityStore {
         .fetch_optional(&mut *transaction)
         .await?
         {
+            crate::result_summaries::link_activity(
+                &mut transaction,
+                id,
+                event.provider().as_str(),
+                event.session_id(),
+                event.turn_id(),
+            )
+            .await?;
             transaction.commit().await?;
             return Ok(id);
         }
@@ -201,6 +209,14 @@ impl ActivityStore {
                 "dedupe key mapped to activity {mapped_id} instead of newly inserted activity {id}"
             )));
         }
+        crate::result_summaries::link_activity(
+            &mut transaction,
+            id,
+            event.provider().as_str(),
+            event.session_id(),
+            event.turn_id(),
+        )
+        .await?;
         if let Some(project_id) = project_id {
             sqlx::query(
                 "INSERT INTO activity_project_assignments (

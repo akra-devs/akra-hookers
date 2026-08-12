@@ -14,3 +14,4 @@ mod http_providers;
 pub mod paths;
 pub mod recovery;
 pub mod spool;
+pub mod summarization;

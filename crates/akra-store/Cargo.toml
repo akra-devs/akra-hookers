@@ -9,6 +9,7 @@ license.workspace = true
 akra-core = { path = "../akra-core" }
 akra-git = { path = "../akra-git" }
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "uuid"] }
 thiserror = "2"
 time = { version = "0.3", features = ["formatting"] }
