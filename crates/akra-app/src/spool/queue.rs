@@ -99,11 +99,7 @@ impl Spool {
     /// Remove raw assistant-result payloads after their bounded retention window.
     /// New result items carry a filename marker so even malformed envelopes can
     /// be scrubbed using their filesystem timestamp on the next recovery pass.
-    pub(crate) fn expire_result_items(
-        &self,
-        now_us: i64,
-        retention_us: i64,
-    ) -> Result<usize, SpoolError> {
+    pub fn expire_result_items(&self, now_us: i64, retention_us: i64) -> Result<usize, SpoolError> {
         let cutoff_us = now_us.saturating_sub(retention_us);
         let _admission = self.lock_admission()?;
         let paths = self.pending_paths(|_| true)?;

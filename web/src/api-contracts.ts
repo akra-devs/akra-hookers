@@ -112,10 +112,22 @@ export type CodexCaptureClient = {
   last_captured_at_us: number | null;
 };
 
+export type CollectorIntegration = {
+  mode: "local" | "remote";
+  endpoint: string;
+  configured: boolean;
+  token_configured: boolean;
+  connected: boolean | null;
+  last_delivery_at_us: number | null;
+  pending_count: number;
+  last_error: string | null;
+};
+
 export type ProviderIntegration = {
   provider: string;
   enabled: boolean;
   targets: CodexCaptureTarget[];
+  collector: CollectorIntegration;
 };
 
 export type CanvasNode = {

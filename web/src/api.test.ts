@@ -186,6 +186,8 @@ describe("createApiClient", () => {
     await client.provider("codex");
     await client.setProviderEnabled("codex", false);
     await client.setProviderTargetEnabled("codex", "wsl:Ubuntu", true);
+    await client.configureCollector("https://collector.example.com", "remote-secret");
+    await client.verifyCollector();
 
     expect(fetcher.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
       [`${base}/v1/canvas`, undefined],
@@ -199,7 +201,13 @@ describe("createApiClient", () => {
       [`${base}/v1/providers/codex`, undefined],
       [`${base}/v1/providers/codex`, "PATCH"],
       [`${base}/v1/providers/codex/targets/wsl%3AUbuntu`, "PATCH"],
+      [`${base}/v1/providers/codex/collector`, "PUT"],
+      [`${base}/v1/providers/codex/collector/verify`, "POST"],
     ]);
+    expect(fetcher.mock.calls.at(-2)?.[1]?.body).toBe(JSON.stringify({
+      endpoint: "https://collector.example.com",
+      token: "remote-secret",
+    }));
   });
 
   it.each([

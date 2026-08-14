@@ -241,6 +241,17 @@ Rail rows are square, full-width, and 42px minimum height. Hover adds a subtle m
 
 Detected installations form a compact ruled matrix. Each row combines a terminal icon, human label, small environment tag, switch, text status with a matching dot, and a truncated mono path. The master switch may expose a mixed state; disabled capture affects future collection and never removes historic activity.
 
+### Collection Destination
+
+The collection destination lives directly below the capture master state and above
+the per-installation matrix. At rest it is a one-line instrument readout: square
+`LOCAL` or `REMOTE` tag, ellipsized mono endpoint, textual delivery status, and a
+single Change action. The endpoint/token form is disclosed only while editing so it
+does not turn the rail into a permanent settings card. A remote address exposes the
+privacy scope in plain language and requires a password field; a stored token is
+never revealed. Pending and delivery-error states use text plus amber/red status,
+and changing destination is immediate without a hook-restart instruction.
+
 ### Activity Evidence Plates
 
 The 288px activity plate is the signature component: 5px corners, registration marks, a lichen project label, conversation position, three-line prompt, ruled metadata footer, provider dot, timestamp, and connection handles. Hover lifts by 1px; selection uses a crisp separated lichen ring. Keyboard focus uses the same 2px focus outline with a 5px offset, and Enter or Space opens the inspector.

@@ -1,14 +1,15 @@
 use axum::{
     Router,
     body::Body,
-    extract::{Json, State},
+    extract::{DefaultBodyLimit, Json, State},
     http::{Method, Request, StatusCode, header},
     middleware::{self, Next},
     response::Response,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use serde::Deserialize;
 use std::{
+    net::IpAddr,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -22,9 +23,14 @@ use crate::{
         canvas, canvas_edges, canvas_revision, clear_canvas, create_canvas_edge,
         delete_canvas_edge, delete_canvas_node, update_canvas_position,
     },
+    http_collector::{
+        authorize as authorize_collector, ingest as collector_ingest, verify as collector_verify,
+    },
     http_origins::{configure_origin, origins, project_origins},
     http_projects::{create_project, merge_project, projects, rename_project},
-    http_providers::{provider, toggle_provider, toggle_provider_target},
+    http_providers::{
+        configure_collector, provider, toggle_provider, toggle_provider_target, verify_collector,
+    },
 };
 
 #[derive(Deserialize)]
@@ -57,6 +63,7 @@ impl CodexLifecycleControl {
 pub(crate) struct AppState {
     pub(crate) store: Arc<akra_store::ActivityStore>,
     pub(crate) codex: Option<CodexLifecycleControl>,
+    pub(crate) collector: Option<Arc<crate::collector::CollectorManager>>,
     pub(crate) provider_toggle_lock: Arc<Mutex<()>>,
 }
 
@@ -66,6 +73,7 @@ pub fn app(token: &'static str, store: Arc<akra_store::ActivityStore>) -> Router
         AppState {
             store,
             codex: None,
+            collector: None,
             provider_toggle_lock: Arc::new(Mutex::new(())),
         },
     )
@@ -94,18 +102,48 @@ pub fn app_with_codex_targets(
     targets: Arc<crate::codex_targets::CodexTargetRegistry>,
     capture_gate: crate::capture_gate::CaptureGate,
 ) -> Router {
+    app_with_codex_targets_and_collector(token, store, targets, capture_gate, None)
+}
+
+/// Builds an authenticated dashboard plus the narrow remote collector ingress
+/// without attaching this host's Codex hook lifecycle. This is useful for a
+/// collector-only runtime and for integration coverage of the token boundary.
+pub fn app_with_collector(
+    token: &'static str,
+    store: Arc<akra_store::ActivityStore>,
+    collector: Arc<crate::collector::CollectorManager>,
+) -> Router {
+    router(
+        token,
+        AppState {
+            store,
+            codex: None,
+            collector: Some(collector),
+            provider_toggle_lock: Arc::new(Mutex::new(())),
+        },
+    )
+}
+
+pub fn app_with_codex_targets_and_collector(
+    token: &'static str,
+    store: Arc<akra_store::ActivityStore>,
+    targets: Arc<crate::codex_targets::CodexTargetRegistry>,
+    capture_gate: crate::capture_gate::CaptureGate,
+    collector: Option<Arc<crate::collector::CollectorManager>>,
+) -> Router {
     router(
         token,
         AppState {
             store,
             codex: Some(CodexLifecycleControl::new(targets, capture_gate)),
+            collector,
             provider_toggle_lock: Arc::new(Mutex::new(())),
         },
     )
 }
 
 fn router(token: &'static str, state: AppState) -> Router {
-    Router::new()
+    let dashboard = Router::new()
         .route("/v1/ingest", post(ingest))
         .route("/v1/projects", get(projects).post(create_project))
         .route(
@@ -141,6 +179,11 @@ fn router(token: &'static str, state: AppState) -> Router {
             "/v1/providers/{provider}/targets/{target_id}",
             axum::routing::patch(toggle_provider_target),
         )
+        .route("/v1/providers/codex/collector", put(configure_collector))
+        .route(
+            "/v1/providers/codex/collector/verify",
+            post(verify_collector),
+        )
         .route(
             "/v1/canvas/{node_id}",
             delete(delete_canvas_node).patch(update_canvas_position),
@@ -151,10 +194,7 @@ fn router(token: &'static str, state: AppState) -> Router {
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::predicate(|origin, _request_parts| {
-                    origin.to_str().is_ok_and(|origin| {
-                        origin.starts_with("http://127.0.0.1:")
-                            || origin.starts_with("http://localhost:")
-                    })
+                    origin.to_str().is_ok_and(is_local_dashboard_origin)
                 }))
                 .allow_methods([
                     Method::DELETE,
@@ -162,10 +202,40 @@ fn router(token: &'static str, state: AppState) -> Router {
                     Method::OPTIONS,
                     Method::PATCH,
                     Method::POST,
+                    Method::PUT,
                 ])
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )
-        .with_state(state)
+        .with_state(state.clone());
+
+    let Some(collector) = state.collector.clone() else {
+        return dashboard;
+    };
+    let ingress = Router::new()
+        .route("/v1/collector/ingest", post(collector_ingest))
+        .route("/v1/collector/verify", get(collector_verify))
+        .route_layer(middleware::from_fn(move |request, next| {
+            authorize_collector(request, next, Arc::clone(&collector))
+        }))
+        .layer(DefaultBodyLimit::max(crate::spool::MAX_PENDING_ITEM_BYTES))
+        .with_state(state);
+    dashboard.merge(ingress)
+}
+
+fn is_local_dashboard_origin(origin: &str) -> bool {
+    let Ok(url) = url::Url::parse(origin) else {
+        return false;
+    };
+    if url.scheme() != "http" || url.path() != "/" || url.query().is_some() {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 async fn ingest(

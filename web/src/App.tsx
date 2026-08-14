@@ -17,6 +17,7 @@ import { ClearCanvasDialog } from "./components/ClearCanvasDialog";
 import { OriginSetupDialog } from "./components/OriginSetupDialog";
 import { ProjectDialog } from "./components/ProjectDialog";
 import { ProjectRail, type ProjectFilter } from "./components/ProjectRail";
+import type { CollectorOperation } from "./components/CollectorEndpointControl";
 import { useDashboardData } from "./hooks/useDashboardData";
 const nodeTypes = { activity: ActivityNode } satisfies NodeTypes;
 export function App() {
@@ -24,6 +25,7 @@ export function App() {
   const [codexPending, setCodexPending] = useState(false);
   const [pendingCodexTargetIds, setPendingCodexTargetIds] = useState<string[]>([]);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  const [collectorOperation, setCollectorOperation] = useState<CollectorOperation>(null);
   const [filter, setFilter] = useState<ProjectFilter>("all");
   const [activityVisibility, setActivityVisibility] = useState(
     loadActivityVisibility,
@@ -169,6 +171,36 @@ export function App() {
       setPendingCodexTargetIds((current) => current.filter((id) => id !== targetId));
     }
   }, [client, codexPending, pendingCodexTargetIds, provider]);
+  const configureCollector = useCallback(async (endpoint: string, token?: string) => {
+    if (!client) throw new Error("대시보드 연결을 확인하지 못했습니다.");
+    if (collectorOperation !== null) return;
+    setCollectorOperation("configure");
+    try {
+      await client.configureCollector(endpoint, token);
+      try {
+        await provider.refetch({ throwOnError: true });
+      } catch {
+        throw new Error("설정은 저장되었지만 최신 상태를 확인하지 못했습니다.");
+      }
+    } finally {
+      setCollectorOperation(null);
+    }
+  }, [client, collectorOperation, provider]);
+  const verifyCollector = useCallback(async () => {
+    if (!client) throw new Error("대시보드 연결을 확인하지 못했습니다.");
+    if (collectorOperation !== null) return;
+    setCollectorOperation("verify");
+    try {
+      await client.verifyCollector();
+      try {
+        await provider.refetch({ throwOnError: true });
+      } catch {
+        throw new Error("연결은 확인되었지만 최신 상태를 확인하지 못했습니다.");
+      }
+    } finally {
+      setCollectorOperation(null);
+    }
+  }, [client, collectorOperation, provider]);
   const managedProject = projectDialog === null || projectDialog === "new"
     ? undefined
     : projects.data?.find((project) => project.id === projectDialog);
@@ -191,6 +223,16 @@ export function App() {
   const currentProjects = projects.data ?? [];
   const currentOrigins = origins.data ?? [];
   const currentTargets = provider.data?.targets ?? [];
+  const currentCollector = provider.data?.collector ?? {
+    mode: "local" as const,
+    endpoint: "http://127.0.0.1:42130",
+    configured: false,
+    token_configured: false,
+    connected: null,
+    last_delivery_at_us: null,
+    pending_count: 0,
+    last_error: null,
+  };
   const focusRailSection = (selector: string) => {
     const target = document.querySelector<HTMLElement>(selector);
     target?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -205,6 +247,8 @@ export function App() {
         originCount={currentOrigins.length}
         codexAvailable={provider.data !== undefined && !provider.isError}
         codexTargets={currentTargets}
+        collector={provider.data?.collector}
+        collectorOperation={collectorOperation}
         onFilterChange={setFilter}
         onOpenWorkLocations={() => focusRailSection("#work-locations-heading")}
         onOpenCaptureSettings={() => focusRailSection("#codex-capture-control")}
@@ -216,12 +260,16 @@ export function App() {
         codexTargets={currentTargets}
         pendingCodexTargetIds={pendingCodexTargetIds}
         captureError={captureError}
+        collector={currentCollector}
+        collectorOperation={collectorOperation}
         activityVisibility={activityVisibility}
         projects={currentProjects} origins={currentOrigins}
         inboxCount={inboxCount.data ?? 0} filter={filter}
         onCodexChange={(enabled) => void changeProvider(enabled)}
         onCodexTargetChange={(targetId, enabled) =>
           void changeProviderTarget(targetId, enabled)}
+        onCollectorConfigure={configureCollector}
+        onCollectorVerify={verifyCollector}
         onActivityVisibilityChange={(kind, visible) =>
           setActivityVisibility((current) => ({ ...current, [kind]: visible }))}
         onFilterChange={setFilter} onNewProject={() => setProjectDialog("new")}

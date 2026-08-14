@@ -204,6 +204,35 @@ impl CaptureEnvelope {
         &self.payload
     }
 
+    /// Namespaces an envelope received from another machine and removes the
+    /// sender's local runtime hint. The collector must never try to execute a
+    /// summary with a capture target that only exists on the source machine.
+    pub fn into_remote_namespace(
+        mut self,
+        source_instance_id: &str,
+    ) -> Result<Self, CaptureEnvelopeError> {
+        if !valid_source_token(source_instance_id, 64) {
+            return Err(CaptureEnvelopeError::InvalidRemoteSource);
+        }
+        let payload = self
+            .payload
+            .as_object_mut()
+            .ok_or(CaptureEnvelopeError::InvalidRemotePayload)?;
+        let session_id = payload
+            .get_mut("session_id")
+            .and_then(|value| value.as_str())
+            .ok_or(CaptureEnvelopeError::InvalidRemotePayload)?
+            .to_owned();
+        payload.insert(
+            "session_id".to_owned(),
+            serde_json::Value::String(format!("remote:{source_instance_id}:{session_id}")),
+        );
+        self.origin.identity = format!("remote:{source_instance_id}:{}", self.origin.identity);
+        self.capture_source = None;
+        self.validate()?;
+        Ok(self)
+    }
+
     fn validate(&self) -> Result<(), CaptureEnvelopeError> {
         if self.provider.trim().is_empty() {
             return Err(CaptureEnvelopeError::BlankProvider);
@@ -261,6 +290,14 @@ pub struct SpoolItem {
     path: PathBuf,
 }
 
+impl SpoolItem {
+    /// Returns the opaque pending-file path to crate-local queue extensions.
+    /// Callers must not derive capture content or a destination from the name.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 impl Spool {
     pub fn open(directory: &Path) -> Result<Self, SpoolError> {
         fs::create_dir_all(directory)?;
@@ -273,6 +310,12 @@ impl Spool {
 
     pub fn enqueue(&self, payload: &[u8]) -> Result<(), SpoolError> {
         self.enqueue_with_kind(payload, false)
+    }
+
+    /// Enqueues an opaque payload while retaining the result marker used by
+    /// bounded-retention queues such as the remote collector outbox.
+    pub fn enqueue_marked(&self, payload: &[u8], result_capture: bool) -> Result<(), SpoolError> {
+        self.enqueue_with_kind(payload, result_capture)
     }
 
     fn enqueue_with_kind(&self, payload: &[u8], result_capture: bool) -> Result<(), SpoolError> {
@@ -362,6 +405,10 @@ pub enum CaptureEnvelopeError {
     InvalidCaptureSource,
     #[error("capture activity context is invalid")]
     InvalidActivityContext,
+    #[error("remote source instance identifier is invalid")]
+    InvalidRemoteSource,
+    #[error("remote capture payload has no valid session identifier")]
+    InvalidRemotePayload,
     #[error("unsupported capture envelope schema version: {0}")]
     UnsupportedSchemaVersion(u8),
     #[error("invalid capture envelope JSON: {0}")]

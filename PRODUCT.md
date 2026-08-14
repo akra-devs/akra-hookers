@@ -31,8 +31,10 @@ project assignment, and future routing remain user-controlled organization.
   one or more WSL distributions.
 - Work happens across repositories, clones, linked worktrees, and shared or
   dedicated work locations.
-- The dashboard is a localhost-only operational workspace used alongside coding
-  sessions, not a cloud analytics product.
+- The dashboard is a localhost-first operational workspace used alongside coding
+  sessions, not a cloud analytics product. A user can explicitly configure a
+  separate HTTPS collector for a source machine when they need to centralize
+  their own captured activity.
 - Hook installation changes require restarting the affected Codex runtime; Akra
   writes trust state for its exact managed commands so a separate `/hooks`
   approval is not required.
@@ -53,10 +55,20 @@ project assignment, and future routing remain user-controlled organization.
   conversation history.
 - Disabling future capture never removes historical activity.
 - Binds to `127.0.0.1` by default, sends no telemetry or captured prompt data,
-  and does not modify Git repositories. Final assistant result text is sent only
-  to the authenticated Codex Spark summarization run, scrubbed on success or
-  terminal failure, and deleted before recovery once a pending copy is older
-  than 24 hours.
+  and does not modify Git repositories. An explicit external Collection
+  destination is the only exception: it requires an HTTPS endpoint and a
+  distinct collector access token, then sends captured prompts, work-path and
+  session metadata, and final assistant results to that user-selected collector.
+  Source delivery is durable, destination-bound, and queued locally on failure;
+  changing the destination never forwards earlier queued data automatically.
+  Final assistant result text is sent only to the authenticated Codex Spark
+  summarization run, scrubbed on success or terminal failure, and deleted before
+  recovery once a pending copy is older than 24 hours.
+- Keeps dashboard and collector capabilities separate. The collector ingress does
+  not use browser CORS, accepts full capture envelopes only, and never resolves a
+  remote source path against the collector host's filesystem. A source dashboard
+  configures and observes only its own delivery; remote activity remains on the
+  selected collector and requires no remote hook-control plane.
 - The interface must remain useful at desktop and narrow widths without horizontal
   page scrolling.
 

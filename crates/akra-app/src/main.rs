@@ -22,10 +22,16 @@ enum Command {
         #[arg(long)]
         data_dir: Option<std::path::PathBuf>,
     },
-    /// Run the localhost runtime.
+    /// Run the dashboard and collector runtime (loopback by default).
     Serve {
-        #[arg(long, default_value_t = 0)]
+        #[arg(
+            long,
+            default_value_t = akra_app::collector::DEFAULT_LOCAL_COLLECTOR_PORT
+        )]
         port: u16,
+        /// Interface for the dashboard and collector ingress listener.
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: std::net::IpAddr,
         #[arg(long)]
         data_dir: Option<std::path::PathBuf>,
         #[arg(long)]
@@ -54,6 +60,15 @@ enum Command {
     Disable {
         #[arg(long)]
         home: Option<std::path::PathBuf>,
+        #[arg(long)]
+        data_dir: Option<std::path::PathBuf>,
+    },
+    /// Print this runtime's stable remote-collector access token.
+    ///
+    /// Use only on the collector host and paste it into a source machine's
+    /// Collection destination setting. It is never included in hook commands
+    /// or the normal `serve` readiness output.
+    CollectorToken {
         #[arg(long)]
         data_dir: Option<std::path::PathBuf>,
     },
@@ -278,11 +293,28 @@ async fn main() {
                 eprintln!("unable to construct capture envelope: {error}");
                 std::process::exit(1);
             });
-            if let Err(error) = akra_app::spool::Spool::open(&data_dir.join("spool"))
-                .and_then(|spool| spool.enqueue_envelope(&envelope))
-            {
+            let collector =
+                akra_app::collector::CollectorManager::open(&data_dir).unwrap_or_else(|error| {
+                    eprintln!("unable to open capture destination: {error}");
+                    std::process::exit(1);
+                });
+            let route = collector.capture(&envelope).unwrap_or_else(|error| {
                 eprintln!("unable to spool capture: {error}");
                 std::process::exit(1);
+            });
+            if matches!(
+                route,
+                akra_app::collector::CaptureRoute::RemoteQueued { .. }
+            ) {
+                match tokio::time::timeout(Duration::from_millis(850), collector.relay_once()).await
+                {
+                    Ok(Ok(report)) if report.delivered > 0 => {}
+                    Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
+                        // The durable outbox is authoritative. A remote outage must not turn
+                        // a Codex hook into a failed or continuing turn.
+                        eprintln!("remote collector delivery is queued for retry");
+                    }
+                }
             }
             if is_result {
                 println!("{{}}");
@@ -290,6 +322,7 @@ async fn main() {
         }
         Command::Serve {
             port,
+            bind,
             data_dir,
             home,
         } => {
@@ -339,7 +372,22 @@ async fn main() {
                 std::sync::Arc::clone(&store),
                 std::sync::Arc::clone(&targets),
             );
-            let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+            let collector = std::sync::Arc::new(
+                akra_app::collector::CollectorManager::open(&data_dir).expect("collector"),
+            );
+            let relay = std::sync::Arc::clone(&collector);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(1));
+                loop {
+                    interval.tick().await;
+                    if relay.relay_once().await.is_err() {
+                        eprintln!(
+                            "remote collector delivery worker is unavailable; queued captures are retained"
+                        );
+                    }
+                }
+            });
+            let listener = tokio::net::TcpListener::bind((bind, port))
                 .await
                 .expect("listener");
             let address = listener.local_addr().expect("address");
@@ -347,10 +395,25 @@ async fn main() {
             println!("ready url=http://{address} token={token}");
             axum::serve(
                 listener,
-                akra_app::http::app_with_codex_targets(token, store, targets, capture_gate),
+                akra_app::http::app_with_codex_targets_and_collector(
+                    token,
+                    store,
+                    targets,
+                    capture_gate,
+                    Some(collector),
+                ),
             )
             .await
             .expect("server");
+        }
+        Command::CollectorToken { data_dir } => {
+            let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
+            let manager =
+                akra_app::collector::CollectorManager::open(&data_dir).unwrap_or_else(|error| {
+                    eprintln!("unable to open collector token: {error}");
+                    std::process::exit(1);
+                });
+            println!("{}", manager.collector_token().expose_secret());
         }
         Command::Debug {
             command: DebugCommand::ProjectId { cwd },
