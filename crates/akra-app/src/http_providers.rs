@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     codex_targets::{CodexTargetError, CodexTargetSnapshot, CodexTargetStatus},
+    collector::{
+        CollectorConfigInput, CollectorError, CollectorManager, CollectorMode,
+        CollectorStatus as RuntimeCollectorStatus,
+    },
     http::{AppState, CodexLifecycleControl},
     http_error::ApiError,
 };
@@ -21,6 +25,26 @@ pub(crate) struct ProviderStatus {
     provider: String,
     enabled: bool,
     targets: Vec<CodexTargetStatus>,
+    collector: CollectorIntegration,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct CollectorIntegration {
+    mode: CollectorMode,
+    endpoint: String,
+    configured: bool,
+    token_configured: bool,
+    connected: Option<bool>,
+    last_delivery_at_us: Option<i64>,
+    pending_count: usize,
+    last_error: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CollectorConfiguration {
+    endpoint: String,
+    #[serde(default)]
+    token: Option<String>,
 }
 
 pub(crate) async fn toggle_provider(
@@ -84,8 +108,9 @@ pub(crate) async fn provider(
 ) -> Result<Json<ProviderStatus>, ApiError> {
     validate_provider(&provider)?;
     let _transition = state.provider_toggle_lock.lock().await;
-    if let Some(control) = state.codex {
-        return codex_provider_status(provider, control, state.store)
+    let collector = collector_integration(state.collector.clone()).await?;
+    if let Some(control) = state.codex.clone() {
+        return codex_provider_status(provider, control, state.store, collector)
             .await
             .map(Json);
     }
@@ -98,7 +123,47 @@ pub(crate) async fn provider(
         provider: integration.provider,
         enabled: integration.enabled,
         targets: Vec::new(),
+        collector,
     }))
+}
+
+pub(crate) async fn configure_collector(
+    State(state): State<AppState>,
+    Json(configuration): Json<CollectorConfiguration>,
+) -> Result<StatusCode, ApiError> {
+    let collector = state
+        .collector
+        .ok_or_else(|| ApiError::not_found("Collector settings are unavailable."))?;
+    tokio::task::spawn_blocking(move || {
+        collector.configure(CollectorConfigInput {
+            endpoint: configuration.endpoint,
+            token: configuration.token,
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
+    .map(|_| StatusCode::NO_CONTENT)
+    .map_err(collector_configuration_error)
+}
+
+pub(crate) async fn verify_collector(
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    let collector = state
+        .collector
+        .ok_or_else(|| ApiError::not_found("Collector settings are unavailable."))?;
+    let report = collector
+        .verify()
+        .await
+        .map_err(collector_verification_error)?;
+    if report.reachable {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::unprocessable(
+            "collector_unreachable",
+            "Collector did not accept the configured access token.",
+        ))
+    }
 }
 
 fn validate_provider(provider: &str) -> Result<(), ApiError> {
@@ -113,6 +178,7 @@ async fn codex_provider_status(
     provider: String,
     control: CodexLifecycleControl,
     store: std::sync::Arc<akra_store::ActivityStore>,
+    collector: CollectorIntegration,
 ) -> Result<ProviderStatus, ApiError> {
     let observations = store
         .capture_client_observations()
@@ -123,11 +189,79 @@ async fn codex_provider_status(
             provider,
             enabled: control.capture_gate.is_enabled()?,
             targets: control.targets.statuses_with_observations(&observations),
+            collector,
         })
     })
     .await
     .map_err(|_| ApiError::internal())?
     .map_err(|_: crate::capture_gate::CaptureGateError| ApiError::internal())
+}
+
+async fn collector_integration(
+    collector: Option<std::sync::Arc<CollectorManager>>,
+) -> Result<CollectorIntegration, ApiError> {
+    let Some(collector) = collector else {
+        return Ok(default_collector_integration());
+    };
+    let status = tokio::task::spawn_blocking(move || collector.status())
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(collector_configuration_error)?;
+    Ok(collector_integration_from_status(status))
+}
+
+fn default_collector_integration() -> CollectorIntegration {
+    CollectorIntegration {
+        mode: CollectorMode::Local,
+        endpoint: crate::collector::DEFAULT_COLLECTOR_ENDPOINT.to_owned(),
+        configured: true,
+        token_configured: false,
+        connected: Some(true),
+        last_delivery_at_us: None,
+        pending_count: 0,
+        last_error: None,
+    }
+}
+
+fn collector_integration_from_status(status: RuntimeCollectorStatus) -> CollectorIntegration {
+    CollectorIntegration {
+        mode: status.config.mode,
+        endpoint: status.config.endpoint,
+        configured: true,
+        token_configured: status.config.has_token,
+        connected: status.connected,
+        last_delivery_at_us: status.last_delivery_at_us,
+        pending_count: status.pending,
+        last_error: status.last_error,
+    }
+}
+
+fn collector_configuration_error(error: CollectorError) -> ApiError {
+    match error {
+        CollectorError::InvalidEndpoint(_)
+        | CollectorError::InsecureRemoteEndpoint
+        | CollectorError::RemoteTokenRequired
+        | CollectorError::InvalidToken
+        | CollectorError::InvalidConfig => ApiError::unprocessable(
+            "invalid_collector_configuration",
+            "Use a loopback http address or an HTTPS collector with an access token.",
+        ),
+        CollectorError::Http(_) => ApiError::unprocessable(
+            "collector_unreachable",
+            "Collector could not be reached. Check the address, token, and TLS certificate.",
+        ),
+        _ => ApiError::internal(),
+    }
+}
+
+fn collector_verification_error(error: CollectorError) -> ApiError {
+    match error {
+        CollectorError::Http(_) => ApiError::unprocessable(
+            "collector_unreachable",
+            "Collector could not be reached. Check the address, token, and TLS certificate.",
+        ),
+        error => collector_configuration_error(error),
+    }
 }
 
 async fn apply_global_target_state(

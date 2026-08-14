@@ -17,6 +17,58 @@ activity:
 - Visibility choices are kept in local browser storage. Turning capture off or hiding
   a kind does not remove historical records.
 
+## 로컬 및 원격 수집
+
+기본 수집 대상은 `http://127.0.0.1:<port>`입니다. `localhost`, `127.0.0.0/8`,
+`[::1]`만 로컬 대상으로 취급하며, 이 경우 훅 payload는 같은 머신의
+`<data-dir>/spool`과 SQLite로만 들어갑니다. 외부 호스트, 사설망 주소, 도메인은
+반드시 `https://` 주소여야 합니다. URL에는 경로, query, fragment, 사용자 정보
+(`user@host`)를 넣을 수 없습니다.
+
+원격 수집은 명시적인 opt-in입니다. 수집을 받는 머신에서 아래처럼 runtime을
+실행하고 collector access token을 한 번 확인합니다.
+
+```bash
+# collector 머신: 기본 바인딩은 127.0.0.1입니다.
+# 외부 HTTPS reverse proxy 뒤에서만 명시적으로 외부 인터페이스를 사용하세요.
+cargo run -p akra-app -- serve --bind 0.0.0.0 --port 42130
+cargo run -p akra-app -- collector-token
+```
+
+그 다음 **프롬프트를 입력하는 source 머신**의 대시보드에서 **Collection
+destination**을 열고, collector의 `https://...` 주소와 access token을 저장합니다.
+주소와 토큰은 훅 명령이나 `hooks.json`에 기록되지 않습니다. 저장 직후 적용되며,
+destination만 바꿀 때는 Codex를 다시 시작하거나 훅 신뢰를 다시 승인할 필요가
+없습니다. endpoint metadata는 `<data-dir>/collector.json`, access token은 별도
+`<data-dir>/collector-remote.token` credential 파일에 원자적으로 저장됩니다.
+
+원격 수집을 선택하면 source 머신은 다음 정보를 해당 HTTPS collector에 보냅니다:
+
+- 사용자 프롬프트와 Codex provider/model 정보
+- 작업 경로와 project origin, session/turn 식별자, 활동 종류
+- `Stop` 훅의 최종 assistant 결과(collector에서 3줄 결과 요약을 만들기 위한 원문)
+
+원격 `Stop` 결과의 3줄 요약은 collector 머신에서 실행됩니다. 따라서 요약까지
+사용하려면 collector에 로그인된 Codex CLI와 `gpt-5.3-codex-spark`가 필요합니다.
+collector에 실행 가능한 Codex runtime이 없으면 프롬프트 기록은 보존되지만 결과
+요약은 실패 상태로 표시됩니다.
+
+source는 먼저 `<data-dir>/remote-outbox`에 로컬 내구성 큐를 기록한 뒤 짧게
+전송을 시도합니다. collector가 꺼져 있거나 TLS/token 검증에 실패해도 Codex 훅은
+실패시키지 않고 큐를 유지하며, runtime은 bounded backoff로 재시도합니다. 목적지를
+변경해도 기존 큐는 새 목적지로 자동 전송되지 않습니다. 이전 collector로 다시
+돌리거나 로컬에서 명시적으로 처리해 주세요. collector access token은 대시보드
+capability token과 별개이며, API 응답·로그·훅 명령에 반환되지 않습니다.
+
+원격 모드의 활동 노드와 대화 기록은 **collector 대시보드**에 저장됩니다. source
+대시보드는 source 자신의 destination과 delivery 상태만 보여 주며, collector를
+원격 제어하거나 원격 활동을 자동으로 복제하지 않습니다.
+
+Akra 자체는 TLS를 종료하지 않습니다. 공개 collector는 신뢰할 수 있는 HTTPS
+reverse proxy와 방화벽/네트워크 접근 제어 뒤에 두세요. dashboard와 collector
+ingress는 같은 listener를 사용하므로 raw `http://0.0.0.0:...`를 인터넷에 직접
+노출하면 안 됩니다.
+
 Enabling capture writes exact trust hashes for all three managed hooks to the matching
 Codex `config.toml`. Restart that Codex installation after a hook definition changes;
 the normal **Hooks need review** prompt should not appear for Akra-managed commands.
@@ -46,7 +98,7 @@ the user's selected installation to another detected target.
 
 ## 개인정보와 범위
 
-사용자 입력 프롬프트, 작업 위치와 활동 데이터는 로컬 SQLite와 로컬 spool에 저장합니다. 기본 런타임은 `127.0.0.1`에만 바인딩하며 텔레메트리나 Git 변경을 수행하지 않습니다.
+사용자 입력 프롬프트, 작업 위치와 활동 데이터는 기본적으로 로컬 SQLite와 로컬 spool에 저장합니다. 기본 런타임은 `127.0.0.1`에만 바인딩하며 텔레메트리나 Git 변경을 수행하지 않습니다. 사용자가 Collection destination에 외부 HTTPS collector와 access token을 명시적으로 저장한 경우에만, 위의 원격 수집 범위에 적은 데이터가 그 collector로 전송됩니다.
 
 결과 요약은 예외입니다. Codex의 최종 assistant 결과(`Stop.last_assistant_message`)만 로컬에서 인증된 Codex CLI의 `codex exec --model gpt-5.3-codex-spark`에 전달합니다. 저장된 사용자 입력 프롬프트는 요약 요청에 포함하지 않습니다. 원문 결과는 재시도를 위해 로컬에 일시 보관되며, 요약 성공·최종 실패 시 즉시 삭제됩니다. 완료되지 않은 원문은 24시간이 지나면 다음 runtime recovery에서 처리 전에 삭제됩니다. 장기 저장되는 결과 데이터는 정확히 3줄이며, 앞뒤 공백을 제거한 세 줄의 Unicode scalar 수 합계가 180자 이하인 경우만 허용됩니다. 줄 구분자는 합계에서 제외합니다. 업그레이드 전에 저장된 긴 요약은 각 줄의 내용을 균등하게 축약하고 말줄임표를 포함해 같은 180자 한도로 정규화합니다. Spark를 사용할 수 없거나 인증·네트워크·출력 검증에 실패하면 다른 모델로 대체하지 않고 요약 상태를 실패로 표시합니다.
 
@@ -77,7 +129,7 @@ Codex의 훅 신뢰 모델은 [OpenAI Codex Hooks 문서](https://learn.chatgpt.
 cargo run -p akra-app -- setup
 
 # 로컬 런타임 시작
-cargo run -p akra-app -- serve --port 3000
+cargo run -p akra-app -- serve --port 42130
 ```
 
 `serve` 출력의 `url`과 `token`을 이용해 대시보드를 실행합니다.
@@ -87,9 +139,9 @@ cargo run -p akra-app -- serve --port 3000
 ```bash
 cd web
 npm install
-VITE_AKRA_URL=http://127.0.0.1:3000 \
+VITE_AKRA_URL=http://127.0.0.1:42130 \
 VITE_AKRA_TOKEN=<serve가_출력한_token> \
-npm run dev
+npm run dev # http://127.0.0.1:42131
 ```
 
 브라우저에서 Vite가 출력한 주소를 열면 활동 캔버스와 Codex 캡처 설정을 볼 수 있습니다.
@@ -109,7 +161,10 @@ cargo run -p akra-app -- setup
 cargo run -p akra-app -- status
 
 # 로컬 런타임
-cargo run -p akra-app -- serve --port 3000
+cargo run -p akra-app -- serve --port 42130
+
+# collector 머신에서 source에 전달할 별도 수집 토큰 확인
+cargo run -p akra-app -- collector-token
 
 # 훅 payload 수동 수집 (표준 입력)
 cat codex-hook.json | cargo run -p akra-app -- capture

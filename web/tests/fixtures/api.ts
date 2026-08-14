@@ -197,6 +197,29 @@ export class FixtureApi {
       );
       return { status: 204 };
     }
+    if (path === "/v1/providers/codex/collector" && method === "PUT") {
+      const endpoint = text(body, "endpoint");
+      const url = new URL(endpoint);
+      const remote = url.protocol === "https:";
+      const token = optionalText(body, "token");
+      this.state.provider.collector = {
+        ...this.state.provider.collector,
+        mode: remote ? "remote" : "local",
+        endpoint: url.origin,
+        configured: true,
+        token_configured: remote
+          ? token === undefined ? this.state.provider.collector.token_configured : true
+          : false,
+        connected: !remote,
+        last_error: null,
+      };
+      return { status: 204 };
+    }
+    if (path === "/v1/providers/codex/collector/verify" && method === "POST") {
+      this.state.provider.collector.connected = true;
+      this.state.provider.collector.last_error = null;
+      return { status: 204 };
+    }
     const provider = matchText(path, /^\/v1\/providers\/([^/]+)$/);
     if (provider !== null && method === "GET") {
       return provider === "codex"
@@ -300,7 +323,7 @@ async function fulfill(route: Route, api: FixtureApi): Promise<void> {
   const headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Private-Network": "true",
   };
   await route.fulfill(response.body === undefined
@@ -344,6 +367,19 @@ function numeric(body: unknown, key: string): number {
 function boolean(body: unknown, key: string): boolean {
   const value = record(body)[key];
   if (typeof value !== "boolean") throw new Error(`Fixture request ${key} must be a boolean`);
+  return value;
+}
+
+function text(body: unknown, key: string): string {
+  const value = record(body)[key];
+  if (typeof value !== "string") throw new Error(`Fixture request ${key} must be a string`);
+  return value;
+}
+
+function optionalText(body: unknown, key: string): string | undefined {
+  const value = record(body)[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error(`Fixture request ${key} must be a string`);
   return value;
 }
 

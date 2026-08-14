@@ -19,8 +19,28 @@ struct ErrorBody {
 }
 
 impl ApiError {
+    pub(crate) fn unauthorized() -> Self {
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "A valid capability token is required.",
+        )
+    }
+
     pub(crate) fn not_found(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, "not_found", message)
+    }
+
+    pub(crate) fn conflict(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, code, message)
+    }
+
+    pub(crate) fn payload_too_large(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::PAYLOAD_TOO_LARGE, code, message)
+    }
+
+    pub(crate) fn service_unavailable(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, code, message)
     }
 
     pub(crate) fn unprocessable(code: &'static str, message: impl Into<String>) -> Self {

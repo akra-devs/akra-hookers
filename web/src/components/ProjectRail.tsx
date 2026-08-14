@@ -1,6 +1,15 @@
 import { useEffect, useRef } from "react";
-import type { CodexCaptureTarget, OriginSummary, ProjectSummary } from "../api";
+import type {
+  CodexCaptureTarget,
+  CollectorIntegration,
+  OriginSummary,
+  ProjectSummary,
+} from "../api";
 import type { ActivityVisibility } from "../activity-visibility";
+import {
+  CollectorEndpointControl,
+  type CollectorOperation,
+} from "./CollectorEndpointControl";
 import { UiIcon } from "./UiIcon";
 
 export type ProjectFilter = "all" | "inbox" | `project:${number}`;
@@ -13,6 +22,8 @@ type ProjectRailProps = {
   codexTargets: CodexCaptureTarget[];
   pendingCodexTargetIds: string[];
   captureError: string | null;
+  collector: CollectorIntegration;
+  collectorOperation: CollectorOperation;
   activityVisibility: ActivityVisibility;
   projects: ProjectSummary[];
   origins: OriginSummary[];
@@ -20,6 +31,8 @@ type ProjectRailProps = {
   filter: ProjectFilter;
   onCodexChange: (enabled: boolean) => void;
   onCodexTargetChange: (targetId: string, enabled: boolean) => void;
+  onCollectorConfigure: (endpoint: string, token?: string) => Promise<void>;
+  onCollectorVerify: () => Promise<void>;
   onActivityVisibilityChange: (
     kind: keyof ActivityVisibility,
     visible: boolean,
@@ -68,6 +81,8 @@ export function ProjectRail({
   codexTargets,
   pendingCodexTargetIds,
   captureError,
+  collector,
+  collectorOperation,
   activityVisibility,
   projects,
   origins,
@@ -75,6 +90,8 @@ export function ProjectRail({
   filter,
   onCodexChange,
   onCodexTargetChange,
+  onCollectorConfigure,
+  onCollectorVerify,
   onActivityVisibilityChange,
   onFilterChange,
   onNewProject,
@@ -302,6 +319,13 @@ export function ProjectRail({
             />
           </label>
         </header>
+        <CollectorEndpointControl
+          collector={collector}
+          available={codexAvailable}
+          operation={collectorOperation}
+          onConfigure={onCollectorConfigure}
+          onVerify={onCollectorVerify}
+        />
         <div className="capture-target-list" role="list" aria-label="감지된 Codex 설치">
           {codexAvailable && codexTargets.length === 0 && (
             <p className="capture-target-empty">감지된 Codex 설치가 없습니다.</p>

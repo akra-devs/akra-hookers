@@ -1,4 +1,5 @@
-import type { CodexCaptureTarget, ProjectSummary } from "../api";
+import type { CodexCaptureTarget, CollectorIntegration, ProjectSummary } from "../api";
+import type { CollectorOperation } from "./CollectorEndpointControl";
 import type { ProjectFilter } from "./ProjectRail";
 import { UiIcon } from "./UiIcon";
 
@@ -9,6 +10,8 @@ type AppCommandBarProps = {
   originCount: number;
   codexAvailable: boolean;
   codexTargets: CodexCaptureTarget[];
+  collector: CollectorIntegration | undefined;
+  collectorOperation: CollectorOperation;
   onFilterChange: (filter: ProjectFilter) => void;
   onOpenWorkLocations: () => void;
   onOpenCaptureSettings: () => void;
@@ -21,19 +24,28 @@ export function AppCommandBar({
   originCount,
   codexAvailable,
   codexTargets,
+  collector,
+  collectorOperation,
   onFilterChange,
   onOpenWorkLocations,
   onOpenCaptureSettings,
 }: AppCommandBarProps) {
   const availableTargets = codexTargets.filter((target) => target.available);
   const enabledTargets = availableTargets.filter((target) => target.enabled);
-  const health = !codexAvailable
-    ? { label: "Checking", tone: "pending" }
-    : enabledTargets.length === 0
-      ? { label: "Off", tone: "off" }
-      : enabledTargets.length < availableTargets.length
-        ? { label: "Partial", tone: "partial" }
-        : { label: "Healthy", tone: "healthy" };
+  let health = { label: "Healthy", tone: "healthy" };
+  if (!codexAvailable || collectorOperation !== null) {
+    health = { label: "Checking", tone: "pending" };
+  } else if (enabledTargets.length === 0) {
+    health = { label: "Off", tone: "off" };
+  } else if (collector?.last_error) {
+    health = { label: "Delivery issue", tone: "error" };
+  } else if ((collector?.pending_count ?? 0) > 0) {
+    health = { label: `${collector?.pending_count} queued`, tone: "partial" };
+  } else if (collector?.mode === "remote" && collector.connected !== true) {
+    health = { label: "Needs check", tone: "partial" };
+  } else if (enabledTargets.length < availableTargets.length) {
+    health = { label: "Partial", tone: "partial" };
+  }
 
   return (
     <header className="command-bar">

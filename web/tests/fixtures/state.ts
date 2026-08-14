@@ -127,6 +127,16 @@ export function createFixtureState(): FixtureState {
     provider: {
       provider: "codex",
       enabled: true,
+      collector: {
+        mode: "local",
+        endpoint: "http://127.0.0.1:42130",
+        configured: true,
+        token_configured: false,
+        connected: true,
+        last_delivery_at_us: null,
+        pending_count: 0,
+        last_error: null,
+      },
       targets: [
         {
           id: "windows-native",

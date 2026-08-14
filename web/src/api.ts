@@ -9,6 +9,7 @@ import type {
   CanvasNode,
   CodexCaptureTarget,
   CodexCaptureClient,
+  CollectorIntegration,
   OriginRoutingRequest,
   OriginSummary,
   ProjectSummary,
@@ -32,6 +33,7 @@ export type {
   CanvasNode,
   CodexCaptureTarget,
   CodexCaptureClient,
+  CollectorIntegration,
   FutureRoute,
   OriginRoutingRequest,
   OriginSummary,
@@ -99,11 +101,13 @@ export type ApiClient = {
   updateCanvasPosition(nodeId: number, position: { x: number; y: number }): Promise<void>;
   setProviderEnabled(provider: string, enabled: boolean): Promise<void>;
   setProviderTargetEnabled(provider: string, targetId: string, enabled: boolean): Promise<void>;
+  configureCollector(endpoint: string, token?: string): Promise<void>;
+  verifyCollector(): Promise<void>;
   provider(provider: string): Promise<ProviderIntegration>;
 };
 
 type Fetch = typeof fetch;
-type Method = "DELETE" | "PATCH" | "POST";
+type Method = "DELETE" | "PATCH" | "POST" | "PUT";
 
 export function createApiClient(
   baseUrl: string,
@@ -188,6 +192,13 @@ export function createApiClient(
         "PATCH",
         { enabled },
       ),
+    configureCollector: (endpoint, collectorToken) =>
+      request<void>("/v1/providers/codex/collector", "PUT", {
+        endpoint,
+        ...(collectorToken === undefined ? {} : { token: collectorToken }),
+      }),
+    verifyCollector: () =>
+      request<void>("/v1/providers/codex/collector/verify", "POST"),
     provider: (provider) =>
       request<ProviderIntegration>(`/v1/providers/${encodeURIComponent(provider)}`),
   };

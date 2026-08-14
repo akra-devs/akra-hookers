@@ -227,6 +227,7 @@ button.command-control {
 .capture-health strong { color: var(--color-text); font-size: 12px; font-weight: 620; }
 .capture-health--healthy i { color: var(--color-accent); }
 .capture-health--partial i { color: var(--color-warning); }
+.capture-health--error i { color: var(--color-error); }
 .capture-health--off i { color: var(--color-subtle); }
 .capture-health--pending i { color: var(--color-steel); animation: status-pulse 1.4s ease-in-out infinite; }
 
@@ -413,6 +414,209 @@ button.command-control {
 .provider-control { gap: 10px; padding-bottom: 22px; }
 .provider-control .rail-section__heading { align-items: center; }
 .capture-summary { margin-top: 4px; color: var(--color-muted); font-size: 10px; line-height: 1.4; }
+
+.collector-control {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: #0d1416;
+}
+
+.collector-control__header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.collector-control__header > div { min-width: 0; }
+.collector-control__header h3 { color: #dfe6e2; font-size: 12px; font-weight: 650; }
+.collector-control__header p {
+  margin-top: 3px;
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.collector-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding-top: 2px;
+  color: var(--color-muted);
+  font-size: 9px;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.collector-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.collector-status--healthy { color: #acd8b8; }
+.collector-status--warning { color: #dfc185; }
+.collector-status--error { color: #efaaa7; }
+.collector-status--pending { color: var(--color-steel); }
+.collector-status--pending i { animation: status-pulse 1.4s ease-in-out infinite; }
+
+.collector-control__readout {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: #0a1012;
+}
+
+.collector-mode {
+  display: inline-grid;
+  min-height: 18px;
+  place-items: center;
+  padding: 2px 4px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  color: var(--color-steel);
+  font: 650 9px var(--font-mono);
+  letter-spacing: .04em;
+}
+.collector-mode--local { color: #95caa4; }
+.collector-mode--remote { color: #b4c3c7; }
+
+.collector-control__readout code {
+  min-width: 0;
+  overflow: hidden;
+  color: #c2ccc7;
+  font: 500 10px/1.35 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collector-control__readout button,
+.collector-control__actions button {
+  min-height: 30px;
+  padding: 5px 7px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  background: #131b1e;
+  color: #c2cbc7;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.collector-control__readout button:hover:not(:disabled),
+.collector-control__actions button:hover:not(:disabled) {
+  border-color: #607178;
+  background: #1a2427;
+  color: var(--color-text);
+}
+
+.collector-control__actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+.collector-control__actions small { color: var(--color-muted); font-size: 10px; }
+
+.collector-form,
+.collector-field { display: grid; min-width: 0; gap: 6px; }
+
+.collector-field > span {
+  color: #bdc8c4;
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.collector-field input {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 9px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  outline: 0;
+  background: #0a1012;
+  color: var(--color-text);
+  font: 500 11px/1.4 var(--font-mono);
+}
+
+.collector-field input::placeholder { color: #7f8c8f; opacity: 1; }
+.collector-field input[aria-invalid="true"] { border-color: #9b5654; }
+.collector-field small,
+.collector-field__hint {
+  color: #879396;
+  font-size: 9px;
+  line-height: 1.45;
+}
+.collector-field__hint code { color: #bdc9c5; font-family: var(--font-mono); }
+
+.collector-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.collector-actions button {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  background: #131b1e;
+  color: #c2cbc7;
+  font-size: 11px;
+}
+.collector-actions .collector-save {
+  border-color: #76ae88;
+  background: #5d956f;
+  color: #07120b;
+  font-weight: 680;
+}
+.collector-actions button:hover:not(:disabled) {
+  border-color: #607178;
+  background: #1a2427;
+  color: var(--color-text);
+}
+.collector-actions .collector-save:hover:not(:disabled) {
+  border-color: #9ad0aa;
+  background: #6ba77d;
+  color: #07120b;
+}
+
+.collector-token-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+.collector-token-row button {
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  background: #131b1e;
+  color: #c2cbc7;
+  font-size: 10px;
+}
+.collector-token-row button:hover:not(:disabled) {
+  border-color: #607178;
+  background: #1a2427;
+  color: var(--color-text);
+}
+.collector-delivery {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.collector-feedback:empty { display: none; }
+.collector-notice { color: #acd8b8; font-size: 10px; line-height: 1.45; }
 
 .provider-master,
 .capture-target__toggle { display: flex; align-items: center; }
@@ -1423,6 +1627,12 @@ select:not([aria-label="프로젝트 필터"]) {
   .canvas-header-actions button { min-height: 36px; max-height: 42px; padding-inline: 8px; }
   .canvas-interaction-hint { display: none; }
   .icon-button { width: 44px; height: 44px; }
+  .collector-control { padding: 12px; }
+  .collector-field input { min-height: 44px; font-size: 16px; }
+  .collector-actions button { min-height: 44px; }
+  .collector-token-row button,
+  .collector-control__readout button,
+  .collector-control__actions button { min-height: 44px; }
   .canvas-controls .react-flow__controls-button { width: 44px; height: 44px; }
   .canvas-zoom-level { min-width: 48px; padding-inline: 6px; }
 
