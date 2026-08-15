@@ -80,7 +80,9 @@ impl ApiError {
             akra_store::StoreError::Sqlite(_)
             | akra_store::StoreError::Invariant(_)
             | akra_store::StoreError::InvalidResultSummaryLease
-            | akra_store::StoreError::InvalidResultSummary(_) => Self::internal(),
+            | akra_store::StoreError::InvalidResultSummary(_)
+            | akra_store::StoreError::InvalidPromptSummaryLease
+            | akra_store::StoreError::InvalidPromptSummary(_) => Self::internal(),
         }
     }
 

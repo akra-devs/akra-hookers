@@ -12,6 +12,7 @@ pub struct ActivitySummary {
     pub conversation_index: i64,
     pub conversation_total: i64,
     pub result_summary_status: ResultSummaryStatus,
+    pub prompt_summary: ActivityPromptSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +49,7 @@ pub struct ActivityDetail {
     pub origin: ActivityOriginDetail,
     pub technical: ActivityTechnicalDetail,
     pub result_summary: ActivityResultSummary,
+    pub prompt_summary: ActivityPromptSummary,
     pub selected_turn: ActivityConversationTurn,
     pub conversation: Vec<ActivityConversationTurn>,
     pub conversation_total: i64,
@@ -81,6 +83,7 @@ pub struct ActivityConversationTurn {
     pub on_canvas: bool,
     pub selected: bool,
     pub result_summary: ActivityResultSummary,
+    pub prompt_summary: ActivityPromptSummary,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -107,6 +110,41 @@ impl ActivityResultSummary {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptSummaryStatus {
+    Pending,
+    Ready,
+    Unavailable,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptSummaryMode {
+    Contextual,
+    Standalone,
+    Passthrough,
+    Fallback,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ActivityPromptSummary {
+    pub status: PromptSummaryStatus,
+    pub mode: PromptSummaryMode,
+    pub text: Option<String>,
+}
+
+impl ActivityPromptSummary {
+    pub const fn unavailable() -> Self {
+        Self {
+            status: PromptSummaryStatus::Unavailable,
+            mode: PromptSummaryMode::Fallback,
+            text: None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct CanvasNodeSummary {
     pub id: i64,
@@ -126,6 +164,7 @@ pub struct CanvasEdgeSummary {
 pub struct ProviderIntegration {
     pub provider: String,
     pub enabled: bool,
+    pub prompt_summary_mode: String,
 }
 
 #[derive(Debug, Serialize)]

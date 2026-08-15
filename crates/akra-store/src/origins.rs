@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::{ActivityStore, OriginSummary, StoreError};
+use crate::{ActivityKindFilter, ActivityStore, ActivityTimeRange, OriginSummary, StoreError};
 
 const ORIGIN_SUMMARY_SELECT: &str = "
     SELECT activity_origins.id, activity_origins.display_path, activity_origins.kind,
@@ -11,7 +11,19 @@ const ORIGIN_SUMMARY_SELECT: &str = "
                  activity_events.provider_session_id)
     FROM activity_origins
     LEFT JOIN projects ON projects.id = activity_origins.default_project_id
-    LEFT JOIN activity_events ON activity_events.origin_id = activity_origins.id";
+    LEFT JOIN activity_events ON activity_events.origin_id = activity_origins.id
+      AND (
+             activity_events.activity_kind = 'user'
+          OR (?1 = 1 AND activity_events.activity_kind = 'subagent')
+          OR (?2 = 1 AND activity_events.activity_kind = 'internal')
+      )
+      AND (
+          ?3 IS NULL
+          OR COALESCE(
+              activity_events.captured_at_us,
+              activity_events.first_recorded_at_us
+          ) >= ?3
+      )";
 
 type OriginRow = (
     i64,
@@ -28,12 +40,24 @@ type OriginRow = (
 
 impl ActivityStore {
     pub async fn origins(&self) -> Result<Vec<OriginSummary>, StoreError> {
+        self.origins_filtered_in_range(ActivityKindFilter::ALL, ActivityTimeRange::ALL)
+            .await
+    }
+
+    pub async fn origins_filtered_in_range(
+        &self,
+        activity_filter: ActivityKindFilter,
+        time_range: ActivityTimeRange,
+    ) -> Result<Vec<OriginSummary>, StoreError> {
         let statement = format!(
             "{ORIGIN_SUMMARY_SELECT}
              GROUP BY activity_origins.id, projects.name
              ORDER BY activity_origins.display_path, activity_origins.id"
         );
         let rows = sqlx::query_as::<_, OriginRow>(&statement)
+            .bind(activity_filter.include_subagent())
+            .bind(activity_filter.include_internal())
+            .bind(time_range.start_at_us())
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().map(origin_summary).collect())
@@ -52,11 +76,14 @@ impl ActivityStore {
         }
         let statement = format!(
             "{ORIGIN_SUMMARY_SELECT}
-             WHERE activity_origins.default_project_id = ?
+             WHERE activity_origins.default_project_id = ?4
              GROUP BY activity_origins.id, projects.name
              ORDER BY activity_origins.display_path, activity_origins.id"
         );
         let rows = sqlx::query_as::<_, OriginRow>(&statement)
+            .bind(ActivityKindFilter::ALL.include_subagent())
+            .bind(ActivityKindFilter::ALL.include_internal())
+            .bind(ActivityTimeRange::ALL.start_at_us())
             .bind(project_id)
             .fetch_all(&self.pool)
             .await?;
@@ -66,10 +93,13 @@ impl ActivityStore {
     pub async fn origin(&self, origin_id: i64) -> Result<OriginSummary, StoreError> {
         let statement = format!(
             "{ORIGIN_SUMMARY_SELECT}
-             WHERE activity_origins.id = ?
+             WHERE activity_origins.id = ?4
              GROUP BY activity_origins.id, projects.name"
         );
         let row = sqlx::query_as::<_, OriginRow>(&statement)
+            .bind(ActivityKindFilter::ALL.include_subagent())
+            .bind(ActivityKindFilter::ALL.include_internal())
+            .bind(ActivityTimeRange::ALL.start_at_us())
             .bind(origin_id)
             .fetch_optional(&self.pool)
             .await?

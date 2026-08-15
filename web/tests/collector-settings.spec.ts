@@ -66,6 +66,8 @@ test("remote collection is explicit, write-only for secrets, and does not restar
   await expect(page.getByLabel("Collector access token")).toHaveCount(0);
   await expect(page.getByText("Capture hooks를 다시 시작할 필요가 없습니다.")).toBeVisible();
   await expect(page.getByRole("button", { name: /Capture health: Needs check/ })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "문맥 기반 프롬프트 요약" })).toBeDisabled();
+  await expect(page.getByText("원격 수집 중 · collector 대시보드에서 요약 설정")).toBeVisible();
 
   const verified = page.waitForResponse((response) =>
     response.request().method() === "POST"

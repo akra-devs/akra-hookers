@@ -5,6 +5,7 @@ use crate::{
     ActivityResultSummary, ActivityStore, ActivityTechnicalDetail, ResultSummaryLines,
     ResultSummaryStatus, StoreError,
     activities::{activity_time, explicit_activity_time, project_summary, result_summary_status},
+    prompt_summaries::activity_prompt_summary_from_parts,
 };
 
 #[derive(sqlx::FromRow)]
@@ -35,6 +36,10 @@ struct DetailRow {
     summary_line_1: Option<String>,
     summary_line_2: Option<String>,
     summary_line_3: Option<String>,
+    prompt_summary_state: Option<String>,
+    projected_prompt: Option<String>,
+    prompt_summary_text: Option<String>,
+    prompt_summary_used_previous_result: Option<i64>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -51,6 +56,10 @@ struct TimelineRow {
     summary_line_1: Option<String>,
     summary_line_2: Option<String>,
     summary_line_3: Option<String>,
+    prompt_summary_state: Option<String>,
+    projected_prompt: Option<String>,
+    prompt_summary_text: Option<String>,
+    prompt_summary_used_previous_result: Option<i64>,
 }
 
 impl ActivityStore {
@@ -128,11 +137,17 @@ impl ActivityStore {
                     COALESCE(result_summary.state, 'unavailable') AS result_summary_state,
                     result_summary.summary_line_1,
                     result_summary.summary_line_2,
-                    result_summary.summary_line_3
+                    result_summary.summary_line_3,
+                    prompt_summary.state AS prompt_summary_state,
+                    prompt_summary.projected_prompt,
+                    prompt_summary.summary_text AS prompt_summary_text,
+                    prompt_summary.used_previous_result AS prompt_summary_used_previous_result
              FROM selected
              LEFT JOIN projects ON projects.id = selected.project_id
              LEFT JOIN activity_result_summaries AS result_summary
-               ON result_summary.activity_event_id = selected.id",
+               ON result_summary.activity_event_id = selected.id
+             LEFT JOIN activity_prompt_summaries AS prompt_summary
+               ON prompt_summary.activity_event_id = selected.id",
         )
         .bind(activity_id)
         .bind(activity_filter.include_subagent())
@@ -161,6 +176,12 @@ impl ActivityStore {
             row.summary_line_2,
             row.summary_line_3,
         )?;
+        let prompt_summary = activity_prompt_summary_from_parts(
+            row.prompt_summary_state.as_deref().unwrap_or("unavailable"),
+            row.projected_prompt.clone(),
+            row.prompt_summary_text.clone(),
+            row.prompt_summary_used_previous_result,
+        )?;
         let selected_turn = ActivityConversationTurn {
             id: row.id,
             activity_kind: parse_activity_kind(&row.activity_kind)?,
@@ -170,6 +191,7 @@ impl ActivityStore {
             on_canvas: row.on_canvas != 0,
             selected: true,
             result_summary: result_summary.clone(),
+            prompt_summary: prompt_summary.clone(),
         };
         Ok(ActivityDetail {
             id: row.id,
@@ -201,6 +223,7 @@ impl ActivityStore {
                 agent_type: row.agent_type,
             },
             result_summary,
+            prompt_summary,
             selected_turn,
             conversation,
             conversation_total: row.conversation_total,
@@ -227,6 +250,10 @@ impl ActivityStore {
                         result_summary.summary_line_1,
                         result_summary.summary_line_2,
                         result_summary.summary_line_3,
+                        prompt_summary.state AS prompt_summary_state,
+                        prompt_summary.projected_prompt,
+                        prompt_summary.summary_text AS prompt_summary_text,
+                        prompt_summary.used_previous_result AS prompt_summary_used_previous_result,
                         CASE
                             WHEN activity_origins.routing_mode = 'dedicated'
                             THEN activity_origins.default_project_id
@@ -238,6 +265,8 @@ impl ActivityStore {
                    ON activity_project_assignments.activity_event_id = activity_events.id
                  LEFT JOIN activity_result_summaries AS result_summary
                    ON result_summary.activity_event_id = activity_events.id
+                 LEFT JOIN activity_prompt_summaries AS prompt_summary
+                   ON prompt_summary.activity_event_id = activity_events.id
                  WHERE activity_events.provider = ?1
                    AND activity_events.provider_session_id = ?2
                    AND (
@@ -274,6 +303,8 @@ impl ActivityStore {
              SELECT id, activity_kind, prompt, project_id, project_name,
                     captured_at_us, first_recorded_at_us, on_canvas,
                     result_summary_state, summary_line_1, summary_line_2, summary_line_3
+                    , prompt_summary_state, projected_prompt, prompt_summary_text,
+                    prompt_summary_used_previous_result
              FROM numbered
              WHERE ?5 IS NULL
                 OR conversation_index > COALESCE(
@@ -306,6 +337,12 @@ impl ActivityStore {
                         row.summary_line_1,
                         row.summary_line_2,
                         row.summary_line_3,
+                    )?,
+                    prompt_summary: activity_prompt_summary_from_parts(
+                        row.prompt_summary_state.as_deref().unwrap_or("unavailable"),
+                        row.projected_prompt,
+                        row.prompt_summary_text,
+                        row.prompt_summary_used_previous_result,
                     )?,
                 })
             })

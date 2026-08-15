@@ -91,22 +91,26 @@ fn decode(payload: &[u8]) -> Result<RecoveredCapture, RecoveryError> {
                         agent_type.map(ToOwned::to_owned),
                     )?
                 };
-                Ok(RecoveredCapture::Activity(
-                    match envelope.capture_source() {
-                        Some((target, client)) => RecordActivity::captured_from(
-                            event,
-                            envelope.origin().clone(),
-                            envelope.captured_at_us(),
-                            target,
-                            client,
-                        ),
-                        None => RecordActivity::captured(
-                            event,
-                            envelope.origin().clone(),
-                            envelope.captured_at_us(),
-                        ),
-                    },
-                ))
+                let projection = (event.activity_kind() == akra_core::ingress::ActivityKind::User)
+                    .then(|| CodexAdapter::project_prompt(event.prompt()));
+                let command = match envelope.capture_source() {
+                    Some((target, client)) => RecordActivity::captured_from(
+                        event,
+                        envelope.origin().clone(),
+                        envelope.captured_at_us(),
+                        target,
+                        client,
+                    ),
+                    None => RecordActivity::captured(
+                        event,
+                        envelope.origin().clone(),
+                        envelope.captured_at_us(),
+                    ),
+                };
+                Ok(RecoveredCapture::Activity(match projection {
+                    Some(projection) => command.with_prompt_projection(projection),
+                    None => command,
+                }))
             }
             CodexCapture::Result(event) => {
                 Ok(RecoveredCapture::Result(match envelope.capture_source() {

@@ -1,10 +1,21 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use serde::Deserialize;
 
-use crate::{http::AppState, http_error::ApiError};
+use crate::{
+    http::AppState,
+    http_activities::{activity_kind_filter, activity_time_range},
+    http_error::ApiError,
+};
+
+#[derive(Default, Deserialize)]
+pub(crate) struct OriginQuery {
+    include_subagent: Option<bool>,
+    include_internal: Option<bool>,
+    period: Option<String>,
+}
 
 #[derive(Deserialize)]
 pub(crate) struct OriginRoutingPayload {
@@ -34,10 +45,14 @@ struct NewDestination {
 
 pub(crate) async fn origins(
     State(state): State<AppState>,
+    Query(query): Query<OriginQuery>,
 ) -> Result<Json<Vec<akra_store::OriginSummary>>, ApiError> {
     state
         .store
-        .origins()
+        .origins_filtered_in_range(
+            activity_kind_filter(query.include_subagent, query.include_internal),
+            activity_time_range(query.period.as_deref())?,
+        )
         .await
         .map(Json)
         .map_err(ApiError::from_store)

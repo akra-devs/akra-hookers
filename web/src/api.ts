@@ -21,6 +21,7 @@ export type {
   ActivityAssignmentResult,
   ActivityConversationTurn,
   ActivityDetail,
+  ActivityPromptSummary,
   ActivityKind,
   ActivityProject,
   ActivityResultSummary,
@@ -39,6 +40,8 @@ export type {
   OriginSummary,
   ProjectDestination,
   ProjectSummary,
+  PromptSummaryMode,
+  PromptSummaryStatus,
   ProviderIntegration,
   ResultSummaryStatus,
 } from "./api-contracts";
@@ -62,7 +65,13 @@ export type ActivityVisibilityQuery = {
   includeInternal?: boolean;
 };
 
-type ActivityPageQuery = ActivityVisibilityQuery & {
+export type ActivityPeriod = "all" | "day" | "week" | "month" | "quarter";
+
+export type ActivityFilterQuery = ActivityVisibilityQuery & {
+  period?: ActivityPeriod;
+};
+
+type ActivityPageQuery = ActivityFilterQuery & {
   limit?: number;
   afterId?: number;
   order?: "oldest" | "newest";
@@ -78,16 +87,16 @@ export type ApiClient = {
     scope: ActivityScope,
     page?: ActivityPageQuery,
   ): Promise<ActivitySummary[]>;
-  activityCount(scope: ActivityScope, visibility?: ActivityVisibilityQuery): Promise<number>;
+  activityCount(scope: ActivityScope, filters?: ActivityFilterQuery): Promise<number>;
   activity(
     activityId: number,
     page?: ConversationPageQuery,
   ): Promise<ActivityDetail>;
-  projects(visibility?: ActivityVisibilityQuery): Promise<ProjectSummary[]>;
+  projects(filters?: ActivityFilterQuery): Promise<ProjectSummary[]>;
   createProject(name: string): Promise<ProjectSummary>;
   renameProject(projectId: number, name: string): Promise<ProjectSummary>;
   mergeProject(sourceProjectId: number, targetProjectId: number): Promise<ProjectSummary>;
-  origins(): Promise<OriginSummary[]>;
+  origins(filters?: ActivityFilterQuery): Promise<OriginSummary[]>;
   projectOrigins(projectId: number): Promise<OriginSummary[]>;
   configureOrigin(originId: number, request: OriginRoutingRequest): Promise<OriginSummary>;
   assignActivities(request: ActivityAssignmentRequest): Promise<ActivityAssignmentResult>;
@@ -100,6 +109,7 @@ export type ApiClient = {
   edges(): Promise<CanvasEdge[]>;
   updateCanvasPosition(nodeId: number, position: { x: number; y: number }): Promise<void>;
   setProviderEnabled(provider: string, enabled: boolean): Promise<void>;
+  setPromptSummaryMode(mode: "off" | "smart"): Promise<void>;
   setProviderTargetEnabled(provider: string, targetId: string, enabled: boolean): Promise<void>;
   configureCollector(endpoint: string, token?: string): Promise<void>;
   verifyCollector(): Promise<void>;
@@ -133,23 +143,24 @@ export function createApiClient(
     if (!response.ok) {
       throw await apiError(response);
     }
-    if (response.status === 204 || response.headers.get("Content-Length") === "0") {
+    const responseText = await response.text();
+    if (!responseText.trim()) {
       return undefined as T;
     }
-    return response.json() as Promise<T>;
+    return JSON.parse(responseText) as T;
   }
 
   return {
     activities: (scope, page) =>
       request<ActivitySummary[]>(activityPath(scope, page)),
-    activityCount: async (scope, visibility) => {
-      const result = await request<{ count: number }>(activityCountPath(scope, visibility));
+    activityCount: async (scope, filters) => {
+      const result = await request<{ count: number }>(activityCountPath(scope, filters));
       return result.count;
     },
     activity: (activityId, page) =>
       request<ActivityDetail>(conversationPath(activityId, page)),
-    projects: (visibility) =>
-      request<ProjectSummary[]>(appendActivityVisibility("/v1/projects", visibility)),
+    projects: (filters) =>
+      request<ProjectSummary[]>(appendActivityFilters("/v1/projects", filters)),
     createProject: (name) => request<ProjectSummary>("/v1/projects", "POST", { name }),
     renameProject: (projectId, name) =>
       request<ProjectSummary>(`/v1/projects/${projectId}`, "PATCH", { name }),
@@ -157,7 +168,7 @@ export function createApiClient(
       request<ProjectSummary>(`/v1/projects/${sourceProjectId}/merge`, "POST", {
         target_project_id: targetProjectId,
       }),
-    origins: () => request<OriginSummary[]>("/v1/origins"),
+    origins: (filters) => request<OriginSummary[]>(appendActivityFilters("/v1/origins", filters)),
     projectOrigins: (projectId) =>
       request<OriginSummary[]>(`/v1/projects/${projectId}/origins`),
     configureOrigin: (originId, command) =>
@@ -186,6 +197,8 @@ export function createApiClient(
       }),
     setProviderEnabled: (provider, enabled) =>
       request<void>(`/v1/providers/${encodeURIComponent(provider)}`, "PATCH", { enabled }),
+    setPromptSummaryMode: (mode) =>
+      request<void>("/v1/providers/codex/prompt-summaries", "PUT", { mode }),
     setProviderTargetEnabled: (provider, targetId, enabled) =>
       request<void>(
         `/v1/providers/${encodeURIComponent(provider)}/targets/${encodeURIComponent(targetId)}`,
@@ -237,9 +250,9 @@ function conversationPath(
 
 function activityCountPath(
   scope: ActivityScope,
-  visibility?: ActivityVisibilityQuery,
+  filters?: ActivityFilterQuery,
 ): string {
-  return activityPath(scope, visibility)
+  return activityPath(scope, filters)
     .replace("/v1/activities?", "/v1/activities/count?");
 }
 
@@ -254,33 +267,36 @@ function appendPage(
   if (page.limit !== undefined) parameters.set(limitName, String(page.limit));
   if (page.afterId !== undefined) parameters.set(cursorName, String(page.afterId));
   if ("order" in page && page.order !== undefined) parameters.set("order", page.order);
-  appendVisibilityParameters(parameters, page);
+  appendActivityFilterParameters(parameters, page);
   const query = parameters.toString();
   return query.length === 0
     ? path
     : `${path}${path.includes("?") ? "&" : "?"}${query}`;
 }
 
-function appendActivityVisibility(
+function appendActivityFilters(
   path: string,
-  visibility: ActivityVisibilityQuery | undefined,
+  filters: ActivityFilterQuery | undefined,
 ): string {
-  if (!visibility) return path;
+  if (!filters) return path;
   const parameters = new URLSearchParams();
-  appendVisibilityParameters(parameters, visibility);
+  appendActivityFilterParameters(parameters, filters);
   const query = parameters.toString();
   return query ? `${path}?${query}` : path;
 }
 
-function appendVisibilityParameters(
+function appendActivityFilterParameters(
   parameters: URLSearchParams,
-  visibility: ActivityVisibilityQuery,
+  filters: ActivityFilterQuery,
 ) {
-  if (visibility.includeSubagent !== undefined) {
-    parameters.set("include_subagent", String(visibility.includeSubagent));
+  if (filters.includeSubagent !== undefined) {
+    parameters.set("include_subagent", String(filters.includeSubagent));
   }
-  if (visibility.includeInternal !== undefined) {
-    parameters.set("include_internal", String(visibility.includeInternal));
+  if (filters.includeInternal !== undefined) {
+    parameters.set("include_internal", String(filters.includeInternal));
+  }
+  if (filters.period !== undefined && filters.period !== "all") {
+    parameters.set("period", filters.period);
   }
 }
 

@@ -16,6 +16,7 @@ describe("toCanvasNodes", () => {
           conversation_index: 1,
           conversation_total: 1,
           result_summary_status: "ready",
+          prompt_summary: { status: "ready", mode: "contextual", text: "Add a health endpoint" },
         },
       ],
       [{ id: 3, activity_event_id: 9, position_x: 64, position_y: 64 }],
@@ -35,6 +36,7 @@ describe("toCanvasNodes", () => {
           conversationIndex: 1,
           conversationTotal: 1,
           resultSummaryStatus: "ready",
+          promptSummary: { status: "ready", mode: "contextual", text: "Add a health endpoint" },
         },
       },
     ]);
@@ -45,6 +47,7 @@ describe("toCanvasNodes", () => {
       "conversationTotal",
       "project",
       "prompt",
+      "promptSummary",
       "provider",
       "resultSummaryStatus",
       "time",
@@ -63,6 +66,7 @@ describe("toCanvasNodes", () => {
         conversation_index: 1,
         conversation_total: 1,
         result_summary_status: "unavailable",
+        prompt_summary: { status: "unavailable", mode: "fallback", text: null },
       }],
       [{ id: 3, activity_event_id: 9, position_x: 120, position_y: 220 }],
     );
@@ -82,6 +86,7 @@ describe("toCanvasNodes", () => {
         conversation_index: 1,
         conversation_total: 1,
         result_summary_status: "unavailable",
+        prompt_summary: { status: "unavailable", mode: "fallback", text: null },
       }],
       [],
     );

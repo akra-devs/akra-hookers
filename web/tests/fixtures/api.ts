@@ -86,7 +86,7 @@ export class FixtureApi {
           ...project,
           activity_count: this.state.activities.filter((activity) =>
             activity.project?.id === project.id
-            && this.activityKindVisible(activity.activity_kind, url)).length,
+            && this.activityVisible(activity, url)).length,
         })),
       };
     }
@@ -103,7 +103,15 @@ export class FixtureApi {
       return { status: 200, body: this.model.mergeProject(mergeId, target) };
     }
     if (path === "/v1/origins" && method === "GET") {
-      return { status: 200, body: this.state.origins };
+      return {
+        status: 200,
+        body: this.state.origins.map((origin) => ({
+          ...origin,
+          activity_count: this.state.activities.filter((activity) =>
+            this.state.activityOrigins[activity.id] === origin.id
+            && this.activityVisible(activity, url)).length,
+        })),
+      };
     }
     const projectOrigins = match(path, /^\/v1\/projects\/(\d+)\/origins$/);
     if (method === "GET" && projectOrigins !== null) {
@@ -220,6 +228,14 @@ export class FixtureApi {
       this.state.provider.collector.last_error = null;
       return { status: 204 };
     }
+    if (path === "/v1/providers/codex/prompt-summaries" && method === "PUT") {
+      const mode = text(body, "mode");
+      if (mode !== "off" && mode !== "smart") {
+        return error(422, "invalid_prompt_summary_mode", "Prompt summary mode must be off or smart.");
+      }
+      this.state.provider.prompt_summary_mode = mode;
+      return { status: 204 };
+    }
     const provider = matchText(path, /^\/v1\/providers\/([^/]+)$/);
     if (provider !== null && method === "GET") {
       return provider === "codex"
@@ -269,8 +285,7 @@ export class FixtureApi {
     } else {
       throw new Error(`Unexpected API request: GET ${url.pathname}${url.search}`);
     }
-    activities = activities.filter((activity) =>
-      this.activityKindVisible(activity.activity_kind, url));
+    activities = activities.filter((activity) => this.activityVisible(activity, url));
     const ordered = url.searchParams.get("order") === "newest"
       ? [...activities].reverse()
       : [...activities];
@@ -305,6 +320,25 @@ export class FixtureApi {
       return url.searchParams.get("include_internal") !== "false";
     }
     return true;
+  }
+
+  private activityVisible(activity: FixtureState["activities"][number], url: URL) {
+    return this.activityKindVisible(activity.activity_kind, url)
+      && this.activityPeriodVisible(activity.time.value, url);
+  }
+
+  private activityPeriodVisible(value: string | null, url: URL) {
+    const period = url.searchParams.get("period") ?? "all";
+    if (period === "all") return true;
+    const hours = {
+      day: 24,
+      week: 24 * 7,
+      month: 24 * 30,
+      quarter: 24 * 90,
+    }[period];
+    if (hours === undefined || value === null) return false;
+    const capturedAt = Date.parse(value);
+    return Number.isFinite(capturedAt) && capturedAt >= Date.now() - hours * 60 * 60 * 1_000;
   }
 
 }

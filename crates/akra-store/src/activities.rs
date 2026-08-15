@@ -5,6 +5,7 @@ use akra_core::ingress::ActivityKind;
 use crate::{
     ActivityProjectSummary, ActivityStore, ActivitySummary, ActivityTimeProvenance,
     ActivityTimeSummary, ResultSummaryStatus, StoreError,
+    prompt_summaries::activity_prompt_summary_from_parts,
 };
 
 const MAX_SUMMARY_PROMPT_CHARS: usize = 280;
@@ -53,6 +54,35 @@ impl Default for ActivityKindFilter {
     }
 }
 
+/// An inclusive lower time bound for activity-derived views.
+///
+/// Activities without a captured or recorded timestamp remain visible in the
+/// all-time view, but intentionally do not masquerade as recent activity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivityTimeRange {
+    start_at_us: Option<i64>,
+}
+
+impl ActivityTimeRange {
+    pub const ALL: Self = Self { start_at_us: None };
+
+    pub const fn since(start_at_us: i64) -> Self {
+        Self {
+            start_at_us: Some(start_at_us),
+        }
+    }
+
+    pub(crate) const fn start_at_us(self) -> Option<i64> {
+        self.start_at_us
+    }
+}
+
+impl Default for ActivityTimeRange {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
 type SummaryRow = (
     i64,
     String,
@@ -65,6 +95,10 @@ type SummaryRow = (
     i64,
     i64,
     String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
 );
 
 impl ActivityStore {
@@ -174,8 +208,14 @@ impl ActivityStore {
                             WHERE activity_event_id = numbered.id
                         ),
                         'unavailable'
-                    ) AS result_summary_state
+                    ) AS result_summary_state,
+                    prompt_summary.state AS prompt_summary_state,
+                    prompt_summary.projected_prompt,
+                    prompt_summary.summary_text,
+                    prompt_summary.used_previous_result
              FROM numbered
+             LEFT JOIN activity_prompt_summaries AS prompt_summary
+               ON prompt_summary.activity_event_id = numbered.id
              WHERE (
                     (? = 'all')
                  OR (? = 'inbox' AND effective_project_id IS NULL)
@@ -279,6 +319,26 @@ impl ActivityStore {
         order: ActivityOrder,
         activity_filter: ActivityKindFilter,
     ) -> Result<Vec<ActivitySummary>, StoreError> {
+        self.activity_summaries_indexed_page_filtered_in_range(
+            scope,
+            cursor_id,
+            limit,
+            order,
+            activity_filter,
+            ActivityTimeRange::ALL,
+        )
+        .await
+    }
+
+    pub async fn activity_summaries_indexed_page_filtered_in_range(
+        &self,
+        scope: ActivityScope,
+        cursor_id: Option<i64>,
+        limit: i64,
+        order: ActivityOrder,
+        activity_filter: ActivityKindFilter,
+        time_range: ActivityTimeRange,
+    ) -> Result<Vec<ActivitySummary>, StoreError> {
         let (scope_name, project_id) = match scope {
             ActivityScope::All => ("all", None),
             ActivityScope::Inbox => ("inbox", None),
@@ -332,6 +392,13 @@ impl ActivityStore {
                         effective.activity_kind = 'user'
                      OR (?6 = 1 AND effective.activity_kind = 'subagent')
                      OR (?7 = 1 AND effective.activity_kind = 'internal')
+                 )
+                 AND (
+                     ?8 IS NULL
+                     OR COALESCE(
+                         effective.captured_at_us,
+                         effective.first_recorded_at_us
+                     ) >= ?8
                  )
                  AND (
                      ?1 IS NULL
@@ -460,9 +527,15 @@ impl ActivityStore {
                             WHERE activity_event_id = page.id
                         ),
                         'unavailable'
-                    ) AS result_summary_state
+                    ) AS result_summary_state,
+                    prompt_summary.state AS prompt_summary_state,
+                    prompt_summary.projected_prompt,
+                    prompt_summary.summary_text,
+                    prompt_summary.used_previous_result
              FROM page
              LEFT JOIN projects ON projects.id = page.effective_project_id
+             LEFT JOIN activity_prompt_summaries AS prompt_summary
+               ON prompt_summary.activity_event_id = page.id
              ORDER BY page.global_sequence IS NULL,
                       CASE WHEN ?4 = 'oldest' THEN page.global_sequence END,
                       CASE WHEN ?4 = 'newest' THEN page.global_sequence END DESC,
@@ -476,6 +549,7 @@ impl ActivityStore {
         .bind(limit)
         .bind(activity_filter.include_subagent())
         .bind(activity_filter.include_internal())
+        .bind(time_range.start_at_us())
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(summary_from_row).collect()
@@ -490,6 +564,20 @@ impl ActivityStore {
         &self,
         scope: ActivityScope,
         activity_filter: ActivityKindFilter,
+    ) -> Result<i64, StoreError> {
+        self.activity_summary_count_filtered_in_range(
+            scope,
+            activity_filter,
+            ActivityTimeRange::ALL,
+        )
+        .await
+    }
+
+    pub async fn activity_summary_count_filtered_in_range(
+        &self,
+        scope: ActivityScope,
+        activity_filter: ActivityKindFilter,
+        time_range: ActivityTimeRange,
     ) -> Result<i64, StoreError> {
         let (scope_name, project_id) = match scope {
             ActivityScope::All => ("all", None),
@@ -508,6 +596,8 @@ impl ActivityStore {
         Ok(sqlx::query_scalar(
             "WITH effective AS (
                  SELECT activity_events.activity_kind,
+                        activity_events.captured_at_us,
+                        activity_events.first_recorded_at_us,
                         CASE
                             WHEN activity_origins.routing_mode = 'dedicated'
                             THEN activity_origins.default_project_id
@@ -525,11 +615,15 @@ impl ActivityStore {
                  OR (?2 = 'inbox' AND effective_project_id IS NULL)
                  OR (?3 = 'project' AND effective_project_id = ?4)
              )
-             AND (
+            AND (
                     activity_kind = 'user'
                  OR (?5 = 1 AND activity_kind = 'subagent')
                  OR (?6 = 1 AND activity_kind = 'internal')
-             )",
+            )
+            AND (
+                ?7 IS NULL
+                OR COALESCE(captured_at_us, first_recorded_at_us) >= ?7
+            )",
         )
         .bind(scope_name)
         .bind(scope_name)
@@ -537,6 +631,7 @@ impl ActivityStore {
         .bind(project_id)
         .bind(activity_filter.include_subagent())
         .bind(activity_filter.include_internal())
+        .bind(time_range.start_at_us())
         .fetch_one(&self.pool)
         .await?)
     }
@@ -555,6 +650,10 @@ fn summary_from_row(row: SummaryRow) -> Result<ActivitySummary, StoreError> {
         conversation_index,
         conversation_total,
         result_summary_state,
+        prompt_summary_state,
+        projected_prompt,
+        prompt_summary_text,
+        used_previous_result,
     ) = row;
     let project = project_summary(project_id, project_name)?;
     Ok(ActivitySummary {
@@ -569,6 +668,12 @@ fn summary_from_row(row: SummaryRow) -> Result<ActivitySummary, StoreError> {
         conversation_index,
         conversation_total,
         result_summary_status: result_summary_status(&result_summary_state)?,
+        prompt_summary: activity_prompt_summary_from_parts(
+            prompt_summary_state.as_deref().unwrap_or("unavailable"),
+            projected_prompt,
+            prompt_summary_text,
+            used_previous_result,
+        )?,
     })
 }
 

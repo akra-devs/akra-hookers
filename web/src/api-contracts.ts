@@ -1,10 +1,18 @@
 export type ActivityTimeProvenance = "captured" | "legacy_recorded" | "unknown";
 export type ActivityKind = "user" | "subagent" | "internal";
 export type ResultSummaryStatus = "pending" | "ready" | "unavailable" | "failed";
+export type PromptSummaryStatus = "pending" | "ready" | "unavailable" | "failed";
+export type PromptSummaryMode = "contextual" | "standalone" | "passthrough" | "fallback";
 
 export type ActivityResultSummary =
   | { status: "ready"; lines: [string, string, string] }
   | { status: Exclude<ResultSummaryStatus, "ready">; lines: null };
+
+export type ActivityPromptSummary = {
+  status: PromptSummaryStatus;
+  mode: PromptSummaryMode;
+  text: string | null;
+};
 
 export type ActivityTime = {
   value: string | null;
@@ -26,6 +34,7 @@ export type ActivitySummary = {
   conversation_index: number;
   conversation_total: number;
   result_summary_status: ResultSummaryStatus;
+  prompt_summary: ActivityPromptSummary;
 };
 
 export type ActivityConversationTurn = {
@@ -37,6 +46,7 @@ export type ActivityConversationTurn = {
   on_canvas: boolean;
   selected: boolean;
   result_summary: ActivityResultSummary;
+  prompt_summary: ActivityPromptSummary;
 };
 
 export type ActivityDetail = {
@@ -63,6 +73,7 @@ export type ActivityDetail = {
     agent_type: string | null;
   };
   result_summary: ActivityResultSummary;
+  prompt_summary: ActivityPromptSummary;
   selected_turn: ActivityConversationTurn;
   conversation: ActivityConversationTurn[];
   conversation_total: number;
@@ -126,6 +137,7 @@ export type CollectorIntegration = {
 export type ProviderIntegration = {
   provider: string;
   enabled: boolean;
+  prompt_summary_mode: "off" | "smart";
   targets: CodexCaptureTarget[];
   collector: CollectorIntegration;
 };

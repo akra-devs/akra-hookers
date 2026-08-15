@@ -121,6 +121,7 @@ async fn scopes_use_effective_projects_and_keep_global_conversation_numbers() {
             "id",
             "project",
             "prompt",
+            "prompt_summary",
             "provider",
             "result_summary_status",
             "time"

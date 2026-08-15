@@ -47,6 +47,13 @@ project assignment, and future routing remain user-controlled organization.
   shared 180-character limit through local `codex exec` with
   `gpt-5.3-codex-spark`; captured user prompts are never included in that
   summarization request.
+- Offers a default-off Smart prompt-summary mode for new user activity. It
+  conservatively removes known Codex wrapper text, then sends only the current
+  projected request and, when required, the immediately previous stored
+  three-line result summary to the authenticated Spark runtime. It stores at most
+  one Korean sentence of 96 Unicode scalar characters; raw prompt evidence,
+  prior raw prompts, prior assistant text, and transcripts stay out of that
+  request.
 - Discovers Windows and WSL Codex homes and manages the akra hook independently
   per installation without removing unrelated hooks.
 - Groups linked Git worktrees under a shared project identity.

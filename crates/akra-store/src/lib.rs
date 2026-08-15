@@ -15,6 +15,7 @@ mod canvas;
 mod capture_sources;
 mod ingest;
 mod migration;
+mod migration_v10;
 mod migration_v2;
 mod migration_v3;
 mod migration_v4;
@@ -28,11 +29,12 @@ mod origin_transitions;
 mod origins;
 mod project_names;
 mod projects;
+mod prompt_summaries;
 mod providers;
 mod result_summaries;
 mod routing;
 
-pub use activities::{ActivityKindFilter, ActivityOrder, ActivityScope};
+pub use activities::{ActivityKindFilter, ActivityOrder, ActivityScope, ActivityTimeRange};
 pub use activity_assignments::{
     ActivityAssignmentCommand, ActivityAssignmentResult, AssignmentDestination, FutureRouteAction,
     MAX_ACTIVITY_ASSIGNMENT_BATCH,
@@ -41,12 +43,19 @@ pub use capture_sources::CaptureClientObservation;
 pub use ingest::RecordActivity;
 pub use models::{
     ActivityConversationTurn, ActivityDetail, ActivityOriginDetail, ActivityProjectSummary,
-    ActivityResultSummary, ActivitySummary, ActivityTechnicalDetail, ActivityTimeProvenance,
-    ActivityTimeSummary, CanvasEdgeSummary, CanvasNodeSummary, OriginSummary, ProjectSummary,
-    ProviderIntegration, ResultSummaryStatus,
+    ActivityPromptSummary, ActivityResultSummary, ActivitySummary, ActivityTechnicalDetail,
+    ActivityTimeProvenance, ActivityTimeSummary, CanvasEdgeSummary, CanvasNodeSummary,
+    OriginSummary, ProjectSummary, PromptSummaryMode, PromptSummaryStatus, ProviderIntegration,
+    ResultSummaryStatus,
 };
 pub use origin_transitions::{OriginRoutingCommand, OriginRoutingMode, ProjectDestination};
 pub use project_names::{ProjectName, ProjectNameError, ProjectNames};
+pub use prompt_summaries::{
+    MAX_PROMPT_SUMMARY_ATTEMPTS, MAX_PROMPT_SUMMARY_CHARS, MAX_PROMPT_SUMMARY_INPUT_CHARS,
+    PROMPT_SUMMARY_MODEL, PromptSummary, PromptSummaryClaim, PromptSummaryCompletionOutcome,
+    PromptSummaryErrorCode, PromptSummaryFailureDisposition, PromptSummaryPolicy,
+    PromptSummaryState, PromptSummaryText, PromptSummaryValidationError,
+};
 pub use result_summaries::{
     MAX_RESULT_SOURCE_RETENTION_US, MAX_RESULT_SUMMARY_ATTEMPTS, MAX_RESULT_SUMMARY_CHARS,
     RESULT_SUMMARY_MODEL, RecordResult, ResultCaptureOutcome, ResultSummary, ResultSummaryClaim,
@@ -105,6 +114,10 @@ pub enum StoreError {
     Invariant(String),
     #[error("result summary lease duration must be positive and must not overflow")]
     InvalidResultSummaryLease,
+    #[error("prompt summary lease duration must be positive and must not overflow")]
+    InvalidPromptSummaryLease,
     #[error(transparent)]
     InvalidResultSummary(#[from] ResultSummaryValidationError),
+    #[error(transparent)]
+    InvalidPromptSummary(#[from] PromptSummaryValidationError),
 }

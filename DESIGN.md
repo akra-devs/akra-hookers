@@ -241,6 +241,10 @@ Rail rows are square, full-width, and 42px minimum height. Hover adds a subtle m
 
 Detected installations form a compact ruled matrix. Each row combines a terminal icon, human label, small environment tag, switch, text status with a matching dot, and a truncated mono path. The master switch may expose a mixed state; disabled capture affects future collection and never removes historic activity.
 
+### Contextual Prompt Summaries
+
+The capture rail includes a compact default-off `문맥 기반 프롬프트 요약` control. Smart mode is an explicit future-capture policy, never a retroactive rewrite: it leaves hook targets, trust state, and historic evidence untouched. The helper makes the boundary visible—only a current projected request and, when needed, the immediately previous three-line result summary may be sent to Spark. Pending, ready, and failed states use terse textual status alongside color so the control remains understandable without color alone.
+
 ### Collection Destination
 
 The collection destination lives directly below the capture master state and above
@@ -254,11 +258,11 @@ and changing destination is immediate without a hook-restart instruction.
 
 ### Activity Evidence Plates
 
-The 288px activity plate is the signature component: 5px corners, registration marks, a lichen project label, conversation position, three-line prompt, ruled metadata footer, provider dot, timestamp, and connection handles. Hover lifts by 1px; selection uses a crisp separated lichen ring. Keyboard focus uses the same 2px focus outline with a 5px offset, and Enter or Space opens the inspector.
+The 288px activity plate is the signature component: 5px corners, registration marks, a lichen project label, conversation position, three-line prompt, ruled metadata footer, provider dot, timestamp, and connection handles. A `문맥 보강` badge appears only when the displayed request used the previous result summary; a compact pending or fallback marker keeps state truthful without changing geometry. Hover lifts by 1px; selection uses a crisp separated lichen ring. Keyboard focus uses the same 2px focus outline with a 5px offset, and Enter or Space opens the inspector.
 
 ### Detail Inspector
 
-The inspector presents the full prompt, project, provider, captured and first-recorded times, submitted and detected paths, collapsed technical IDs with copy actions, and an oldest-first timeline. Opening detail moves focus into the inspector; closing restores focus to the originating plate. Selected timeline turns use a muted lichen panel and lichen point, not a new card silhouette.
+The inspector presents a request summary first, including whether it is contextual, current-request-only, deterministic projection, or fallback. When a derived request is shown, the raw captured prompt is available through a closed, independently scrollable `수집된 원문 보기` disclosure so long evidence does not collapse the conversation area. Project, provider, captured and first-recorded times, submitted and detected paths, collapsed technical IDs with copy actions, and an oldest-first timeline remain available. Timeline rows are compact keyboard-selectable `REQ`/`RES` previews; the selected turn opens its full request and three-line result above. Opening detail moves focus into the inspector; closing restores focus to the originating plate. Selected timeline turns use a muted lichen panel and lichen point, not a new card silhouette.
 
 ### Assignment Dock
 

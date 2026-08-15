@@ -8,6 +8,13 @@ does not infer delegated work from prompt text. Existing Codex App/CLI prompt ca
 continues through the shared `UserPromptSubmit` hook. `Stop` captures the matching
 turn's final assistant result so the local runtime can attach a three-line summary.
 
+**문맥 기반 프롬프트 요약**은 기본으로 꺼져 있습니다. Smart mode를 명시적으로
+켜면 새 user activity 중 문맥이 필요한 요청만 `gpt-5.3-codex-spark`로 한 문장,
+96자 이하로 정리합니다. 이때 전송하는 문맥은 현재 요청에서 보수적으로 분리한
+projected prompt와 바로 이전 turn의 저장된 3줄 결과 요약뿐입니다. 이전 요청 원문,
+이전 assistant 원문, transcript는 보내지 않습니다. 수집 원문은 활동 증거로 그대로
+보존하며 상세 화면의 `수집된 원문 보기`에서 확인할 수 있습니다.
+
 The canvas visibility controls are independent from capture and never delete stored
 activity:
 
@@ -63,6 +70,9 @@ capability token과 별개이며, API 응답·로그·훅 명령에 반환되지
 원격 모드의 활동 노드와 대화 기록은 **collector 대시보드**에 저장됩니다. source
 대시보드는 source 자신의 destination과 delivery 상태만 보여 주며, collector를
 원격 제어하거나 원격 활동을 자동으로 복제하지 않습니다.
+문맥 기반 프롬프트 요약도 활동을 보관하는 collector 대시보드에서 설정합니다. source가
+원격 collector를 사용 중이면 source 화면의 요약 토글은 비활성화되고, source metadata가
+collector의 Codex executable이나 `CODEX_HOME` 선택에 영향을 주지 않습니다.
 
 Akra 자체는 TLS를 종료하지 않습니다. 공개 collector는 신뢰할 수 있는 HTTPS
 reverse proxy와 방화벽/네트워크 접근 제어 뒤에 두세요. dashboard와 collector
@@ -91,6 +101,7 @@ the user's selected installation to another detected target.
 
 - Codex `UserPromptSubmit` 훅을 받아 프롬프트와 작업 위치를 로컬 SQLite에 저장합니다.
 - 같은 턴의 `Stop` 결과를 받아 `gpt-5.3-codex-spark`로 정확히 3줄, 세 줄 합계 180자 이하로 요약해 활동에 연결합니다.
+- 선택한 Smart mode에서는 문맥이 필요한 새 user prompt만 현재 projected request와 이전 3줄 결과 요약으로 한 문장, 96자 이하로 정리해 노드에 표시합니다.
 - Git worktree는 같은 프로젝트로 묶습니다.
 - 활동 기록은 불변이며, 캔버스 노드·위치·연결은 자유롭게 이동하거나 삭제할 수 있습니다.
 - 대시보드에서 Windows Codex App/CLI와 각 WSL Codex의 캡처를 함께 찾고, 설치별 또는 전체로 켜고 끌 수 있습니다.
@@ -100,7 +111,15 @@ the user's selected installation to another detected target.
 
 사용자 입력 프롬프트, 작업 위치와 활동 데이터는 기본적으로 로컬 SQLite와 로컬 spool에 저장합니다. 기본 런타임은 `127.0.0.1`에만 바인딩하며 텔레메트리나 Git 변경을 수행하지 않습니다. 사용자가 Collection destination에 외부 HTTPS collector와 access token을 명시적으로 저장한 경우에만, 위의 원격 수집 범위에 적은 데이터가 그 collector로 전송됩니다.
 
-결과 요약은 예외입니다. Codex의 최종 assistant 결과(`Stop.last_assistant_message`)만 로컬에서 인증된 Codex CLI의 `codex exec --model gpt-5.3-codex-spark`에 전달합니다. 저장된 사용자 입력 프롬프트는 요약 요청에 포함하지 않습니다. 원문 결과는 재시도를 위해 로컬에 일시 보관되며, 요약 성공·최종 실패 시 즉시 삭제됩니다. 완료되지 않은 원문은 24시간이 지나면 다음 runtime recovery에서 처리 전에 삭제됩니다. 장기 저장되는 결과 데이터는 정확히 3줄이며, 앞뒤 공백을 제거한 세 줄의 Unicode scalar 수 합계가 180자 이하인 경우만 허용됩니다. 줄 구분자는 합계에서 제외합니다. 업그레이드 전에 저장된 긴 요약은 각 줄의 내용을 균등하게 축약하고 말줄임표를 포함해 같은 180자 한도로 정규화합니다. Spark를 사용할 수 없거나 인증·네트워크·출력 검증에 실패하면 다른 모델로 대체하지 않고 요약 상태를 실패로 표시합니다.
+결과 요약은 예외입니다. Codex의 최종 assistant 결과(`Stop.last_assistant_message`)만 해당 활동을 저장한 인증된 Codex summary runtime의 `codex exec --model gpt-5.3-codex-spark`에 전달합니다. 저장된 사용자 입력 프롬프트는 **결과 요약 요청**에 포함하지 않습니다. 원문 결과는 재시도를 위해 로컬에 일시 보관되며, 요약 성공·최종 실패 시 즉시 삭제됩니다. 완료되지 않은 원문은 24시간이 지나면 다음 runtime recovery에서 처리 전에 삭제됩니다. 장기 저장되는 결과 데이터는 정확히 3줄이며, 앞뒤 공백을 제거한 세 줄의 Unicode scalar 수 합계가 180자 이하인 경우만 허용됩니다. 줄 구분자는 합계에서 제외합니다. Spark를 사용할 수 없거나 인증·네트워크·출력 검증에 실패하면 다른 모델로 대체하지 않고 요약 상태를 실패로 표시합니다.
+
+문맥 기반 프롬프트 요약은 별도 opt-in입니다. Smart mode에서는 현재 user request의
+결정론적 projection과, 필요할 때 같은 session의 바로 이전 user activity에 이미
+저장된 3줄 결과 요약만 Spark에 전달합니다. 이전 user prompt 원문, 이전 assistant
+원문, Codex transcript는 전달하지 않습니다. 출력은 Markdown·줄바꿈 없는 한국어 한
+문장이고 Unicode scalar 기준 96자 이하만 저장됩니다. 생성 실패, timeout, 출력 검증
+실패 시 다른 모델로 대체하거나 원문을 덮어쓰지 않고 projected prompt를 표시합니다.
+설정을 켠 뒤 새 user activity부터 적용하며 기존 기록을 일괄 backfill하지 않습니다.
 
 ## 필수 보안 고지: Codex 훅 자동 신뢰
 
@@ -112,7 +131,7 @@ the user's selected installation to another detected target.
 
 따라서 설치 후 Codex의 **Hooks need review** 화면은 표시되지 않으며 별도 수동 승인이 필요하지 않습니다. 이 자동 신뢰는 Akra가 생성한 정확한 명령과 위치에만 적용되고, 기존의 다른 훅이나 이후 외부에서 변경된 명령을 신뢰하지 않습니다.
 
-Codex 훅은 신뢰된 뒤 샌드박스 밖에서 실행될 수 있습니다. Akra 훅은 사용자가 Codex에 제출하는 프롬프트, 작업 경로, 세션·턴 식별자, 모델 정보와 최종 assistant 결과를 로컬 runtime으로 전달합니다. runtime은 위 개인정보 계약에 따라 최종 결과만 Codex Spark 요약에 사용합니다. 이 동작에 동의하지 않으면 `setup`을 실행하거나 캡처 토글을 켜지 마십시오. `disable` 또는 캡처 토글 해제 시 Akra 훅과 Akra가 기록한 신뢰 항목만 제거하며, 다른 Codex 설정과 훅은 보존합니다.
+Codex 훅은 신뢰된 뒤 샌드박스 밖에서 실행될 수 있습니다. Akra 훅은 사용자가 Codex에 제출하는 프롬프트, 작업 경로, 세션·턴 식별자, 모델 정보와 최종 assistant 결과를 로컬 runtime으로 전달합니다. runtime은 위 개인정보 계약에 따라 최종 결과만 기본 Spark 요약에 사용하며, 사용자가 Smart mode를 켠 경우에만 제한된 projected request와 직전 3줄 결과 요약을 prompt Spark 요약에 사용합니다. 이 동작에 동의하지 않으면 `setup`을 실행하거나 캡처 토글을 켜지 마십시오. `disable` 또는 캡처 토글 해제 시 Akra 훅과 Akra가 기록한 신뢰 항목만 제거하며, 다른 Codex 설정과 훅은 보존합니다.
 
 Codex의 훅 신뢰 모델은 [OpenAI Codex Hooks 문서](https://learn.chatgpt.com/docs/hooks)를 참고하십시오.
 

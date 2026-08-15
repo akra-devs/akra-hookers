@@ -11,6 +11,7 @@ use tower::ServiceExt;
 
 pub(crate) struct Harness {
     pub(crate) app: Router,
+    #[allow(dead_code)] // Each integration test compiles this reusable fixture independently.
     pub(crate) store: Arc<akra_store::ActivityStore>,
 }
 
@@ -59,6 +60,7 @@ pub(crate) async fn call(
     (status, value)
 }
 
+#[allow(dead_code)] // Used by the project-oriented API suites that share this fixture.
 pub(crate) async fn create_project(app: &Router, name: &str) -> (StatusCode, Value) {
     call(
         app,

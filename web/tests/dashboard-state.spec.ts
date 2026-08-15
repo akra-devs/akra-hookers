@@ -138,6 +138,60 @@ test("empty dashboards guide the first capture and keep destructive actions out 
   await expect(page.getByText("No work locations yet")).toBeVisible();
 });
 
+test("a period changes nodes and navigation counts together, then can hide empty projects", async ({
+  page,
+  api,
+}) => {
+  const now = Date.now();
+  for (const activity of api.state.activities) {
+    activity.time = { value: new Date(now).toISOString(), provenance: "captured" };
+  }
+  const old = structuredClone(api.state.activities[0]!);
+  old.id = 3;
+  old.prompt = "오래된 프로젝트 활동";
+  old.project = { id: 2, name: "보관 프로젝트" };
+  old.time = {
+    value: new Date(now - 91 * 24 * 60 * 60 * 1_000).toISOString(),
+    provenance: "captured",
+  };
+  api.state.activities.push(old);
+  const oldDetail = structuredClone(api.state.details[1]!);
+  oldDetail.id = 3;
+  oldDetail.prompt = old.prompt;
+  oldDetail.project = old.project;
+  oldDetail.captured_at = old.time;
+  oldDetail.first_recorded_at = old.time;
+  api.state.details[3] = oldDetail;
+  api.state.projects.push({
+    id: 2,
+    name: "보관 프로젝트",
+    origin_count: 0,
+    activity_count: 1,
+    needs_setup: false,
+    latest_activity_at_us: null,
+  });
+  api.state.activityOrigins[3] = 1;
+  api.state.canvasNodes.push({ id: 13, activity_event_id: 3, position_x: 720, position_y: 160 });
+
+  await page.goto("/");
+  await page.getByLabel("기간 필터").selectOption("week");
+
+  await expect(page.getByTestId("activity-node-1")).toBeVisible();
+  await expect(page.getByTestId("activity-node-3")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /All activity/ })).toContainText("2");
+  await expect(page.getByRole("button", { name: /보관 프로젝트/ })).toContainText("0");
+
+  await page.getByLabel("프로젝트 필터").selectOption("project:2");
+  await expect(page.getByTestId("activity-node-1")).toHaveCount(0);
+  const hideEmpty = page.getByRole("checkbox", { name: "결과 없는 프로젝트 숨기기" });
+  await hideEmpty.check();
+
+  await expect(page.getByLabel("프로젝트 필터")).toHaveValue("all");
+  await expect(page.getByTestId("activity-node-1")).toBeVisible();
+  await expect(page.getByRole("button", { name: /보관 프로젝트/ })).toHaveCount(0);
+  await expect(page.locator('option[value="project:2"]')).toHaveCount(0);
+});
+
 test("the canvas header stays readable on narrow screens and supports wheel zoom", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
@@ -206,6 +260,25 @@ test("detected Codex installations expose independent hook controls", async ({ p
   await wslDisabled;
   await expect(page.getByText("2개 중 0개 hook 설치")).toBeVisible();
   await expect(page.getByRole("checkbox", { name: "Codex capture" })).not.toBeChecked();
+});
+
+test("smart prompt summaries are an explicit capture setting and do not touch hook targets", async ({
+  page,
+  api,
+}) => {
+  await page.goto("/");
+  const toggle = page.getByRole("checkbox", { name: "문맥 기반 프롬프트 요약" });
+  await expect(toggle).not.toBeChecked();
+  await expect(page.getByText("Off · 제출한 원문을 그대로 표시", { exact: true })).toBeVisible();
+
+  const changed = responseFor(page, "PUT", "/v1/providers/codex/prompt-summaries");
+  await toggle.check();
+  const request = await changed;
+  expect(request.request().postDataJSON()).toEqual({ mode: "smart" });
+  expect(api.state.provider.prompt_summary_mode).toBe("smart");
+  await expect(page.getByText("Smart · 앞선 결과 요약만 문맥으로 사용", { exact: true })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "Codex App + CLI capture" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "Codex · Ubuntu capture" })).not.toBeChecked();
 });
 
 test("one shared Windows hook reports App and CLI capture evidence independently", async ({ page, api }) => {
