@@ -32,9 +32,11 @@ impl ActivityStore {
 
     pub async fn provider(&self, provider: &str) -> Result<ProviderIntegration, StoreError> {
         let enabled = self.provider_enabled(provider).await?;
+        let prompt_summary_mode = self.prompt_summary_policy(provider).await?;
         Ok(ProviderIntegration {
             provider: provider.to_owned(),
             enabled,
+            prompt_summary_mode: prompt_summary_mode.as_str().to_owned(),
         })
     }
 }

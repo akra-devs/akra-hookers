@@ -327,6 +327,44 @@ async fn dashboard_destination_configuration_never_returns_its_access_token() {
     );
 }
 
+#[tokio::test]
+async fn a_remote_source_cannot_change_the_collector_owned_prompt_summary_policy() {
+    let data_dir = TempDir::new().expect("source data directory");
+    let collector = Arc::new(CollectorManager::open(data_dir.path()).expect("collector"));
+    collector
+        .configure(CollectorConfigInput {
+            endpoint: "https://collector.example".to_owned(),
+            token: Some("source-to-collector-token".to_owned()),
+        })
+        .expect("remote source destination");
+    let store = Arc::new(akra_store::ActivityStore::in_memory().await.expect("store"));
+    store.migrate().await.expect("migrations");
+    let app = app_with_collector("dashboard-token", Arc::clone(&store), collector);
+
+    let (status, _, body) = request(
+        &app,
+        "PUT",
+        "/v1/providers/codex/prompt-summaries",
+        Some("dashboard-token"),
+        Body::from(json!({ "mode": "smart" }).to_string()),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).expect("error body")["code"],
+        "prompt_summaries_collector_managed"
+    );
+    assert_eq!(
+        store
+            .prompt_summary_policy("codex")
+            .await
+            .expect("policy")
+            .as_str(),
+        "off"
+    );
+}
+
 struct RequestBody;
 
 impl RequestBody {

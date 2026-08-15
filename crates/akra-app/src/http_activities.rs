@@ -3,6 +3,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{http::AppState, http_error::ApiError};
 
@@ -19,6 +20,7 @@ pub(crate) struct ActivityQuery {
     order: Option<String>,
     include_subagent: Option<bool>,
     include_internal: Option<bool>,
+    period: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -37,15 +39,17 @@ pub(crate) async fn activities(
     let limit = page_limit(query.limit)?;
     let order = activity_order(query.order.as_deref())?;
     let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
+    let time_range = activity_time_range(query.period.as_deref())?;
     validate_cursor(query.after_id)?;
     state
         .store
-        .activity_summaries_indexed_page_filtered(
+        .activity_summaries_indexed_page_filtered_in_range(
             scope,
             query.after_id,
             limit,
             order,
             activity_filter,
+            time_range,
         )
         .await
         .map(Json)
@@ -63,9 +67,10 @@ pub(crate) async fn activity_count(
 ) -> Result<Json<ActivityCountResponse>, ApiError> {
     let scope = activity_scope(&query)?;
     let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
+    let time_range = activity_time_range(query.period.as_deref())?;
     state
         .store
-        .activity_summary_count_filtered(scope, activity_filter)
+        .activity_summary_count_filtered_in_range(scope, activity_filter, time_range)
         .await
         .map(|count| Json(ActivityCountResponse { count }))
         .map_err(ApiError::from_store)
@@ -119,7 +124,7 @@ fn activity_order(order: Option<&str>) -> Result<akra_store::ActivityOrder, ApiE
     }
 }
 
-fn activity_kind_filter(
+pub(crate) fn activity_kind_filter(
     include_subagent: Option<bool>,
     include_internal: Option<bool>,
 ) -> akra_store::ActivityKindFilter {
@@ -127,6 +132,36 @@ fn activity_kind_filter(
         include_subagent.unwrap_or(true),
         include_internal.unwrap_or(true),
     )
+}
+
+pub(crate) fn activity_time_range(
+    period: Option<&str>,
+) -> Result<akra_store::ActivityTimeRange, ApiError> {
+    let hours = match period.unwrap_or("all") {
+        "all" => return Ok(akra_store::ActivityTimeRange::ALL),
+        "day" => 24_i64,
+        "week" => 24 * 7,
+        "month" => 24 * 30,
+        "quarter" => 24 * 90,
+        _ => {
+            return Err(ApiError::unprocessable(
+                "invalid_period",
+                "Activity period must be all, day, week, month, or quarter.",
+            ));
+        }
+    };
+    let now_us: i64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| ApiError::unprocessable("invalid_period", "System time is unavailable."))?
+        .as_micros()
+        .try_into()
+        .map_err(|_| ApiError::unprocessable("invalid_period", "System time is unavailable."))?;
+    let duration_us = hours
+        .checked_mul(60 * 60 * 1_000_000)
+        .ok_or_else(|| ApiError::unprocessable("invalid_period", "Activity period overflowed."))?;
+    Ok(akra_store::ActivityTimeRange::since(
+        now_us.saturating_sub(duration_us),
+    ))
 }
 
 fn page_limit(requested: Option<i64>) -> Result<i64, ApiError> {

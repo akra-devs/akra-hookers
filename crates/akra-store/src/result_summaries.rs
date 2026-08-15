@@ -312,6 +312,9 @@ impl ActivityStore {
             event.turn_id(),
         )
         .await?;
+        let linked_activity_id = linked_activity
+            .as_ref()
+            .map(|(activity_event_id, _)| *activity_event_id);
         let eligible = linked_activity
             .as_ref()
             .is_none_or(|(_, activity_kind)| activity_kind == "user");
@@ -329,10 +332,10 @@ impl ActivityStore {
         if let Some(existing) = existing.as_ref()
             && existing.try_get::<String, _>("source_digest")? == source_digest
         {
-            if let Some((activity_event_id, _)) = linked_activity {
+            if let Some((activity_event_id, _)) = linked_activity.as_ref() {
                 link_activity(
                     &mut transaction,
-                    activity_event_id,
+                    *activity_event_id,
                     event.provider().as_str(),
                     event.session_id(),
                     event.turn_id(),
@@ -346,10 +349,10 @@ impl ActivityStore {
         if let Some(existing) = existing.as_ref()
             && command.captured_at_us <= existing.try_get::<i64, _>("captured_at_us")?
         {
-            if let Some((activity_event_id, _)) = linked_activity {
+            if let Some((activity_event_id, _)) = linked_activity.as_ref() {
                 link_activity(
                     &mut transaction,
-                    activity_event_id,
+                    *activity_event_id,
                     event.provider().as_str(),
                     event.session_id(),
                     event.turn_id(),
@@ -414,7 +417,7 @@ impl ActivityStore {
         .bind(event.provider().as_str())
         .bind(event.session_id())
         .bind(event.turn_id())
-        .bind(linked_activity.map(|(id, _)| id))
+        .bind(linked_activity_id)
         .bind(source_digest)
         .bind(retained_source)
         .bind(state)
@@ -427,6 +430,14 @@ impl ActivityStore {
         .bind(completed_at_us)
         .execute(&mut *transaction)
         .await?;
+        if let Some(activity_event_id) = linked_activity_id {
+            crate::prompt_summaries::reconcile_context_dependents(
+                &mut transaction,
+                activity_event_id,
+                command.captured_at_us,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         Ok(outcome)
     }
@@ -568,6 +579,7 @@ impl ActivityStore {
         completed_at_us: i64,
     ) -> Result<bool, StoreError> {
         let lines = lines.as_array();
+        let mut transaction = self.pool.begin().await?;
         let updated = sqlx::query(
             "UPDATE activity_result_summaries
              SET state = 'succeeded', source_text = NULL,
@@ -587,9 +599,19 @@ impl ActivityStore {
         .bind(&claim.provider_turn_id)
         .bind(claim.generation)
         .bind(&claim.lease_token)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
-        Ok(updated.rows_affected() == 1)
+        let applied = updated.rows_affected() == 1;
+        if applied {
+            crate::prompt_summaries::reconcile_context_dependents(
+                &mut transaction,
+                claim.activity_event_id,
+                completed_at_us,
+            )
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(applied)
     }
 
     pub async fn fail_result_summary(
@@ -606,6 +628,7 @@ impl ActivityStore {
         let completed_at_us = (!should_retry).then_some(failed_at_us);
         let next_attempt_at_us = retry_at_us.filter(|_| should_retry).unwrap_or(0);
         let error = sanitize_error(error);
+        let mut transaction = self.pool.begin().await?;
         let updated = sqlx::query(
             "UPDATE activity_result_summaries
              SET state = ?, source_text = ?, next_attempt_at_us = ?,
@@ -625,11 +648,21 @@ impl ActivityStore {
         .bind(&claim.provider_turn_id)
         .bind(claim.generation)
         .bind(&claim.lease_token)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
         if updated.rows_affected() == 0 {
+            transaction.commit().await?;
             return Ok(ResultSummaryFailureDisposition::Stale);
         }
+        if !should_retry {
+            crate::prompt_summaries::reconcile_context_dependents(
+                &mut transaction,
+                claim.activity_event_id,
+                failed_at_us,
+            )
+            .await?;
+        }
+        transaction.commit().await?;
         Ok(if should_retry {
             ResultSummaryFailureDisposition::RetryScheduled
         } else {

@@ -10,6 +10,7 @@ import {
   CollectorEndpointControl,
   type CollectorOperation,
 } from "./CollectorEndpointControl";
+import { PromptSummaryControl } from "./PromptSummaryControl";
 import { UiIcon } from "./UiIcon";
 
 export type ProjectFilter = "all" | "inbox" | `project:${number}`;
@@ -19,6 +20,9 @@ type ProjectRailProps = {
   codexEnabled: boolean;
   codexAvailable: boolean;
   codexPending: boolean;
+  promptSummaryMode: "off" | "smart";
+  promptSummaryPending: boolean;
+  promptSummaryError: string | null;
   codexTargets: CodexCaptureTarget[];
   pendingCodexTargetIds: string[];
   captureError: string | null;
@@ -26,10 +30,13 @@ type ProjectRailProps = {
   collectorOperation: CollectorOperation;
   activityVisibility: ActivityVisibility;
   projects: ProjectSummary[];
+  totalProjectCount: number;
   origins: OriginSummary[];
   inboxCount: number;
   filter: ProjectFilter;
+  hideEmptyProjects: boolean;
   onCodexChange: (enabled: boolean) => void;
+  onPromptSummaryModeChange: (mode: "off" | "smart") => void;
   onCodexTargetChange: (targetId: string, enabled: boolean) => void;
   onCollectorConfigure: (endpoint: string, token?: string) => Promise<void>;
   onCollectorVerify: () => Promise<void>;
@@ -37,6 +44,7 @@ type ProjectRailProps = {
     kind: keyof ActivityVisibility,
     visible: boolean,
   ) => void;
+  onHideEmptyProjectsChange: (hide: boolean) => void;
   onFilterChange: (filter: ProjectFilter) => void;
   onNewProject: () => void;
   onManageProject: (projectId: number) => void;
@@ -78,6 +86,9 @@ export function ProjectRail({
   codexEnabled,
   codexAvailable,
   codexPending,
+  promptSummaryMode,
+  promptSummaryPending,
+  promptSummaryError,
   codexTargets,
   pendingCodexTargetIds,
   captureError,
@@ -85,14 +96,18 @@ export function ProjectRail({
   collectorOperation,
   activityVisibility,
   projects,
+  totalProjectCount,
   origins,
   inboxCount,
   filter,
+  hideEmptyProjects,
   onCodexChange,
+  onPromptSummaryModeChange,
   onCodexTargetChange,
   onCollectorConfigure,
   onCollectorVerify,
   onActivityVisibilityChange,
+  onHideEmptyProjectsChange,
   onFilterChange,
   onNewProject,
   onManageProject,
@@ -167,7 +182,20 @@ export function ProjectRail({
             </button>
           </div>
         </header>
+        <label className="project-result-toggle">
+          <input
+            type="checkbox"
+            checked={hideEmptyProjects}
+            onChange={(event) => onHideEmptyProjectsChange(event.target.checked)}
+          />
+          <span>결과 없는 프로젝트 숨기기</span>
+        </label>
         <ul className="rail-list rail-projects">
+          {hideEmptyProjects && totalProjectCount > 0 && projects.length === 0 && (
+            <li className="rail-filter-empty" role="status">
+              선택한 기간에 결과가 있는 프로젝트가 없습니다.
+            </li>
+          )}
           {projects.map((project) => {
             const projectFilter = `project:${project.id}` as const;
             return (
@@ -291,7 +319,7 @@ export function ProjectRail({
         id="capture-settings"
         className="provider-control"
         aria-label="Provider settings"
-        aria-busy={codexPending || pendingCodexTargetIds.length > 0}
+        aria-busy={codexPending || promptSummaryPending || pendingCodexTargetIds.length > 0}
       >
         <header className="rail-section__heading">
           <div>
@@ -319,6 +347,14 @@ export function ProjectRail({
             />
           </label>
         </header>
+        <PromptSummaryControl
+          mode={promptSummaryMode}
+          available={codexAvailable}
+          collectorManaged={collector.mode === "remote"}
+          pending={promptSummaryPending}
+          error={promptSummaryError}
+          onChange={onPromptSummaryModeChange}
+        />
         <CollectorEndpointControl
           collector={collector}
           available={codexAvailable}

@@ -5,7 +5,11 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::{http::AppState, http_error::ApiError};
+use crate::{
+    http::AppState,
+    http_activities::{activity_kind_filter, activity_time_range},
+    http_error::ApiError,
+};
 
 #[derive(Deserialize)]
 pub(crate) struct ProjectNamePayload {
@@ -21,6 +25,7 @@ pub(crate) struct ProjectMergePayload {
 pub(crate) struct ProjectQuery {
     include_subagent: Option<bool>,
     include_internal: Option<bool>,
+    period: Option<String>,
 }
 
 pub(crate) async fn projects(
@@ -29,10 +34,10 @@ pub(crate) async fn projects(
 ) -> Result<Json<Vec<akra_store::ProjectSummary>>, ApiError> {
     state
         .store
-        .projects_filtered(akra_store::ActivityKindFilter::new(
-            query.include_subagent.unwrap_or(true),
-            query.include_internal.unwrap_or(true),
-        ))
+        .projects_filtered_in_range(
+            activity_kind_filter(query.include_subagent, query.include_internal),
+            activity_time_range(query.period.as_deref())?,
+        )
         .await
         .map(Json)
         .map_err(ApiError::from_store)

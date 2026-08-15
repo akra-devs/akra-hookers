@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use akra_core::ingress::{ActivityKind, IngressEvent};
 use akra_store::{
@@ -93,9 +96,11 @@ async fn activities_scopes_omit_detail_metadata_and_keep_global_numbering() {
     assert!(find(all, legacy)["project"].is_null());
     for activity in all {
         let object = activity.as_object().expect("summary");
-        assert_eq!(object.len(), 9);
+        assert_eq!(object.len(), 10);
         assert_eq!(object["activity_kind"], "user");
         assert_eq!(object["result_summary_status"], "unavailable");
+        assert_eq!(object["prompt_summary"]["status"], "ready");
+        assert_eq!(object["prompt_summary"]["mode"], "passthrough");
         for forbidden in ["session_id", "turn_id", "cwd", "origin", "global_sequence"] {
             assert!(
                 object.get(forbidden).is_none(),
@@ -273,6 +278,52 @@ async fn activity_kind_filters_apply_to_pages_details_counts_and_projects() {
     let projects = projects.as_array().expect("projects");
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0]["activity_count"], 1);
+}
+
+#[tokio::test]
+async fn period_filters_keep_nodes_and_every_navigation_count_in_sync() {
+    let harness = harness().await;
+    let cwd = Path::new(r"C:\period-filter");
+    let now_us: i64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_micros()
+        .try_into()
+        .expect("timestamp fits i64");
+    let recent = record(&harness.store, cwd, "period", "recent", Some(now_us)).await;
+    record(
+        &harness.store,
+        cwd,
+        "period",
+        "older-than-quarter",
+        Some(now_us - 91 * 24 * 60 * 60 * 1_000_000),
+    )
+    .await;
+
+    let (activity_status, activities) = get(
+        &harness.app,
+        "/v1/activities?scope=all&period=week&order=newest",
+    )
+    .await;
+    assert_eq!(activity_status, StatusCode::OK);
+    assert_eq!(
+        ids(activities.as_array().expect("activities")),
+        vec![recent]
+    );
+
+    let (_, count) = get(&harness.app, "/v1/activities/count?scope=all&period=week").await;
+    assert_eq!(count["count"], 1);
+
+    let (_, projects) = get(&harness.app, "/v1/projects?period=week").await;
+    assert_eq!(projects[0]["activity_count"], 1);
+
+    let (_, origins) = get(&harness.app, "/v1/origins?period=week").await;
+    assert_eq!(origins[0]["activity_count"], 1);
+
+    let (invalid_status, invalid) =
+        get(&harness.app, "/v1/activities?scope=all&period=calendar").await;
+    assert_eq!(invalid_status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(invalid["code"], "invalid_period");
 }
 
 async fn get(app: &axum::Router, uri: &str) -> (StatusCode, Value) {

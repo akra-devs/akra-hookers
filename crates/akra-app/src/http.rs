@@ -29,7 +29,8 @@ use crate::{
     http_origins::{configure_origin, origins, project_origins},
     http_projects::{create_project, merge_project, projects, rename_project},
     http_providers::{
-        configure_collector, provider, toggle_provider, toggle_provider_target, verify_collector,
+        configure_collector, configure_prompt_summaries, provider, toggle_provider,
+        toggle_provider_target, verify_collector,
     },
 };
 
@@ -180,6 +181,10 @@ fn router(token: &'static str, state: AppState) -> Router {
             axum::routing::patch(toggle_provider_target),
         )
         .route("/v1/providers/codex/collector", put(configure_collector))
+        .route(
+            "/v1/providers/codex/prompt-summaries",
+            put(configure_prompt_summaries),
+        )
         .route(
             "/v1/providers/codex/collector/verify",
             post(verify_collector),

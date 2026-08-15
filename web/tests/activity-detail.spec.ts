@@ -82,6 +82,9 @@ function syncDetails(api: FixtureApi) {
         result_summary: activity.id === detail.id
           ? detail.result_summary
           : { status: "unavailable", lines: null },
+        prompt_summary: activity.id === detail.id
+          ? detail.prompt_summary
+          : activity.prompt_summary,
       };
       detail.conversation_total = activities.length;
       detail.conversation_has_more = false;
@@ -95,6 +98,9 @@ function syncDetails(api: FixtureApi) {
       result_summary: activity.id === detail.id
         ? detail.result_summary
         : { status: "unavailable", lines: null },
+      prompt_summary: activity.id === detail.id
+        ? detail.prompt_summary
+        : activity.prompt_summary,
     }));
   }
 }
@@ -132,13 +138,13 @@ test("conversation pages load explicitly without duplicate turns", async ({ page
   await expect(detailPanel.getByRole("heading", { name: "대화 기록 (2/2)" })).toBeVisible();
   await expect(detailPanel.locator(".activity-detail__turn")).toHaveCount(2);
   await expect(detailPanel.getByRole("button", { name: "대화 기록 더 보기" })).toHaveCount(0);
-  await expect(detailPanel.getByText("결과 요약 중", { exact: true })).toBeVisible();
+  await expect(detailPanel.getByText("RES · 결과 요약 중", { exact: true })).toBeVisible();
 
   later.result_summary = {
     status: "ready",
     lines: ["갱신된 첫 줄", "갱신된 둘째 줄", "갱신된 셋째 줄"],
   };
-  await expect(detailPanel.getByText("결과 요약 보기", { exact: true })).toBeVisible({
+  await expect(detailPanel.getByText("갱신된 첫 줄", { exact: true })).toBeVisible({
     timeout: 2_500,
   });
 });
@@ -304,6 +310,41 @@ test("a ready Spark result renders exactly three stored lines without expanding 
   await expect(detailPanel.getByText("결과 요약 보기", { exact: true })).toHaveCount(0);
 });
 
+test("contextual prompt summaries replace wrapper-heavy node copy while the raw request stays disclosed", async ({
+  page,
+  api,
+}) => {
+  const raw = "<in-app-browser-context source=\"ambient-ui-state\">\nmetadata\n</in-app-browser-context>\n\n## My request:\n진행해";
+  const summary = {
+    status: "ready" as const,
+    mode: "contextual" as const,
+    text: "이전 검증 결과를 반영해 구현을 계속 진행한다",
+  };
+  api.state.activities[0]!.prompt = raw;
+  api.state.activities[0]!.prompt_summary = summary;
+  api.state.details[1]!.prompt = raw;
+  api.state.details[1]!.prompt_summary = summary;
+  api.state.details[1]!.selected_turn.prompt = raw;
+  api.state.details[1]!.selected_turn.prompt_summary = summary;
+  api.state.details[1]!.conversation[0]!.prompt = raw;
+  api.state.details[1]!.conversation[0]!.prompt_summary = summary;
+  await page.goto("/");
+
+  const card = page.getByTestId("activity-node-1");
+  await expect(card).toContainText(summary.text);
+  await expect(card.getByText("문맥 보강", { exact: true })).toBeVisible();
+  await expect(card).not.toContainText("ambient-ui-state");
+
+  const detailPanel = await open(page, 1);
+  await expect(detailPanel.locator(".activity-detail__selected > p")).toHaveText(summary.text);
+  const rawDisclosure = detailPanel.locator(".activity-detail__raw-prompt");
+  await expect(rawDisclosure).not.toHaveAttribute("open", "");
+  await rawDisclosure.getByText("수집된 원문 보기", { exact: true }).click();
+  await expect(rawDisclosure).toHaveAttribute("open", "");
+  await expect(rawDisclosure).toContainText(raw);
+  await expect(detailPanel.locator(".activity-detail__turn-request").first()).toContainText(summary.text);
+});
+
 test("pending and failed result states remain non-blocking and update through polling", async ({
   page,
   api,
@@ -327,17 +368,24 @@ test("pending and failed result states remain non-blocking and update through po
   await expect(page.getByTestId("activity-node-1")).toContainText("요약 실패");
 });
 
-test("a historical ready result is disclosed on demand with the keyboard", async ({ page, api }) => {
+test("a historical turn keeps its request/result preview compact and remains keyboard selectable", async ({ page, api }) => {
   const lines = ["첫 줄", "둘째 줄", "셋째 줄"] as [string, string, string];
   const historical = api.state.details[1]!.conversation.find(({ id }) => id === 2)!;
   historical.result_summary = { status: "ready", lines };
   await page.goto("/");
   const detailPanel = await open(page, 1);
-  const disclosure = detailPanel.getByText("결과 요약 보기", { exact: true });
-  await disclosure.focus();
+  const historicalTurn = detailPanel.locator("[data-activity-id='2']");
+  await expect(historicalTurn.locator(".activity-detail__turn-result")).toContainText("첫 줄");
+  await expect(historicalTurn.locator(".activity-detail__turn-result")).toContainText("+2");
+  await expect(historicalTurn).not.toContainText("둘째 줄");
+  const selection = page.waitForResponse((candidate) =>
+    candidate.request().method() === "GET"
+    && new URL(candidate.url()).pathname === "/v1/activities/2",
+  );
+  await historicalTurn.getByRole("button").focus();
   await page.keyboard.press("Enter");
-  await expect(disclosure.locator("..")).toHaveAttribute("open", "");
-  await expect(disclosure.locator("..").locator("li")).toHaveText(lines);
+  await selection;
+  await expect(panel(page)).toHaveAttribute("data-selected-activity-id", "2");
 });
 
 test("a long selected prompt and bounded result preserve a usable conversation viewport", async ({

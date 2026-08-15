@@ -1,4 +1,4 @@
-use akra_core::ingress::IngressEvent;
+use akra_core::{ingress::IngressEvent, prompt_projection::PromptProjection};
 use akra_git::ProjectOriginSnapshot;
 
 use crate::{ActivityStore, StoreError, routing};
@@ -8,6 +8,7 @@ pub struct RecordActivity {
     event: IngressEvent,
     origin: ProjectOriginSnapshot,
     capture: CaptureProvenance,
+    prompt_projection: PromptProjection,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,6 +33,7 @@ impl RecordActivity {
         captured_at_us: i64,
     ) -> Self {
         Self {
+            prompt_projection: PromptProjection::raw(event.prompt()),
             event,
             origin,
             capture: CaptureProvenance::Captured {
@@ -49,6 +51,7 @@ impl RecordActivity {
         client: impl Into<String>,
     ) -> Self {
         Self {
+            prompt_projection: PromptProjection::raw(event.prompt()),
             event,
             origin,
             capture: CaptureProvenance::Captured {
@@ -63,6 +66,7 @@ impl RecordActivity {
 
     pub fn legacy_resolved(event: IngressEvent, origin: ProjectOriginSnapshot) -> Self {
         Self {
+            prompt_projection: PromptProjection::raw(event.prompt()),
             event,
             origin,
             capture: CaptureProvenance::LegacyResolved,
@@ -75,6 +79,15 @@ impl RecordActivity {
 
     pub(crate) fn origin(&self) -> &ProjectOriginSnapshot {
         &self.origin
+    }
+
+    pub fn with_prompt_projection(mut self, projection: PromptProjection) -> Self {
+        self.prompt_projection = projection;
+        self
+    }
+
+    pub(crate) fn prompt_projection(&self) -> &PromptProjection {
+        &self.prompt_projection
     }
 
     const fn captured_at_us(&self) -> Option<i64> {
@@ -125,6 +138,9 @@ impl ActivityStore {
                 event.turn_id(),
             )
             .await?;
+            // A replay can point at activity recorded before the prompt-summary
+            // migration. Do not turn that dedupe lookup into a historical
+            // backfill; only the original insert initializes this derived row.
             transaction.commit().await?;
             return Ok(id);
         }
@@ -217,6 +233,21 @@ impl ActivityStore {
             event.turn_id(),
         )
         .await?;
+        crate::prompt_summaries::initialize_prompt_summary_in_transaction(
+            &mut transaction,
+            id,
+            command.prompt_projection(),
+            captured_at_us.unwrap_or_else(recorded_now_us),
+        )
+        .await?;
+        if event.activity_kind() == akra_core::ingress::ActivityKind::User {
+            crate::prompt_summaries::reconcile_successor_after_activity(
+                &mut transaction,
+                id,
+                captured_at_us.unwrap_or_else(recorded_now_us),
+            )
+            .await?;
+        }
         if let Some(project_id) = project_id {
             sqlx::query(
                 "INSERT INTO activity_project_assignments (
@@ -237,5 +268,68 @@ impl ActivityStore {
         crate::canvas::bump_canvas_revision(&mut transaction).await?;
         transaction.commit().await?;
         Ok(id)
+    }
+}
+
+fn recorded_now_us() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_micros()).ok())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use akra_core::ingress::IngressEvent;
+    use akra_git::ProjectIdentity;
+
+    use super::{ActivityStore, RecordActivity};
+
+    #[tokio::test]
+    async fn a_dedupe_replay_never_backfills_a_historic_prompt_summary() {
+        let store = ActivityStore::in_memory().await.expect("store");
+        store.migrate().await.expect("migrations");
+        let cwd = std::env::current_dir().expect("cwd");
+        let prompt = "가".repeat(300);
+        let event = IngressEvent::try_new(
+            "codex",
+            "historic-session",
+            "historic-turn",
+            cwd.to_string_lossy(),
+            &prompt,
+            None,
+        )
+        .expect("event");
+        let origin = ProjectIdentity::capture_snapshot_from_cwd(&cwd)
+            .expect("origin")
+            .origin;
+        let activity_id = store
+            .record(RecordActivity::captured(event.clone(), origin.clone(), 10))
+            .await
+            .expect("initial activity");
+        sqlx::query("DELETE FROM activity_prompt_summaries WHERE activity_event_id = ?")
+            .bind(activity_id)
+            .execute(&store.pool)
+            .await
+            .expect("simulate pre-migration activity");
+        store
+            .set_prompt_summary_policy("codex", crate::PromptSummaryPolicy::Smart)
+            .await
+            .expect("enable smart policy");
+
+        let replayed_id = store
+            .record(RecordActivity::captured(event, origin, 10))
+            .await
+            .expect("dedupe replay");
+
+        assert_eq!(replayed_id, activity_id);
+        assert!(
+            store
+                .prompt_summary(activity_id)
+                .await
+                .expect("prompt summary")
+                .is_none()
+        );
     }
 }

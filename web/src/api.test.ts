@@ -185,6 +185,7 @@ describe("createApiClient", () => {
     await client.updateCanvasPosition(4, { x: 12, y: 13 });
     await client.provider("codex");
     await client.setProviderEnabled("codex", false);
+    await client.setPromptSummaryMode("smart");
     await client.setProviderTargetEnabled("codex", "wsl:Ubuntu", true);
     await client.configureCollector("https://collector.example.com", "remote-secret");
     await client.verifyCollector();
@@ -200,14 +201,49 @@ describe("createApiClient", () => {
       [`${base}/v1/canvas/4`, "PATCH"],
       [`${base}/v1/providers/codex`, undefined],
       [`${base}/v1/providers/codex`, "PATCH"],
+      [`${base}/v1/providers/codex/prompt-summaries`, "PUT"],
       [`${base}/v1/providers/codex/targets/wsl%3AUbuntu`, "PATCH"],
       [`${base}/v1/providers/codex/collector`, "PUT"],
       [`${base}/v1/providers/codex/collector/verify`, "POST"],
     ]);
+    expect(fetcher.mock.calls[10]?.[1]?.body).toBe(JSON.stringify({ mode: "smart" }));
     expect(fetcher.mock.calls.at(-2)?.[1]?.body).toBe(JSON.stringify({
       endpoint: "https://collector.example.com",
       token: "remote-secret",
     }));
+  });
+
+  it("carries one activity period through nodes and every navigation count", async () => {
+    const fetcher = vi.fn().mockImplementation(() => Promise.resolve(json([])));
+    const client = createApiClient(base, "capability", fetcher);
+
+    await client.activities(
+      { scope: "all" },
+      { period: "week", limit: 20, order: "newest" },
+    );
+    await client.activityCount(
+      { scope: "inbox" },
+      { period: "month", includeSubagent: false, includeInternal: false },
+    );
+    await client.projects({ period: "quarter", includeSubagent: false });
+    await client.origins({ period: "day", includeInternal: false });
+
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      `${base}/v1/activities?scope=all&limit=20&order=newest&period=week`,
+      `${base}/v1/activities/count?scope=inbox&include_subagent=false&include_internal=false&period=month`,
+      `${base}/v1/projects?include_subagent=false&period=quarter`,
+      `${base}/v1/origins?include_internal=false&period=day`,
+    ]);
+  });
+
+  it("accepts successful empty mutation responses", async () => {
+    const client = createApiClient(
+      base,
+      "capability",
+      vi.fn().mockResolvedValue(new Response(null, { status: 204 })),
+    );
+
+    await expect(client.clearCanvas()).resolves.toBeUndefined();
   });
 
   it.each([

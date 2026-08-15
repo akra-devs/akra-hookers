@@ -29,7 +29,15 @@ export function ActivityNode({
     : data.resultSummaryStatus === "pending"
       ? "요약 중"
       : data.resultSummaryStatus === "failed"
-        ? "요약 실패"
+      ? "요약 실패"
+        : null;
+  const promptStatus = data.promptSummary.status === "pending"
+    ? "정리 중"
+    : data.promptSummary.status === "failed"
+      ? "원문 표시"
+      : data.promptSummary.status === "ready"
+        && data.promptSummary.mode === "contextual"
+        ? "문맥 보강"
         : null;
 
   return (
@@ -85,6 +93,13 @@ export function ActivityNode({
               className={`activity-node__result activity-node__result--${data.resultSummaryStatus}`}
             >
               {resultStatus}
+            </span>
+          )}
+          {promptStatus && (
+            <span
+              className={`activity-node__prompt-status activity-node__prompt-status--${data.promptSummary.status}`}
+            >
+              {promptStatus}
             </span>
           )}
         </span>

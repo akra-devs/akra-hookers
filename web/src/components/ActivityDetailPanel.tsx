@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import type {
   ActivityConversationTurn,
+  ActivityPromptSummary,
   ActivityResultSummary,
   ActivityTime,
   ApiClient,
@@ -20,6 +21,7 @@ type ActivityDetailPanelProps = {
   activityVisibility: ActivityVisibility;
   client: ApiClient;
   onClose: () => void;
+  onSelectActivity: (activityId: number) => void;
 };
 
 function DetailTime({
@@ -68,20 +70,74 @@ function ResultSummary({ summary }: { summary: ActivityResultSummary }) {
 function TimelineResultSummary({ summary }: { summary: ActivityResultSummary }) {
   if (summary.status === "unavailable") return null;
   if (summary.status === "pending") {
-    return <p className="activity-detail__turn-result-state">결과 요약 중</p>;
+    return <p className="activity-detail__turn-result-state">RES · 결과 요약 중</p>;
   }
   if (summary.status === "failed") {
-    return <p className="activity-detail__turn-result-state is-failed">결과 요약 실패</p>;
+    return <p className="activity-detail__turn-result-state is-failed">RES · 결과 요약 실패</p>;
   }
   if (summary.status !== "ready") return null;
   return (
-    <details className="activity-detail__turn-result">
-      <summary>결과 요약 보기</summary>
-      <ul>
-        {summary.lines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
-      </ul>
+    <p className="activity-detail__turn-result">
+      <strong>RES</strong>
+      <span>{summary.lines[0]}</span>
+      <em>+2</em>
+    </p>
+  );
+}
+
+function promptSummaryLabel(summary: ActivityPromptSummary): string | null {
+  if (summary.status === "pending") return "요청 정리 중";
+  if (summary.status === "failed") return "원문 표시";
+  if (summary.status !== "ready") return null;
+  if (summary.mode === "contextual") return "문맥 보강";
+  if (summary.mode === "standalone") return "요청 요약";
+  if (summary.mode === "passthrough") return "원문 정리";
+  return null;
+}
+
+function RequestSummary({
+  summary,
+  prompt,
+  compact = false,
+}: {
+  summary: ActivityPromptSummary;
+  prompt: string;
+  compact?: boolean;
+}) {
+  const text = summary.text ?? prompt;
+  const label = promptSummaryLabel(summary);
+  return (
+    <>
+      {label && (
+        <span
+          className={`activity-detail__request-status activity-detail__request-status--${summary.status}`}
+          data-status={summary.status}
+          aria-live={compact ? undefined : "polite"}
+        >
+          {label}
+        </span>
+      )}
+      {compact ? (
+        <p className="activity-detail__turn-request">
+          <strong>REQ</strong>
+          <span>{text}</span>
+        </p>
+      ) : <p aria-live="polite">{text}</p>}
+    </>
+  );
+}
+
+function RawPromptDisclosure({ prompt }: { prompt: string }) {
+  return (
+    <details className="activity-detail__raw-prompt">
+      <summary>수집된 원문 보기</summary>
+      <p>{prompt}</p>
     </details>
   );
+}
+
+function hasDerivedPrompt(summary: ActivityPromptSummary, prompt: string) {
+  return summary.text !== null && summary.text !== prompt;
 }
 
 export function ActivityDetailPanel({
@@ -89,6 +145,7 @@ export function ActivityDetailPanel({
   activityVisibility,
   client,
   onClose,
+  onSelectActivity,
 }: ActivityDetailPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
   const detailQuery = useQuery({
@@ -287,7 +344,10 @@ export function ActivityDetailPanel({
       >
       <section className="activity-detail__selected" aria-label="선택한 활동">
         <span className="activity-detail__project">{detail.project?.name ?? "Inbox"}</span>
-        <p>{detail.prompt}</p>
+        <RequestSummary summary={detail.prompt_summary} prompt={detail.prompt} />
+        {hasDerivedPrompt(detail.prompt_summary, detail.prompt) && (
+          <RawPromptDisclosure prompt={detail.prompt} />
+        )}
         <span className="activity-detail__provider">{detail.provider}</span>
       </section>
       <ResultSummary summary={detail.result_summary} />
@@ -389,13 +449,20 @@ export function ActivityDetailPanel({
               data-activity-id={turn.id}
               aria-current={turn.selected ? "true" : undefined}
             >
-              <div>
-                <span>{turn.project?.name ?? "Inbox"}</span>
-                {!turn.on_canvas && <span>캔버스에 없음</span>}
-              </div>
-              <p>{turn.prompt}</p>
-              {!turn.selected && <TimelineResultSummary summary={turn.result_summary} />}
-              <time dateTime={turn.time.value ?? undefined}>{formatActivityTime(turn.time)}</time>
+              <button
+                type="button"
+                className="activity-detail__turn-button"
+                onClick={() => onSelectActivity(turn.id)}
+                aria-current={turn.selected ? "true" : undefined}
+              >
+                <div>
+                  <span>{turn.project?.name ?? "Inbox"}</span>
+                  {!turn.on_canvas && <span>캔버스에 없음</span>}
+                </div>
+                <RequestSummary summary={turn.prompt_summary} prompt={turn.prompt} compact />
+                <TimelineResultSummary summary={turn.result_summary} />
+                <time dateTime={turn.time.value ?? undefined}>{formatActivityTime(turn.time)}</time>
+              </button>
             </li>
           ))}
         </ol>

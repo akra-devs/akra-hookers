@@ -13,6 +13,7 @@ export type ActivityNodeData = {
   conversationIndex: number;
   conversationTotal: number;
   resultSummaryStatus: ActivitySummary["result_summary_status"];
+  promptSummary: ActivitySummary["prompt_summary"];
 };
 
 export function toCanvasNodes(
@@ -36,11 +37,12 @@ export function toCanvasNodes(
         project: activity.project,
         provider: activity.provider,
         activityKind: activity.activity_kind,
-        prompt: activity.prompt,
+        prompt: activity.prompt_summary.text ?? activity.prompt,
         time: activity.time,
         conversationIndex: activity.conversation_index,
         conversationTotal: activity.conversation_total,
         resultSummaryStatus: activity.result_summary_status,
+        promptSummary: activity.prompt_summary,
       },
     }];
   });

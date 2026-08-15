@@ -1,4 +1,7 @@
-use akra_core::ingress::{ActivityKind, IngressEvent, ResultEvent};
+use akra_core::{
+    ingress::{ActivityKind, IngressEvent, ResultEvent},
+    prompt_projection::PromptProjection,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
@@ -6,10 +9,14 @@ use thiserror::Error;
 #[path = "codex_lifecycle.rs"]
 mod lifecycle;
 
+#[path = "codex_prompt.rs"]
+mod prompt;
+
 pub use lifecycle::{
     CodexHookCommand, CodexHookLifecycle, CodexHookLifecycleSet, CodexLifecycleError,
     apply_codex_hook_updates,
 };
+pub use prompt::project_codex_user_prompt;
 
 #[derive(Debug)]
 pub struct CodexAdapter;
@@ -21,6 +28,11 @@ pub enum CodexCapture {
 }
 
 impl CodexAdapter {
+    /// Derives a display/summary input without changing the captured prompt.
+    pub fn project_prompt(prompt: &str) -> PromptProjection {
+        project_codex_user_prompt(prompt)
+    }
+
     /// Normalizes prompt-producing hooks for callers that predate result capture.
     pub fn normalize(input: &str) -> Result<IngressEvent, CodexAdapterError> {
         let value: Value = serde_json::from_str(input)?;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Node, type NodeTypes } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { createApiClient } from "./api";
+import { createApiClient, type ActivityPeriod } from "./api";
 import {
   loadActivityVisibility,
   saveActivityVisibility,
@@ -23,10 +23,15 @@ const nodeTypes = { activity: ActivityNode } satisfies NodeTypes;
 export function App() {
   const [codexEnabled, setCodexEnabled] = useState(false);
   const [codexPending, setCodexPending] = useState(false);
+  const [promptSummaryMode, setPromptSummaryMode] = useState<"off" | "smart">("off");
+  const [promptSummaryPending, setPromptSummaryPending] = useState(false);
+  const [promptSummaryError, setPromptSummaryError] = useState<string | null>(null);
   const [pendingCodexTargetIds, setPendingCodexTargetIds] = useState<string[]>([]);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [collectorOperation, setCollectorOperation] = useState<CollectorOperation>(null);
   const [filter, setFilter] = useState<ProjectFilter>("all");
+  const [activityPeriod, setActivityPeriod] = useState<ActivityPeriod>("all");
+  const [hideEmptyProjects, setHideEmptyProjects] = useState(false);
   const [activityVisibility, setActivityVisibility] = useState(
     loadActivityVisibility,
   );
@@ -48,19 +53,20 @@ export function App() {
       ? { scope: "inbox" } as const
       : { scope: "project", projectId: Number(filter.slice("project:".length)) } as const;
   const {
-    activities, inboxCount, projects, origins, provider, canvas,
+    activities, allCount, inboxCount, projects, origins, provider, canvas,
     nodes, setNodes, edges, onNodesChange, commitNodePosition,
     selectedActivityIds, setSelectedActivityIds, assignmentDetails,
     refreshProjectContext, refreshCanvas, refreshCanvasAuthoritatively,
     bootstrapError, retryBootstrap,
     hasOlderActivities, loadOlderActivities, loadingOlderActivities, olderActivitiesError,
-  } = useDashboardData(client, activityScope, activityVisibility);
+  } = useDashboardData(client, activityScope, activityVisibility, activityPeriod);
   useEffect(() => {
     saveActivityVisibility(activityVisibility);
   }, [activityVisibility]);
   useEffect(() => {
     if (provider.data && !provider.isError) {
       setCodexEnabled(provider.data.enabled);
+      setPromptSummaryMode(provider.data.prompt_summary_mode);
       setCaptureError(null);
     }
   }, [provider.data, provider.isError]);
@@ -105,14 +111,22 @@ export function App() {
     setDetailActivityId(null);
     requestAnimationFrame(() => detailTriggerRef.current?.focus());
   }, []);
+  const focusCanvasStage = useCallback(() => {
+    // React Flow can restore its own viewport focus on the same frame as an
+    // empty-canvas render. Wait one extra frame so the explicit completion
+    // target wins after the dialog has unmounted and the graph is settled.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>(".flow-stage")?.focus();
+      });
+    });
+  }, []);
   const confirmClearCanvas = useCallback(async () => {
     if (!await clearCanvas()) return false;
     setClearConfirmOpen(false);
-    requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>(".flow-stage")?.focus();
-    });
+    focusCanvasStage();
     return true;
-  }, [clearCanvas]);
+  }, [clearCanvas, focusCanvasStage]);
   const cancelClearCanvas = useCallback(() => {
     setClearConfirmOpen(false);
     requestAnimationFrame(() => clearCanvasTriggerRef.current?.focus());
@@ -143,6 +157,32 @@ export function App() {
       setCodexPending(false);
     }
   }, [client, codexEnabled, codexPending, pendingCodexTargetIds.length, provider]);
+  const changePromptSummaryMode = useCallback(async (mode: "off" | "smart") => {
+    if (!client || provider.isError || promptSummaryPending) return;
+    const previous = promptSummaryMode;
+    setPromptSummaryError(null);
+    setPromptSummaryPending(true);
+    setPromptSummaryMode(mode);
+    try {
+      await client.setPromptSummaryMode(mode);
+    } catch (cause) {
+      setPromptSummaryMode(previous);
+      setPromptSummaryError(
+        cause instanceof Error ? cause.message : "프롬프트 요약 설정을 변경하지 못했습니다.",
+      );
+      setPromptSummaryPending(false);
+      return;
+    }
+    try {
+      await provider.refetch({ throwOnError: true });
+    } catch {
+      setPromptSummaryError(
+        "설정은 변경되었지만 최신 상태를 확인하지 못했습니다. 대시보드에서 다시 확인하세요.",
+      );
+    } finally {
+      setPromptSummaryPending(false);
+    }
+  }, [client, promptSummaryMode, promptSummaryPending, provider]);
   const changeProviderTarget = useCallback(async (targetId: string, enabled: boolean) => {
     if (
       !client
@@ -201,9 +241,27 @@ export function App() {
       setCollectorOperation(null);
     }
   }, [client, collectorOperation, provider]);
+  const currentProjects = projects.data ?? [];
+  const visibleProjects = useMemo(() => {
+    const items = projects.data ?? [];
+    return hideEmptyProjects
+      ? items.filter((project) => project.activity_count > 0)
+      : items;
+  }, [hideEmptyProjects, projects.data]);
+  useEffect(() => {
+    if (
+      !hideEmptyProjects
+      || projects.data === undefined
+      || !filter.startsWith("project:")
+    ) return;
+    const projectId = Number(filter.slice("project:".length));
+    if (!visibleProjects.some((project) => project.id === projectId)) {
+      setFilter("all");
+    }
+  }, [filter, hideEmptyProjects, projects.data, visibleProjects]);
   const managedProject = projectDialog === null || projectDialog === "new"
     ? undefined
-    : projects.data?.find((project) => project.id === projectDialog);
+    : currentProjects.find((project) => project.id === projectDialog);
   const managedOrigin = originDialog === null
     ? undefined
     : origins.data?.find((origin) => origin.id === originDialog);
@@ -220,7 +278,6 @@ export function App() {
     && activities.data !== undefined
     && canvas.data !== undefined;
   const showCanvasEmptyState = canvasDataIsReady && nodes.length === 0;
-  const currentProjects = projects.data ?? [];
   const currentOrigins = origins.data ?? [];
   const currentTargets = provider.data?.targets ?? [];
   const currentCollector = provider.data?.collector ?? {
@@ -242,36 +299,44 @@ export function App() {
     <main className={detailActivityId === null ? "app-shell" : "app-shell app-shell--detail"}>
       <AppCommandBar
         filter={filter}
-        projects={currentProjects}
+        projects={visibleProjects}
         inboxCount={inboxCount.data ?? 0}
         originCount={currentOrigins.length}
+        activityPeriod={activityPeriod}
         codexAvailable={provider.data !== undefined && !provider.isError}
         codexTargets={currentTargets}
         collector={provider.data?.collector}
         collectorOperation={collectorOperation}
         onFilterChange={setFilter}
+        onActivityPeriodChange={setActivityPeriod}
         onOpenWorkLocations={() => focusRailSection("#work-locations-heading")}
         onOpenCaptureSettings={() => focusRailSection("#codex-capture-control")}
       />
       <ProjectRail
-        nodeCount={nodes.length} codexEnabled={codexEnabled}
+        nodeCount={allCount.data ?? 0} codexEnabled={codexEnabled}
         codexAvailable={provider.data !== undefined && !provider.isError}
         codexPending={codexPending}
+        promptSummaryMode={promptSummaryMode}
+        promptSummaryPending={promptSummaryPending}
+        promptSummaryError={promptSummaryError}
         codexTargets={currentTargets}
         pendingCodexTargetIds={pendingCodexTargetIds}
         captureError={captureError}
         collector={currentCollector}
         collectorOperation={collectorOperation}
         activityVisibility={activityVisibility}
-        projects={currentProjects} origins={currentOrigins}
+        projects={visibleProjects} totalProjectCount={currentProjects.length} origins={currentOrigins}
         inboxCount={inboxCount.data ?? 0} filter={filter}
+        hideEmptyProjects={hideEmptyProjects}
         onCodexChange={(enabled) => void changeProvider(enabled)}
+        onPromptSummaryModeChange={(mode) => void changePromptSummaryMode(mode)}
         onCodexTargetChange={(targetId, enabled) =>
           void changeProviderTarget(targetId, enabled)}
         onCollectorConfigure={configureCollector}
         onCollectorVerify={verifyCollector}
         onActivityVisibilityChange={(kind, visible) =>
           setActivityVisibility((current) => ({ ...current, [kind]: visible }))}
+        onHideEmptyProjectsChange={setHideEmptyProjects}
         onFilterChange={setFilter} onNewProject={() => setProjectDialog("new")}
         onManageProject={setProjectDialog} onManageOrigin={setOriginDialog}
       />
@@ -362,6 +427,7 @@ export function App() {
           activityVisibility={activityVisibility}
           client={client}
           onClose={closeActivity}
+          onSelectActivity={openActivity}
         />
       )}
       {clearConfirmOpen && (

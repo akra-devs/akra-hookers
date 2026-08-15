@@ -1,4 +1,9 @@
-import type { CodexCaptureTarget, CollectorIntegration, ProjectSummary } from "../api";
+import type {
+  ActivityPeriod,
+  CodexCaptureTarget,
+  CollectorIntegration,
+  ProjectSummary,
+} from "../api";
 import type { CollectorOperation } from "./CollectorEndpointControl";
 import type { ProjectFilter } from "./ProjectRail";
 import { UiIcon } from "./UiIcon";
@@ -7,12 +12,14 @@ type AppCommandBarProps = {
   filter: ProjectFilter;
   projects: ProjectSummary[];
   inboxCount: number;
+  activityPeriod: ActivityPeriod;
   originCount: number;
   codexAvailable: boolean;
   codexTargets: CodexCaptureTarget[];
   collector: CollectorIntegration | undefined;
   collectorOperation: CollectorOperation;
   onFilterChange: (filter: ProjectFilter) => void;
+  onActivityPeriodChange: (period: ActivityPeriod) => void;
   onOpenWorkLocations: () => void;
   onOpenCaptureSettings: () => void;
 };
@@ -21,12 +28,14 @@ export function AppCommandBar({
   filter,
   projects,
   inboxCount,
+  activityPeriod,
   originCount,
   codexAvailable,
   codexTargets,
   collector,
   collectorOperation,
   onFilterChange,
+  onActivityPeriodChange,
   onOpenWorkLocations,
   onOpenCaptureSettings,
 }: AppCommandBarProps) {
@@ -69,6 +78,21 @@ export function AppCommandBar({
               {project.name}
             </option>
           ))}
+        </select>
+      </label>
+      <label className="command-control command-control--period">
+        <span className="command-control__label" aria-hidden="true">기간</span>
+        <span className="sr-only">기간 필터</span>
+        <select
+          aria-label="기간 필터"
+          value={activityPeriod}
+          onChange={(event) => onActivityPeriodChange(event.target.value as ActivityPeriod)}
+        >
+          <option value="all">전체 기간</option>
+          <option value="day">최근 24시간</option>
+          <option value="week">최근 7일</option>
+          <option value="month">최근 30일</option>
+          <option value="quarter">최근 90일</option>
         </select>
       </label>
       <button

@@ -4,7 +4,7 @@ import {
 } from "@xyflow/react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 
-import type { ActivityScope, ApiClient } from "../api";
+import type { ActivityPeriod, ActivityScope, ApiClient } from "../api";
 import {
   isActivityKindVisible,
   type ActivityVisibility,
@@ -51,6 +51,7 @@ export function useDashboardData(
   client: ApiClient | null,
   activityScope: ActivityScope,
   activityVisibility: ActivityVisibility,
+  activityPeriod: ActivityPeriod,
 ) {
   const [nodes, setNodes] = useState<ActivityFlowNode[]>([]);
   const [selectedActivityIds, setSelectedActivityIds] = useState<number[]>([]);
@@ -69,36 +70,47 @@ export function useDashboardData(
   const scopeKey = activityScope.scope === "project"
     ? `project:${activityScope.projectId}`
     : activityScope.scope;
+  const activityFilters = useMemo(() => ({
+    includeSubagent: activityVisibility.subagent,
+    includeInternal: activityVisibility.internal,
+    period: activityPeriod,
+  }), [activityPeriod, activityVisibility.internal, activityVisibility.subagent]);
   const visibilityQuery = useMemo(() => ({
     includeSubagent: activityVisibility.subagent,
     includeInternal: activityVisibility.internal,
   }), [activityVisibility.internal, activityVisibility.subagent]);
 
   const activities = useQuery({
-    queryKey: ["activities", activityScope, visibilityQuery],
+    queryKey: ["activities", activityScope, activityFilters],
     queryFn: () => client!.activities(activityScope, {
       limit: ACTIVITY_PAGE_SIZE,
       order: "newest",
-      ...visibilityQuery,
+      ...activityFilters,
     }),
     enabled: client !== null,
     refetchInterval: 500,
   });
   const inboxCount = useQuery({
-    queryKey: ["activity-count", { scope: "inbox" }, visibilityQuery],
-    queryFn: () => client!.activityCount({ scope: "inbox" }, visibilityQuery),
+    queryKey: ["activity-count", { scope: "inbox" }, activityFilters],
+    queryFn: () => client!.activityCount({ scope: "inbox" }, activityFilters),
+    enabled: client !== null,
+    refetchInterval: 500,
+  });
+  const allCount = useQuery({
+    queryKey: ["activity-count", { scope: "all" }, activityFilters],
+    queryFn: () => client!.activityCount({ scope: "all" }, activityFilters),
     enabled: client !== null,
     refetchInterval: 500,
   });
   const projects = useQuery({
-    queryKey: ["projects", visibilityQuery],
-    queryFn: () => client!.projects(visibilityQuery),
+    queryKey: ["projects", activityFilters],
+    queryFn: () => client!.projects(activityFilters),
     enabled: client !== null,
     refetchInterval: 500,
   });
   const origins = useQuery({
-    queryKey: ["origins"],
-    queryFn: () => client!.origins(),
+    queryKey: ["origins", activityFilters],
+    queryFn: () => client!.origins(activityFilters),
     enabled: client !== null,
     refetchInterval: 500,
   });
@@ -138,7 +150,7 @@ export function useDashboardData(
     setOlderActivitiesHaveMore(null);
     setOlderActivityPageCursors([]);
     setOlderActivitiesError("");
-  }, [client, scopeKey, visibilityQuery]);
+  }, [activityFilters, client, scopeKey]);
   const allActivityItems = useMemo(() => {
     const byId = new Map(
       [...olderActivities, ...(activities.data ?? [])]
@@ -163,7 +175,7 @@ export function useDashboardData(
         limit: ACTIVITY_PAGE_SIZE,
         afterId: cursor,
         order: "newest",
-        ...visibilityQuery,
+        ...activityFilters,
       });
       setOlderActivities((current) => {
         const byId = new Map(
@@ -189,7 +201,7 @@ export function useDashboardData(
     client,
     hasOlderActivities,
     olderActivities,
-    visibilityQuery,
+    activityFilters,
   ]);
 
   useEffect(() => {
@@ -205,7 +217,7 @@ export function useDashboardData(
             limit: ACTIVITY_PAGE_SIZE,
             afterId,
             order: "newest",
-            ...visibilityQuery,
+            ...activityFilters,
           })
         ));
         if (cancelled) return;
@@ -229,7 +241,7 @@ export function useDashboardData(
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activityScope, client, olderActivityPageCursors, visibilityQuery]);
+  }, [activityFilters, activityScope, client, olderActivityPageCursors]);
 
   useEffect(() => {
     if (!activities.data || !canvas.data) return;
@@ -276,12 +288,13 @@ export function useDashboardData(
     setOlderActivitiesError("");
     await Promise.all([
       activities.refetch(),
+      allCount.refetch(),
       inboxCount.refetch(),
       projects.refetch(),
       origins.refetch(),
       ...selectedDetails.map((detail) => detail.refetch()),
     ]);
-  }, [activities, inboxCount, origins, projects, selectedDetails]);
+  }, [activities, allCount, inboxCount, origins, projects, selectedDetails]);
   const refreshCanvas = useCallback(async () => {
     await Promise.all([canvas.refetch(), persistedEdges.refetch()]);
   }, [canvas, persistedEdges]);
@@ -353,6 +366,7 @@ export function useDashboardData(
 
   const bootstrapQueries = [
     activities,
+    allCount,
     inboxCount,
     projects,
     origins,
@@ -368,6 +382,7 @@ export function useDashboardData(
   const retryBootstrap = useCallback(async () => {
     await Promise.all([
       activities.refetch(),
+      allCount.refetch(),
       inboxCount.refetch(),
       projects.refetch(),
       origins.refetch(),
@@ -378,6 +393,7 @@ export function useDashboardData(
     ]);
   }, [
     activities,
+    allCount,
     canvas,
     canvasRevision,
     inboxCount,
@@ -388,7 +404,7 @@ export function useDashboardData(
   ]);
 
   return {
-    activities, inboxCount, projects, origins, provider, canvas,
+    activities, allCount, inboxCount, projects, origins, provider, canvas,
     nodes, setNodes, edges, onNodesChange, commitNodePosition,
     selectedActivityIds, setSelectedActivityIds, assignmentDetails,
     refreshProjectContext, refreshCanvas, refreshCanvasAuthoritatively,

@@ -24,6 +24,7 @@ export type FixtureState = {
 
 const captured = { value: "2026-08-08T12:00:00Z", provenance: "captured" } as const;
 const unavailableResult = { status: "unavailable", lines: null } as const;
+const unavailablePrompt = { status: "unavailable", mode: "fallback", text: null } as const;
 
 export function createFixtureState(): FixtureState {
   const activities: ActivitySummary[] = [
@@ -37,6 +38,7 @@ export function createFixtureState(): FixtureState {
       conversation_index: 1,
       conversation_total: 2,
       result_summary_status: "unavailable",
+      prompt_summary: unavailablePrompt,
     },
     {
       id: 2,
@@ -48,6 +50,7 @@ export function createFixtureState(): FixtureState {
       conversation_index: 2,
       conversation_total: 2,
       result_summary_status: "unavailable",
+      prompt_summary: unavailablePrompt,
     },
   ];
   const details: Record<number, ActivityDetail> = {
@@ -68,6 +71,7 @@ export function createFixtureState(): FixtureState {
       on_canvas: true,
       selected: activity.id === selected,
       result_summary: unavailableResult,
+      prompt_summary: activity.prompt_summary,
     }));
   }
   return {
@@ -127,6 +131,7 @@ export function createFixtureState(): FixtureState {
     provider: {
       provider: "codex",
       enabled: true,
+      prompt_summary_mode: "off",
       collector: {
         mode: "local",
         endpoint: "http://127.0.0.1:42130",
@@ -216,6 +221,7 @@ function detail(summary: ActivitySummary, turnId: string): ActivityDetail {
       agent_type: null,
     },
     result_summary: unavailableResult,
+    prompt_summary: summary.prompt_summary,
     selected_turn: {
       id: summary.id,
       activity_kind: summary.activity_kind,
@@ -225,6 +231,7 @@ function detail(summary: ActivitySummary, turnId: string): ActivityDetail {
       on_canvas: true,
       selected: true,
       result_summary: unavailableResult,
+      prompt_summary: summary.prompt_summary,
     },
     conversation: [],
     conversation_total: 2,

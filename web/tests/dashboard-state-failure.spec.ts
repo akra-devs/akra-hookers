@@ -148,6 +148,34 @@ test("successful capture mutations recover when their status refresh fails", asy
   await expect(masterCapture).toBeEnabled();
 });
 
+test("a rejected prompt-summary mode restores the previous local state", async ({ page, api }) => {
+  await page.route("**/v1/providers/codex/prompt-summaries", async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    await route.fulfill({
+      status: 422,
+      contentType: "application/json",
+      body: JSON.stringify({
+        code: "invalid_prompt_summary_mode",
+        message: "요약 설정을 저장할 수 없습니다.",
+      }),
+    });
+  });
+  await page.goto("/");
+
+  const toggle = page.getByRole("checkbox", { name: "문맥 기반 프롬프트 요약" });
+  const rejected = page.waitForResponse((response) =>
+    response.request().method() === "PUT"
+    && new URL(response.url()).pathname === "/v1/providers/codex/prompt-summaries"
+    && response.status() === 422,
+  );
+  await toggle.click();
+  await rejected;
+
+  await expect(toggle).not.toBeChecked();
+  await expect(page.getByRole("alert")).toContainText("요약 설정을 저장할 수 없습니다.");
+  expect(api.state.provider.prompt_summary_mode).toBe("off");
+});
+
 test("a rejected position mutation refetches the exact server canvas without duplicating immutable history", async ({ page, api }) => {
   const beforeCanvas = durableCanvas(api);
   const beforeActivities = JSON.stringify(api.state.activities);

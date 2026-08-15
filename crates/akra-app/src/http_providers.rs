@@ -14,6 +14,7 @@ use crate::{
     http::{AppState, CodexLifecycleControl},
     http_error::ApiError,
 };
+use akra_store::PromptSummaryPolicy;
 
 #[derive(Deserialize)]
 pub(crate) struct ProviderToggle {
@@ -24,6 +25,7 @@ pub(crate) struct ProviderToggle {
 pub(crate) struct ProviderStatus {
     provider: String,
     enabled: bool,
+    prompt_summary_mode: String,
     targets: Vec<CodexTargetStatus>,
     collector: CollectorIntegration,
 }
@@ -45,6 +47,11 @@ pub(crate) struct CollectorConfiguration {
     endpoint: String,
     #[serde(default)]
     token: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PromptSummaryConfiguration {
+    mode: String,
 }
 
 pub(crate) async fn toggle_provider(
@@ -122,9 +129,46 @@ pub(crate) async fn provider(
     Ok(Json(ProviderStatus {
         provider: integration.provider,
         enabled: integration.enabled,
+        prompt_summary_mode: integration.prompt_summary_mode,
         targets: Vec::new(),
         collector,
     }))
+}
+
+pub(crate) async fn configure_prompt_summaries(
+    State(state): State<AppState>,
+    Json(configuration): Json<PromptSummaryConfiguration>,
+) -> Result<StatusCode, ApiError> {
+    if let Some(collector) = state.collector.clone() {
+        let mode = tokio::task::spawn_blocking(move || {
+            collector.status().map(|status| status.config.mode)
+        })
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(collector_configuration_error)?;
+        if mode == CollectorMode::Remote {
+            return Err(ApiError::conflict(
+                "prompt_summaries_collector_managed",
+                "Prompt summaries are configured on the collector dashboard.",
+            ));
+        }
+    }
+    let policy = match configuration.mode.as_str() {
+        "off" => PromptSummaryPolicy::Off,
+        "smart" => PromptSummaryPolicy::Smart,
+        _ => {
+            return Err(ApiError::unprocessable(
+                "invalid_prompt_summary_mode",
+                "Prompt summary mode must be off or smart.",
+            ));
+        }
+    };
+    state
+        .store
+        .set_prompt_summary_policy("codex", policy)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(ApiError::from_store)
 }
 
 pub(crate) async fn configure_collector(
@@ -180,6 +224,12 @@ async fn codex_provider_status(
     store: std::sync::Arc<akra_store::ActivityStore>,
     collector: CollectorIntegration,
 ) -> Result<ProviderStatus, ApiError> {
+    let prompt_summary_mode = store
+        .prompt_summary_policy(&provider)
+        .await
+        .map_err(ApiError::from_store)?
+        .as_str()
+        .to_owned();
     let observations = store
         .capture_client_observations()
         .await
@@ -188,6 +238,7 @@ async fn codex_provider_status(
         Ok(ProviderStatus {
             provider,
             enabled: control.capture_gate.is_enabled()?,
+            prompt_summary_mode,
             targets: control.targets.statuses_with_observations(&observations),
             collector,
         })
