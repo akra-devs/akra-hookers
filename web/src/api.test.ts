@@ -47,7 +47,6 @@ describe("createApiClient", () => {
 
     await expect(client.activity(7)).resolves.toEqual(response);
     await expect(client.activity(7, { limit: 25, afterId: 6 })).resolves.toEqual(response);
-    await expect(client.activity(7, { limit: 8, offset: 16 })).resolves.toEqual(response);
     expect(fetcher).toHaveBeenCalledWith(
       `${base}/v1/activities/7`,
       expect.objectContaining({ headers: authorization }),
@@ -56,22 +55,6 @@ describe("createApiClient", () => {
       2,
       `${base}/v1/activities/7?conversation_limit=25&conversation_after_id=6`,
       expect.objectContaining({ headers: authorization }),
-    );
-    expect(fetcher).toHaveBeenNthCalledWith(
-      3,
-      `${base}/v1/activities/7?conversation_limit=8&conversation_offset=16`,
-      expect.objectContaining({ headers: authorization }),
-    );
-  });
-
-  it("deletes an activity by immutable id", async () => {
-    const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
-    const client = createApiClient(base, "capability", fetcher);
-
-    await expect(client.deleteActivity(7)).resolves.toBeUndefined();
-    expect(fetcher).toHaveBeenCalledWith(
-      `${base}/v1/activities/7`,
-      expect.objectContaining({ method: "DELETE", headers: authorization }),
     );
   });
 

@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::{
-    http_activities::{activities, activity_count, activity_detail, delete_activity},
+    http_activities::{activities, activity_count, activity_detail},
     http_assignments::assign_activities,
     http_canvas::{
         canvas, canvas_edges, canvas_revision, clear_canvas, create_canvas_edge,
@@ -163,10 +163,7 @@ fn router(token: &'static str, state: AppState) -> Router {
         )
         .route("/v1/activities", get(activities))
         .route("/v1/activities/count", get(activity_count))
-        .route(
-            "/v1/activities/{activity_id}",
-            get(activity_detail).delete(delete_activity),
-        )
+        .route("/v1/activities/{activity_id}", get(activity_detail))
         .route("/v1/activity-assignments", post(assign_activities))
         .route("/v1/canvas", get(canvas).delete(clear_canvas))
         .route("/v1/canvas/revision", get(canvas_revision))

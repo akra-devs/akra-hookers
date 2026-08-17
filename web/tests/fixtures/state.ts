@@ -234,7 +234,6 @@ function detail(summary: ActivitySummary, turnId: string): ActivityDetail {
       prompt_summary: summary.prompt_summary,
     },
     conversation: [],
-    conversation_index: summary.conversation_index,
     conversation_total: 2,
     conversation_has_more: false,
   };

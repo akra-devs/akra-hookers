@@ -12,7 +12,6 @@ const ORIGIN_SUMMARY_SELECT: &str = "
     FROM activity_origins
     LEFT JOIN projects ON projects.id = activity_origins.default_project_id
     LEFT JOIN activity_events ON activity_events.origin_id = activity_origins.id
-      AND activity_events.deleted_at_us IS NULL
       AND (
              activity_events.activity_kind = 'user'
           OR (?1 = 1 AND activity_events.activity_kind = 'subagent')

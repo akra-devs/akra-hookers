@@ -9,8 +9,7 @@ const PROJECT_SUMMARY_SELECT: &str = "
            (SELECT COUNT(*) FROM activity_origins
             WHERE default_project_id = projects.id),
            (SELECT COUNT(*) FROM activity_events
-            WHERE activity_events.deleted_at_us IS NULL
-              AND (
+            WHERE (
                 EXISTS (
                     SELECT 1 FROM activity_project_assignments
                     WHERE activity_event_id = activity_events.id
@@ -47,8 +46,7 @@ const PROJECT_SUMMARY_SELECT: &str = "
            ) THEN 1 ELSE 0 END,
            (SELECT MAX(COALESCE(captured_at_us, first_recorded_at_us))
             FROM activity_events
-            WHERE activity_events.deleted_at_us IS NULL
-              AND (
+            WHERE (
                 EXISTS (
                     SELECT 1 FROM activity_project_assignments
                     WHERE activity_event_id = activity_events.id

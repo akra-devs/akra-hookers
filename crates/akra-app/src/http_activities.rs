@@ -1,7 +1,6 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,7 +27,6 @@ pub(crate) struct ActivityQuery {
 pub(crate) struct ActivityDetailQuery {
     conversation_limit: Option<i64>,
     conversation_after_id: Option<i64>,
-    conversation_offset: Option<i64>,
     include_subagent: Option<bool>,
     include_internal: Option<bool>,
 }
@@ -86,42 +84,16 @@ pub(crate) async fn activity_detail(
     let limit = page_limit(query.conversation_limit)?;
     let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
     validate_cursor(query.conversation_after_id)?;
-    let detail = match query.conversation_offset {
-        Some(offset) => {
-            if query.conversation_after_id.is_some() || offset < 0 {
-                return Err(invalid_pagination(
-                    "Conversation offset must be non-negative and cannot be combined with a cursor.",
-                ));
-            }
-            state
-                .store
-                .activity_detail_offset_page_filtered(activity_id, offset, limit, activity_filter)
-                .await
-        }
-        None => {
-            state
-                .store
-                .activity_detail_page_filtered(
-                    activity_id,
-                    query.conversation_after_id,
-                    limit,
-                    activity_filter,
-                )
-                .await
-        }
-    };
-    detail.map(Json).map_err(ApiError::from_store)
-}
-
-pub(crate) async fn delete_activity(
-    State(state): State<AppState>,
-    Path(activity_id): Path<i64>,
-) -> Result<StatusCode, ApiError> {
     state
         .store
-        .delete_activity(activity_id)
+        .activity_detail_page_filtered(
+            activity_id,
+            query.conversation_after_id,
+            limit,
+            activity_filter,
+        )
         .await
-        .map(|()| StatusCode::NO_CONTENT)
+        .map(Json)
         .map_err(ApiError::from_store)
 }
 
