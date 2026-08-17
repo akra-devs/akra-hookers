@@ -91,7 +91,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME `
+          gh release create $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY `
             'release/Akra-Hookers-Windows-x64-portable.zip' `
             'release/Akra-Hookers-Windows-x64-portable.zip.sha256' `
             --verify-tag --generate-notes --title "Akra Hookers $env:GITHUB_REF_NAME"
