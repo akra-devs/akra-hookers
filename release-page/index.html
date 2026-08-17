@@ -3,45 +3,72 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.github.com; img-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
-    <meta name="description" content="Akra Hookers Windows portable desktop download" />
-    <title>Akra Hookers — Windows portable</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.github.com; img-src 'self' data:; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta name="description" content="Codex 프롬프트와 결과의 맥락을 프로젝트별 캔버스로 연결하는 Akra Hookers Windows 앱" />
+    <meta name="theme-color" content="#08080b" />
+    <title>Akra Hookers — 프롬프트를 다시 맥락으로</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;600;700&family=Playfair+Display:ital,wght@0,500;0,600;1,500&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
+    <!--
+    THESIS: 프롬프트 수집 앱을 다운로드 카드로 설명하지 않고, 흩어진 요청이 맥락 지도에 결속되는 순간을 첫 화면에서 보여준다.
+    OWN-WORLD: Akra의 검은 전시장, 편집적 세리프, 푸른 광원과 Hookers의 옥사이드 캔버스·리켄 상태색을 한 제품 무대로 결합한다.
+    STORY: 방문자는 수집→결과 요약→다음 요청의 연결을 보고, 로컬·포터블 경계를 이해한 뒤 Windows ZIP을 받는다.
+    FIRST VIEWPORT: 부유 내비게이션 아래 왼쪽 선언과 다운로드, 오른쪽에는 실제 데이터 구조를 닮은 대형 노드 캔버스가 놓인다.
+    FORM: 제품 메커니즘 전시장; reference home/waxball; seed akra-hookers-context-field.
+    FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+    -->
+    <nav class="nav" aria-label="주요 탐색">
+      <a class="brand" href="https://akra.kr/" aria-label="Akra Dev 홈으로 이동">
+        <svg viewBox="0 0 44 44" aria-hidden="true"><path d="M22 4 39 36h-9.4l-4.2-8-11.8 8H5L22 4Zm0 15.1L15.7 30l7.1-4.8L22 19.1Z" /></svg><span>AKRA DEV</span>
+      </a>
+      <div class="nav-links"><a href="#mechanism">제품</a><a href="#portable">포터블</a><a href="https://github.com/akra-devs/akra-hookers">GitHub</a></div>
+      <a class="nav-download" href="#download-section">다운로드</a>
+    </nav>
     <main>
-      <header class="masthead">
-        <span class="mark" aria-hidden="true">◇</span>
-        <span>AKRA DEVS / RELEASE CHANNEL</span>
-      </header>
-      <section class="hero" aria-labelledby="title">
-        <p class="eyebrow">PROMPT ACTIVITY, KEPT IN CONTEXT</p>
-        <h1 id="title">Akra Hookers</h1>
-        <p class="lede">Codex 프롬프트와 결과 요약을 프로젝트별 캔버스에서 탐색하는 Windows 데스크톱 앱입니다.</p>
-        <div class="release-panel">
-          <div>
-            <span class="label">LATEST WINDOWS BUILD</span>
-            <strong id="release-version">확인 중…</strong>
-            <p id="release-date">GitHub Release 정보를 불러오고 있습니다.</p>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <h1 id="hero-title"><span>AKRA</span> HOOKERS</h1>
+          <p class="hero-statement">흩어진 프롬프트를<br />다시 맥락으로.</p>
+          <p class="hero-description">Codex App, CLI, WSL에서 건넨 요청과 최종 결과를 프로젝트별 공간에 연결합니다. 짧은 “진행해”도 이전 작업의 맥락과 함께 다시 찾을 수 있습니다.</p>
+          <div class="hero-actions">
+            <a class="button button-primary release-download" href="https://github.com/akra-devs/akra-hookers/releases/latest">Windows Portable ZIP <span aria-hidden="true">↗</span></a>
+            <a class="button button-secondary" href="https://github.com/akra-devs/akra-hookers/releases/tag/desktop-v0.1.0">릴리스 노트</a>
           </div>
-          <a id="download" class="download disabled" aria-disabled="true">Portable ZIP 다운로드</a>
+          <div class="hero-facts" aria-label="제품 특성"><span>WINDOWS 10+</span><span>LOCAL-FIRST</span><span>NO LOGIN</span></div>
         </div>
-        <p id="release-status" class="status" role="status" aria-live="polite"></p>
+        <figure class="product-stage" aria-labelledby="stage-caption">
+          <div class="stage-aurora" aria-hidden="true"></div>
+          <div class="canvas-window"><img src="./product-canvas.png" alt="프로젝트별 프롬프트 노드, 연결선, 활동 상세가 표시된 Akra Hookers 실제 대시보드" /></div>
+          <figcaption id="stage-caption">Akra Hookers 실제 제품 화면 · 프로젝트 캔버스와 활동 상세</figcaption>
+        </figure>
+        <a class="scroll-cue" href="#mechanism">맥락이 이어지는 방식 <span aria-hidden="true">↓</span></a>
       </section>
-      <section class="facts" aria-label="배포 정보">
-        <article><span>01</span><h2>압축 해제 후 실행</h2><p>설치 프로그램 없이 <code>Akra Hookers.exe</code>를 실행합니다.</p></article>
-        <article><span>02</span><h2>폴더 안에 데이터 보관</h2><p>SQLite와 설정은 실행 파일 옆 <code>Akra Hookers Data</code>에 저장됩니다.</p></article>
-        <article><span>03</span><h2>무결성 확인</h2><p>Release의 <code>.sha256</code> 파일로 ZIP의 SHA-256을 확인할 수 있습니다.</p></article>
+      <section id="mechanism" class="mechanism section-shell" aria-labelledby="mechanism-title">
+        <div class="section-heading"><h2 id="mechanism-title">질문만 남기지 않습니다.</h2><p>원문은 증거로 보존하고, 결과와 다음 요청 사이에 다시 읽을 수 있는 연결을 만듭니다.</p></div>
+        <div class="context-sequence">
+          <article><em>USER</em><h3>입력한 프롬프트</h3><p>Codex가 붙인 wrapper를 구분하고 사용자가 실제로 요청한 내용을 보존합니다.</p></article><span class="sequence-line" aria-hidden="true"></span>
+          <article><em>RESULT</em><h3>180자 이내 결과 요약</h3><p>최종 assistant 결과만 Spark로 정확히 세 줄 요약해 같은 turn에 결속합니다.</p></article><span class="sequence-line" aria-hidden="true"></span>
+          <article><em>NEXT</em><h3>짧은 후속 요청의 맥락</h3><p>“진행해” 같은 요청도 직전 결과 요약과 함께 이해할 수 있게 표시합니다.</p></article>
+        </div>
       </section>
-      <aside class="notice">
-        <strong>현재 빌드는 코드 서명되지 않았습니다.</strong>
-        Windows SmartScreen 경고가 표시될 수 있습니다. ZIP 폴더를 이동하면 앱을 다시 열어 Codex 훅 경로를 갱신하세요.
-      </aside>
-      <footer>
-        <a href="https://github.com/akra-devs/akra-hookers/releases">모든 릴리스</a>
-        <a href="https://github.com/akra-devs/akra-hookers">소스 코드</a>
-      </footer>
+      <section id="portable" class="portable section-shell" aria-labelledby="portable-title">
+        <div class="portable-visual" aria-hidden="true"><div class="folder-tab">AKRA HOOKERS</div><div class="folder-body"><span>Akra Hookers.exe</span><div class="folder-tree"><b>Akra Hookers Data</b><i>runtime / SQLite / spool / settings</i></div></div></div>
+        <div class="portable-copy"><h2 id="portable-title">앱을 옮기면,<br />데이터도 함께.</h2><p>설치 프로그램 없이 ZIP을 풀어 실행합니다. 활동 기록과 설정은 실행 파일 옆 <code>Akra Hookers Data</code> 폴더에 저장됩니다.</p><ul><li>기본 연결은 127.0.0.1 내부에서만 동작</li><li>로그인과 별도 클라우드 계정 불필요</li><li>SHA-256 파일로 다운로드 무결성 확인</li></ul></div>
+      </section>
+      <section id="download-section" class="download-section" aria-labelledby="download-title">
+        <p class="download-version" id="release-version">최신 릴리스 확인 중…</p>
+        <h2 id="download-title">작업의 흔적을<br /><i>다시 쓸 수 있는 맥락으로.</i></h2>
+        <p id="release-date">GitHub Release 정보를 불러오고 있습니다.</p>
+        <a class="button button-primary button-large release-download" href="https://github.com/akra-devs/akra-hookers/releases/latest">Windows Portable ZIP 다운로드 <span aria-hidden="true">↓</span></a>
+        <p class="release-status" id="release-status" role="status" aria-live="polite"></p>
+        <div class="download-links"><a id="checksum" href="https://github.com/akra-devs/akra-hookers/releases">SHA-256</a><a href="https://github.com/akra-devs/akra-hookers/releases">모든 릴리스</a></div>
+      </section>
     </main>
+    <footer class="site-footer"><span>© 2026 AKRA DEV</span><span>BUILT FOR LOCAL CONTEXT</span><a href="https://github.com/akra-devs/akra-hookers">SOURCE ↗</a></footer>
     <script src="./release.js"></script>
   </body>
 </html>
