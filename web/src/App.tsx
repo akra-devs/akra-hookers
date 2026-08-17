@@ -19,6 +19,7 @@ import { ProjectDialog } from "./components/ProjectDialog";
 import { ProjectRail, type ProjectFilter } from "./components/ProjectRail";
 import type { CollectorOperation } from "./components/CollectorEndpointControl";
 import { useDashboardData } from "./hooks/useDashboardData";
+import "./desktop";
 const nodeTypes = { activity: ActivityNode } satisfies NodeTypes;
 export function App() {
   const [codexEnabled, setCodexEnabled] = useState(false);
@@ -42,11 +43,24 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const detailTriggerRef = useRef<HTMLElement | null>(null);
   const clearCanvasTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const client = useMemo(() => {
+  const environmentClient = useMemo(() => {
+    if (window.akraDesktop) return null;
     const url = import.meta.env.VITE_AKRA_URL;
     const token = import.meta.env.VITE_AKRA_TOKEN;
     return url && token ? createApiClient(url, token) : null;
   }, []);
+  const [desktopClient, setDesktopClient] = useState<ReturnType<typeof createApiClient> | null>(null);
+  useEffect(() => {
+    if (environmentClient || !window.akraDesktop) return;
+    let cancelled = false;
+    window.akraDesktop.bootstrap().then(({ apiUrl, token }) => {
+      if (!cancelled) setDesktopClient(createApiClient(apiUrl, token));
+    }).catch(() => {
+      if (!cancelled) setError("Desktop runtime에 연결하지 못했습니다.");
+    });
+    return () => { cancelled = true; };
+  }, [environmentClient]);
+  const client = desktopClient ?? environmentClient;
   const activityScope = filter === "all"
     ? { scope: "all" } as const
     : filter === "inbox"

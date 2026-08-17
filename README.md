@@ -165,6 +165,26 @@ npm run dev # http://127.0.0.1:42131
 
 브라우저에서 Vite가 출력한 주소를 열면 활동 캔버스와 Codex 캡처 설정을 볼 수 있습니다.
 
+## Electron 데스크톱 앱
+
+Windows 데스크톱 빌드는 현재 React 대시보드와 Rust runtime을 하나의 Electron 앱으로
+묶습니다. 앱은 두 구성 요소를 임의의 `127.0.0.1` 포트에서만 실행하며 API token은
+URL·빌드 파일·렌더러 저장소에 기록하지 않고 제한된 preload bridge로 전달합니다.
+Codex 훅은 버전별 패키지 경로가 아니라 사용자 데이터 디렉터리의 안정된 sidecar
+경로를 사용합니다.
+
+```powershell
+cd desktop
+npm install
+npm run build
+```
+
+실행 가능한 portable 앱은 `desktop/dist/Akra Hookers-win32-x64/Akra Hookers.exe`에
+생성됩니다. 로컬 개발 실행은 `npm start`를 사용합니다. 현재 산출물은 코드 서명되지
+않았으므로 다른 PC에 배포할 때는 Windows 코드 서명과 설치 프로그램 단계를 추가해야
+합니다. macOS 빌드와 서명·notarization은 macOS 호스트에서 동일한 sidecar 계약으로
+진행합니다.
+
 Windows 네이티브 Codex App과 CLI는 `%USERPROFILE%\.codex`를 하나의 대상으로 사용합니다.
 둘은 같은 `hooks.json`을 공유하므로 설치 토글도 하나이며, 대시보드는 실제로 수집된 프롬프트 증거를 기준으로 App과 CLI의 캡처 확인 상태를 각각 표시합니다.
 WSL은 배포판별 Linux `~/.codex`를 별도 대상으로 감지하며 Docker 내부 배포판은 제외합니다.
