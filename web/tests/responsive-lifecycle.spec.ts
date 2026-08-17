@@ -139,7 +139,7 @@ test("spaced Korean cards use strict CJK typography, exactly three visual lines,
   expect(typography.lines).toBe(3);
 
   await openDetail(page, 1);
-  expect(await panel(page).locator(".activity-detail__selected > p").textContent()).toBe(prompt);
+  expect(await panel(page).locator(".activity-detail__selected .expandable-prompt > p").textContent()).toBe(prompt);
 });
 
 test("unspaced Korean, URLs, and mixed text cannot overflow the document, card, or detail", async ({ page, api }) => {
@@ -153,7 +153,7 @@ test("unspaced Korean, URLs, and mixed text cannot overflow the document, card, 
   await assertNoHorizontalOverflow(page, page.locator("html"));
   await assertNoHorizontalOverflow(page, card(page, 2).locator(".activity-node__prompt"));
   await assertNoHorizontalOverflow(page, panel(page));
-  expect(await panel(page).locator(".activity-detail__selected > p").textContent()).toBe(prompt);
+  expect(await panel(page).locator(".activity-detail__selected .expandable-prompt > p").textContent()).toBe(prompt);
 });
 
 test("narrow project canvas preserves a readable activity-node width", async ({ page }) => {
@@ -298,7 +298,7 @@ test("keyboard-only focus order completes origin setup, assignment, technical di
   await tabTo(page, copy);
   await page.keyboard.press("Enter");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("fixture-session");
-  await tabTo(page, detail.locator("header button"));
+  await tabTo(page, detail.getByRole("button", { name: "상세 닫기" }));
   await page.keyboard.press("Enter");
   await expect(detail).toHaveCount(0);
   await expect(node).toBeFocused();

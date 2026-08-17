@@ -103,9 +103,11 @@ type SummaryRow = (
 
 impl ActivityStore {
     pub async fn activity_count(&self) -> Result<i64, StoreError> {
-        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM activity_events")
-            .fetch_one(&self.pool)
-            .await?)
+        Ok(
+            sqlx::query_scalar("SELECT COUNT(*) FROM activity_events WHERE deleted_at_us IS NULL")
+                .fetch_one(&self.pool)
+                .await?,
+        )
     }
 
     pub async fn activities(&self) -> Result<Vec<ActivitySummary>, StoreError> {
@@ -172,6 +174,7 @@ impl ActivityStore {
                    ON activity_origins.id = activity_events.origin_id
                  LEFT JOIN activity_project_assignments
                    ON activity_project_assignments.activity_event_id = activity_events.id
+                 WHERE activity_events.deleted_at_us IS NULL
              ),
              classified AS (
                  SELECT effective.*, projects.name AS project_name,
@@ -379,6 +382,7 @@ impl ActivityStore {
                    ON activity_origins.id = activity_events.origin_id
                  LEFT JOIN activity_project_assignments
                    ON activity_project_assignments.activity_event_id = activity_events.id
+                 WHERE activity_events.deleted_at_us IS NULL
              ),
              page AS MATERIALIZED (
                  SELECT effective.*
@@ -460,8 +464,9 @@ impl ActivityStore {
                     page.captured_at_us, page.first_recorded_at_us,
                     (
                         SELECT COUNT(*) FROM activity_events AS turn
-                        WHERE turn.provider = page.provider
-                          AND turn.provider_session_id = page.provider_session_id
+                         WHERE turn.provider = page.provider
+                           AND turn.provider_session_id = page.provider_session_id
+                           AND turn.deleted_at_us IS NULL
                           AND (
                                  turn.activity_kind = 'user'
                               OR (?6 = 1 AND turn.activity_kind = 'subagent')
@@ -513,8 +518,9 @@ impl ActivityStore {
                     ) AS conversation_index,
                     (
                         SELECT COUNT(*) FROM activity_events AS turn
-                        WHERE turn.provider = page.provider
-                          AND turn.provider_session_id = page.provider_session_id
+                         WHERE turn.provider = page.provider
+                           AND turn.provider_session_id = page.provider_session_id
+                           AND turn.deleted_at_us IS NULL
                           AND (
                                  turn.activity_kind = 'user'
                               OR (?6 = 1 AND turn.activity_kind = 'subagent')
@@ -608,6 +614,7 @@ impl ActivityStore {
                    ON activity_origins.id = activity_events.origin_id
                  LEFT JOIN activity_project_assignments
                    ON activity_project_assignments.activity_event_id = activity_events.id
+                 WHERE activity_events.deleted_at_us IS NULL
              )
              SELECT COUNT(*) FROM effective
              WHERE (

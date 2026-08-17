@@ -94,6 +94,7 @@ async fn detail_returns_full_selected_metadata_and_complete_mixed_timeline() {
     let conversation = detail["conversation"].as_array().expect("conversation");
     assert_eq!(ids(conversation), vec![first, selected, third]);
     assert_eq!(detail["conversation_total"], 3);
+    assert_eq!(detail["conversation_index"], 2);
     assert_eq!(detail["conversation_has_more"], false);
     assert_eq!(
         conversation
@@ -136,6 +137,17 @@ async fn detail_returns_full_selected_metadata_and_complete_mixed_timeline() {
         vec![third]
     );
     assert_eq!(second_page["conversation_has_more"], false);
+    let (_, offset_page) = get(
+        &harness.app,
+        &format!("/v1/activities/{selected}?conversation_limit=1&conversation_offset=1"),
+        true,
+    )
+    .await;
+    assert_eq!(
+        ids(offset_page["conversation"].as_array().expect("offset page")),
+        vec![selected]
+    );
+    assert_eq!(offset_page["conversation_has_more"], true);
     let (_, late_selection) = get(
         &harness.app,
         &format!("/v1/activities/{third}?conversation_limit=2"),
@@ -181,6 +193,59 @@ async fn detail_returns_full_selected_metadata_and_complete_mixed_timeline() {
         get(&harness.app, &format!("/v1/activities/{selected}"), false)
             .await
             .0,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn delete_tombstones_the_activity_and_removes_it_from_the_http_contract() {
+    let harness = harness().await;
+    let cwd = Path::new(r"C:\activity-delete");
+    let first = record_captured(&harness.store, cwd, "same", "one", "first", 100).await;
+    let deleted = record_captured(&harness.store, cwd, "same", "two", "deleted", 200).await;
+
+    let (status, body) = call(
+        &harness.app,
+        Method::DELETE,
+        &format!("/v1/activities/{deleted}"),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(body.is_null());
+    assert_eq!(
+        get(&harness.app, &format!("/v1/activities/{deleted}"), true)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, activities) = get(&harness.app, "/v1/activities?scope=all", true).await;
+    assert_eq!(ids(activities.as_array().expect("activities")), vec![first]);
+    let (_, count) = get(&harness.app, "/v1/activities/count?scope=all", true).await;
+    assert_eq!(count["count"], 1);
+    assert_eq!(
+        call(
+            &harness.app,
+            Method::DELETE,
+            &format!("/v1/activities/{deleted}"),
+            None,
+            true,
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &harness.app,
+            Method::DELETE,
+            &format!("/v1/activities/{first}"),
+            None,
+            false,
+        )
+        .await
+        .0,
         StatusCode::UNAUTHORIZED
     );
 }

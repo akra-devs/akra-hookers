@@ -80,6 +80,7 @@ type ActivityPageQuery = ActivityFilterQuery & {
 type ConversationPageQuery = ActivityVisibilityQuery & {
   limit?: number;
   afterId?: number;
+  offset?: number;
 };
 
 export type ApiClient = {
@@ -92,6 +93,7 @@ export type ApiClient = {
     activityId: number,
     page?: ConversationPageQuery,
   ): Promise<ActivityDetail>;
+  deleteActivity(activityId: number): Promise<void>;
   projects(filters?: ActivityFilterQuery): Promise<ProjectSummary[]>;
   createProject(name: string): Promise<ProjectSummary>;
   renameProject(projectId: number, name: string): Promise<ProjectSummary>;
@@ -159,6 +161,8 @@ export function createApiClient(
     },
     activity: (activityId, page) =>
       request<ActivityDetail>(conversationPath(activityId, page)),
+    deleteActivity: (activityId) =>
+      request<void>(`/v1/activities/${activityId}`, "DELETE"),
     projects: (filters) =>
       request<ProjectSummary[]>(appendActivityFilters("/v1/projects", filters)),
     createProject: (name) => request<ProjectSummary>("/v1/projects", "POST", { name }),
@@ -266,6 +270,9 @@ function appendPage(
   const parameters = new URLSearchParams();
   if (page.limit !== undefined) parameters.set(limitName, String(page.limit));
   if (page.afterId !== undefined) parameters.set(cursorName, String(page.afterId));
+  if ("offset" in page && page.offset !== undefined) {
+    parameters.set("conversation_offset", String(page.offset));
+  }
   if ("order" in page && page.order !== undefined) parameters.set("order", page.order);
   appendActivityFilterParameters(parameters, page);
   const query = parameters.toString();
