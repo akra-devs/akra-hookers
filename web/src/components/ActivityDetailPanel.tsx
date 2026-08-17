@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import type {
@@ -15,6 +16,7 @@ import {
 import { formatActivityTime } from "../time";
 import { useTimelineAnchor } from "../useTimelineAnchor";
 import { UiIcon } from "./UiIcon";
+import { useDialogFocus } from "./useDialogFocus";
 
 type ActivityDetailPanelProps = {
   activityId: number;
@@ -85,6 +87,32 @@ function TimelineResultSummary({ summary }: { summary: ActivityResultSummary }) 
   );
 }
 
+function ExpandedTimelineResultSummary({ summary }: { summary: ActivityResultSummary }) {
+  let content;
+  if (summary.status === "ready") {
+    content = (
+      <span className="activity-conversation-dialog__result-lines">
+        {summary.lines.map((line, index) => (
+          <span key={`${index}-${line}`}>{line}</span>
+        ))}
+      </span>
+    );
+  } else if (summary.status === "pending") {
+    content = <span className="is-pending">결과를 요약하는 중입니다.</span>;
+  } else if (summary.status === "failed") {
+    content = <span className="is-failed">결과 요약을 만들지 못했습니다.</span>;
+  } else {
+    content = <span className="is-unavailable">저장된 결과 요약이 없습니다.</span>;
+  }
+
+  return (
+    <div className="activity-conversation-dialog__result">
+      <strong>RES</strong>
+      {content}
+    </div>
+  );
+}
+
 function promptSummaryLabel(summary: ActivityPromptSummary): string | null {
   if (summary.status === "pending") return "요청 정리 중";
   if (summary.status === "failed") return "원문 표시";
@@ -140,6 +168,140 @@ function hasDerivedPrompt(summary: ActivityPromptSummary, prompt: string) {
   return summary.text !== null && summary.text !== prompt;
 }
 
+type ConversationFlowDialogProps = {
+  activityId: number;
+  conversationTotal: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  pageError: string;
+  provider: string;
+  timelineKey: string;
+  turns: ActivityConversationTurn[];
+  onClose: () => void;
+  onLoadMore: () => void;
+};
+
+function ConversationFlowDialog({
+  activityId,
+  conversationTotal,
+  hasMore,
+  loadingMore,
+  pageError,
+  provider,
+  timelineKey,
+  turns,
+  onClose,
+  onLoadMore,
+}: ConversationFlowDialogProps) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const timelineRef = useTimelineAnchor(activityId, timelineKey);
+  useDialogFocus(dialogRef, "[data-conversation-dialog-close]");
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  return createPortal(
+    <div className="dialog-backdrop activity-conversation-dialog__backdrop">
+      <section
+        ref={dialogRef}
+        id="conversation-flow-dialog"
+        className="dialog-card activity-conversation-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="conversation-flow-title"
+        aria-describedby="conversation-flow-description"
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          event.stopPropagation();
+          onClose();
+        }}
+      >
+        <header className="dialog-heading activity-conversation-dialog__heading">
+          <div>
+            <h2 id="conversation-flow-title">대화 흐름</h2>
+            <p id="conversation-flow-description">
+              <span>{provider}</span>
+              오래된 기록부터 · {turns.length}/{conversationTotal}
+            </p>
+          </div>
+          <button
+            data-conversation-dialog-close
+            type="button"
+            onClick={onClose}
+            aria-label="대화 흐름 닫기"
+            title="대화 흐름 닫기"
+          >
+            <UiIcon name="close" />
+          </button>
+        </header>
+
+        <ol
+          ref={timelineRef}
+          className="activity-conversation-dialog__timeline"
+          aria-label="확대된 대화 기록"
+        >
+          {turns.map((turn) => {
+            const summaryLabel = promptSummaryLabel(turn.prompt_summary);
+            return (
+              <li
+                key={turn.id}
+                className={turn.selected ? "is-selected" : undefined}
+                data-activity-id={turn.id}
+                aria-current={turn.selected ? "true" : undefined}
+              >
+                <div className="activity-conversation-dialog__turn-heading">
+                  <span className="activity-conversation-dialog__project">
+                    {turn.project?.name ?? "Inbox"}
+                  </span>
+                  <span className="activity-conversation-dialog__turn-meta">
+                    {turn.selected && <span className="is-selected-label">선택됨</span>}
+                    {!turn.on_canvas && <span>캔버스에 없음</span>}
+                    <time dateTime={turn.time.value ?? undefined}>
+                      {formatActivityTime(turn.time)}
+                    </time>
+                  </span>
+                </div>
+                <div className="activity-conversation-dialog__request">
+                  <span className="activity-conversation-dialog__section-heading">
+                    <strong>REQ</strong>
+                    {summaryLabel && (
+                      <span
+                        className={`activity-detail__request-status activity-detail__request-status--${turn.prompt_summary.status}`}
+                        data-status={turn.prompt_summary.status}
+                      >
+                        {summaryLabel}
+                      </span>
+                    )}
+                  </span>
+                  <p>{turn.prompt_summary.text ?? turn.prompt}</p>
+                </div>
+                <ExpandedTimelineResultSummary summary={turn.result_summary} />
+              </li>
+            );
+          })}
+        </ol>
+
+        {(pageError || hasMore) && (
+          <footer className="activity-conversation-dialog__footer">
+            {pageError && <p className="inline-error" role="alert">{pageError}</p>}
+            {hasMore && (
+              <button type="button" disabled={loadingMore} onClick={onLoadMore}>
+                {loadingMore ? "불러오는 중…" : "대화 기록 더 보기"}
+              </button>
+            )}
+          </footer>
+        )}
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 export function ActivityDetailPanel({
   activityId,
   activityVisibility,
@@ -166,6 +328,7 @@ export function ActivityDetailPanel({
   const [pageHasMore, setPageHasMore] = useState<boolean | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pageError, setPageError] = useState("");
+  const [conversationExpanded, setConversationExpanded] = useState(false);
   useEffect(() => {
     panelRef.current?.focus({ preventScroll: false });
   }, [activityId]);
@@ -438,9 +601,22 @@ export function ActivityDetailPanel({
       </details>
       </div>
       <section className="activity-detail__timeline" aria-labelledby="conversation-heading">
-        <h3 id="conversation-heading">
-          대화 기록 ({timelineTurns.length}/{detail.conversation_total})
-        </h3>
+        <div className="activity-detail__timeline-heading">
+          <h3 id="conversation-heading">
+            대화 기록 ({timelineTurns.length}/{detail.conversation_total})
+          </h3>
+          <button
+            type="button"
+            className="activity-detail__timeline-expand"
+            aria-haspopup="dialog"
+            aria-controls="conversation-flow-dialog"
+            aria-label="대화 기록 크게 보기"
+            onClick={() => setConversationExpanded(true)}
+          >
+            <UiIcon name="expand" size={15} />
+            크게 보기
+          </button>
+        </div>
         <ol ref={timelineRef} aria-label="대화 기록">
           {timelineTurns.map((turn) => (
             <li
@@ -473,6 +649,20 @@ export function ActivityDetailPanel({
           </button>
         )}
       </section>
+      {conversationExpanded && (
+        <ConversationFlowDialog
+          activityId={activityId}
+          conversationTotal={detail.conversation_total}
+          hasMore={pageHasMore ?? detail.conversation_has_more}
+          loadingMore={loadingMore}
+          pageError={pageError}
+          provider={detail.provider}
+          timelineKey={timelineKey}
+          turns={timelineTurns}
+          onClose={() => setConversationExpanded(false)}
+          onLoadMore={() => void loadMore()}
+        />
+      )}
     </aside>
   );
 }

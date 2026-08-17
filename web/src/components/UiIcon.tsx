@@ -2,6 +2,7 @@ type IconName =
   | "activity"
   | "brand"
   | "close"
+  | "expand"
   | "folder"
   | "inbox"
   | "location"
@@ -35,6 +36,8 @@ export function UiIcon({ name, size = 18, className }: UiIconProps) {
       return <svg {...common}><path d="M8 4 3 12l5 8M16 4l5 8-5 8M14 3l-4 18" /></svg>;
     case "close":
       return <svg {...common}><path d="m6 6 12 12M18 6 6 18" /></svg>;
+    case "expand":
+      return <svg {...common}><path d="M8 3H3v5M16 3h5v5M8 21H3v-5m18 0v5h-5M3 8l6-5m6 0 6 5M3 16l6 5m6 0 6-5" /></svg>;
     case "activity":
       return <svg {...common}><circle cx="5" cy="12" r="2" /><circle cx="12" cy="5" r="2" /><circle cx="19" cy="10" r="2" /><circle cx="13" cy="19" r="2" /><path d="m6.6 10.8 3.8-4.5m3.5-.7 3.3 3.1m.1 3.1-3 5.3m-3.2.8-4.4-4.6" /></svg>;
     case "inbox":

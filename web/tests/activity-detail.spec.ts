@@ -282,6 +282,21 @@ test("the detail panel stacks without horizontal overflow on a narrow Korean vie
   expect(bounds.right).toBeLessThanOrEqual(390);
   expect(await page.evaluate(() => document.documentElement.scrollWidth))
     .toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth));
+
+  await detailPanel.getByRole("button", { name: "대화 기록 크게 보기" }).click();
+  const dialog = page.getByRole("dialog", { name: "대화 흐름" });
+  const dialogBounds = await dialog.evaluate((element) => element.getBoundingClientRect());
+  const closeBounds = await dialog.getByRole("button", { name: "대화 흐름 닫기" })
+    .evaluate((element) => element.getBoundingClientRect());
+  expect(dialogBounds.left).toBeGreaterThanOrEqual(0);
+  expect(dialogBounds.right).toBeLessThanOrEqual(390);
+  expect(closeBounds.width).toBeGreaterThanOrEqual(44);
+  expect(closeBounds.height).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(await page.evaluate(() => document.documentElement.clientWidth));
+  await page.screenshot({
+    path: "../.omo/evidence/conversation-flow-mobile.png",
+  });
 });
 
 test("a ready Spark result renders exactly three stored lines without expanding the node", async ({
@@ -386,6 +401,52 @@ test("a historical turn keeps its request/result preview compact and remains key
   await page.keyboard.press("Enter");
   await selection;
   await expect(panel(page)).toHaveAttribute("data-selected-activity-id", "2");
+});
+
+test("conversation history opens as a focused, expanded flow and restores focus on close", async ({
+  page,
+  api,
+}) => {
+  setConversation(api);
+  const lines = [
+    "확대 화면에서는 첫 번째 결과 줄을 모두 보여 줍니다.",
+    "두 번째 결과도 좁은 패널처럼 생략하지 않습니다.",
+    "세 번째 결과까지 한 흐름 안에서 확인할 수 있습니다.",
+  ] as [string, string, string];
+  api.state.details[2]!.conversation.find(({ id }) => id === 1)!.result_summary = {
+    status: "ready",
+    lines,
+  };
+  await page.goto("/");
+  const detailPanel = await open(page, 2);
+  const expand = detailPanel.getByRole("button", { name: "대화 기록 크게 보기" });
+
+  await expand.click();
+
+  const dialog = page.getByRole("dialog", { name: "대화 흐름" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator("#conversation-flow-description"))
+    .toContainText("오래된 기록부터 · 3/3");
+  await expect(dialog.locator(".activity-conversation-dialog__timeline > li")).toHaveCount(3);
+  await expect(dialog.locator("[data-activity-id='2']")).toHaveAttribute("aria-current", "true");
+  await expect(dialog.locator(".activity-conversation-dialog__result-lines > span"))
+    .toHaveText(lines);
+  await expect(dialog.getByRole("button", { name: "대화 흐름 닫기" })).toBeFocused();
+
+  const [dialogBounds, panelBounds] = await Promise.all([
+    dialog.evaluate((element) => element.getBoundingClientRect()),
+    detailPanel.evaluate((element) => element.getBoundingClientRect()),
+  ]);
+  expect(dialogBounds.width).toBeGreaterThan(panelBounds.width * 2);
+  expect(Math.abs(dialogBounds.left + dialogBounds.width / 2 - 640)).toBeLessThanOrEqual(1);
+  await page.screenshot({
+    path: "../.omo/evidence/conversation-flow-desktop.png",
+    fullPage: true,
+  });
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(expand).toBeFocused();
 });
 
 test("a long selected prompt and bounded result preserve a usable conversation viewport", async ({
