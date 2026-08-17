@@ -18,6 +18,45 @@ const CONTENT_TYPES = new Map([
   [".woff2", "font/woff2"],
 ]);
 
+function nonEmptyPath(value) {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+export function resolveAkraDataDirectory({
+  platform,
+  environment = {},
+  homeDirectory,
+  fallbackDataDirectory,
+}) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const configured = nonEmptyPath(environment.AKRA_HOOKERS_DATA_DIR);
+  if (configured) return pathApi.normalize(configured);
+
+  const home = nonEmptyPath(homeDirectory);
+  let baseDirectory;
+  switch (platform) {
+    case "win32":
+      baseDirectory = nonEmptyPath(environment.LOCALAPPDATA)
+        ?? (home ? pathApi.join(home, "AppData", "Local") : null);
+      break;
+    case "darwin":
+    case "ios":
+      baseDirectory = home ? pathApi.join(home, "Library", "Application Support") : null;
+      break;
+    case "linux":
+      baseDirectory = nonEmptyPath(environment.XDG_DATA_HOME)
+        ?? (home ? pathApi.join(home, ".local", "share") : null);
+      break;
+    default:
+      baseDirectory = nonEmptyPath(environment.XDG_DATA_HOME)
+        ?? nonEmptyPath(fallbackDataDirectory)
+        ?? (home ? pathApi.join(home, ".local", "share") : null);
+  }
+
+  if (!baseDirectory) throw new Error(`Akra data directory is unavailable for ${platform}.`);
+  return pathApi.join(baseDirectory, "akra-hookers");
+}
+
 export function parseRuntimeReady(line) {
   const match = /^ready url=(http:\/\/\S+) token=(akra-[A-Za-z0-9-]+)$/.exec(line.trim());
   if (!match) return null;

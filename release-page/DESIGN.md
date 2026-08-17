@@ -75,14 +75,14 @@ components:
 
 The release page follows the Akra home and Waxball exhibition language: an editorial black field, large serif statements, sparse blue light, and a product artifact that carries the first viewport. Visitors should understand the product mechanism before they reach the download section.
 
-The page uses the real `product-canvas.png` dashboard capture as evidence. The image shows project nodes, prompt connections, capture state, and the detail inspector. Keep it legible and dominant. Synthetic browser chrome, invented metrics, customer claims, and substitute illustrations weaken the release case.
+The page uses the real `product-canvas.png` dashboard capture as evidence. The image shows project nodes, prompt connections, capture state, and the detail inspector. A second product-tour sequence uses deterministic crops from current Playwright evidence to explain navigation, log curation, the confirmed work map, and work evidence without reconstructing the UI in HTML. Keep every capture legible and dominant. Synthetic browser chrome, invented metrics, customer claims, and substitute illustrations weaken the release case.
 
 **Key Characteristics:**
 
 - Editorial black exhibition field with restrained blue and violet illumination
 - Playfair Display for the Akra product name and Noto Serif KR for Korean statements
 - Real dashboard evidence framed as the hero artifact
-- Product story ordered as context mechanism, portable storage, then release
+- Product story ordered as context mechanism, guided product use, portable storage, then release
 - GitHub release data used as progressive enhancement
 
 ## Colors
@@ -132,7 +132,7 @@ Playfair gives the product name an Akra exhibition voice. Noto Serif KR carries 
 
 The navigation sits 24px from the top and spans `min(1180px, calc(100% - 40px))`. The hero fills at least one small viewport height and uses two columns: `minmax(360px, .83fr)` for the proposition and `minmax(560px, 1.17fr)` for the screenshot. The page centers this grid within a 1280px content frame. The screenshot frame caps at 760px and uses a 1.6 aspect ratio with `object-fit: cover`.
 
-Content sections use `min(1180px, calc(100% - 48px))`. The mechanism heading pairs flexible title space with a 33rem explanation. Its three-step sequence uses equal story columns connected by two 80px signal lines. The portable section uses a 1.12fr visual column and a .88fr copy column. Section spacing ranges from 100px to 170px so each product claim gets its own viewport beat.
+Content sections use `min(1180px, calc(100% - 48px))`. The mechanism heading pairs flexible title space with a 33rem explanation. Its three-step sequence uses equal story columns connected by two 80px signal lines. The product walkthrough is a four-beat editorial sequence separated by hairlines; wide and portrait captures alternate with explanation rather than becoming a same-size card grid. The portable section uses a 1.12fr visual column and a .88fr copy column. Section spacing ranges from 100px to 170px so each product claim gets its own viewport beat.
 
 At 980px, the hero, mechanism heading, sequence, and portable section become one column. The screenshot expands to `min(820px, 100%)`; portable copy moves before the folder visual. At 680px, navigation shrinks to `calc(100% - 24px)`, hides the wordmark text and center links, and keeps the download control. Hero actions become full-width, the screenshot loses perspective rotation, media corners tighten to 14px, content shells use 16px side margins, and the footer wraps.
 
@@ -179,9 +179,15 @@ Use `product-canvas.png` as the hero evidence. Its alt text names the visible pr
 
 Three articles explain `USER`, `RESULT`, and `NEXT`. Mono cyan labels introduce each step; Noto Serif KR titles carry the mechanism; signal lines connect the steps on wide screens. The 980px layout stacks the sequence and turns each connector into a short horizontal line.
 
+### Product Walkthrough
+
+Four actual-product crops explain the operating path: the left navigation rail, log curation, the confirmed work map, and the right evidence detail. Each beat pairs one capture with a plain-language role, a short explanation, and three exact UI concepts. Alternating media order gives the desktop sequence rhythm; below 980px every beat becomes capture then explanation. Portrait captures sit in restrained blue-light fields while wide captures keep their native proportions.
+
+`product-rail.png`, `product-curation.png`, `product-workspace.png`, and `product-detail.png` are crops of current Playwright evidence. Do not redraw, annotate over, or fill them with invented content. Refresh the source evidence and regenerate all crops when the dashboard information architecture changes. The curation crop must stop before any raw request evidence so public release assets never normalize publishing captured prompt content.
+
 ### Portable Folder
 
-The folder exhibit names `Akra Hookers.exe` and the adjacent `Akra Hookers Data` directory. Runtime, SQLite, spool, and settings appear as a mono file tree. Keep this component diagrammatic because it explains the storage contract rather than simulating a file manager.
+The folder exhibit contrasts the movable `Akra Hookers.exe` artifact with the stable `%LOCALAPPDATA%\akra-hookers` user-data root. SQLite, spool, settings, and the stable sidecar bin appear as a mono file tree. It must not imply that captured data lives beside the executable: official portable and CLI builds intentionally share the Windows local-app-data store. Keep this component diagrammatic because it explains the storage contract rather than simulating a file manager.
 
 ### Release Download and Fallback
 
@@ -198,7 +204,7 @@ The footer uses compact mono text for Akra ownership, the local-context statemen
 ### Do:
 
 - Do use the actual dashboard screenshot as the main proof of product behavior.
-- Do preserve the story order: proposition, mechanism, portable boundary, download.
+- Do preserve the story order: proposition, mechanism, guided use, portable boundary, download.
 - Do keep the GitHub latest-release URL as the working static fallback.
 - Do retain Korean semantic structure, visible focus, live release status, and reduced-motion behavior.
 - Do keep touch actions at 40px or taller on the narrow layout and prevent horizontal overflow.

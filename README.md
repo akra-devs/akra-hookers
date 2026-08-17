@@ -173,6 +173,16 @@ cargo run -p akra-app -- serve --port 42130
 `setup`, `capture`, `serve`는 기본적으로 같은 OS 사용자 데이터 디렉터리를 사용합니다.
 필요하면 모든 명령에 동일한 `--data-dir <경로>`를 지정할 수 있습니다.
 
+- Windows 네이티브 CLI와 공식 portable: `%LOCALAPPDATA%\akra-hookers`
+- Linux/Ubuntu: `$XDG_DATA_HOME/akra-hookers`, 미설정 시 `$HOME/.local/share/akra-hookers`
+- macOS: `$HOME/Library/Application Support/akra-hookers`
+- iOS: 앱 sandbox의 `$HOME/Library/Application Support/akra-hookers`; 향후 네이티브 host는
+  OS가 제공한 Application Support 경로를 `AKRA_HOOKERS_DATA_DIR`로 명시할 수 있습니다.
+
+`AKRA_HOOKERS_DATA_DIR`를 설정하면 모든 OS 기본값보다 우선합니다. 따라서 한 OS 안의
+CLI, 데스크톱 shell과 hook은 동일한 값을 사용해야 하며, 서로 다른 OS의 로컬 경로를
+공유 경로로 간주하지 않습니다.
+
 ```bash
 cd web
 npm install
@@ -189,9 +199,11 @@ npm run dev # http://127.0.0.1:42131
 Windows 데스크톱 빌드는 현재 React 대시보드와 Rust runtime을 하나의 Electron 앱으로
 묶습니다. 앱은 두 구성 요소를 임의의 `127.0.0.1` 포트에서만 실행하며 API token은
 URL·빌드 파일·렌더러 저장소에 기록하지 않고 제한된 preload bridge로 전달합니다.
-배포본의 Electron 설정, SQLite, spool, collector 설정과 안정된 sidecar는 실행 파일
-옆의 `Akra Hookers Data`에 저장됩니다. ZIP을 새 위치로 옮긴 뒤에는 앱을 한 번 열어
-Codex 훅이 새 sidecar 경로를 사용하도록 갱신해야 합니다.
+ZIP 배포본도 설치 위치와 무관하게 `%LOCALAPPDATA%\akra-hookers`를 사용합니다. SQLite,
+spool과 collector 설정은 이 루트에, Electron 설정은 `electron`, 안정된 sidecar는 `bin`
+하위에 저장됩니다. 따라서 CLI와 portable이 같은 기록을 보며 ZIP을 옮기거나 새 버전을
+다른 폴더에 풀어도 데이터 경로와 Codex hook 명령은 바뀌지 않습니다. 이전 배포본이
+만든 실행 파일 옆 `Akra Hookers Data`는 자동 삭제하지 않습니다.
 
 ```powershell
 cd desktop
@@ -202,8 +214,9 @@ npm run build
 실행 가능한 portable 앱은 `desktop/dist/Akra Hookers-win32-x64/Akra Hookers.exe`에
 생성됩니다. 로컬 개발 실행은 `npm start`를 사용합니다. 현재 산출물은 코드 서명되지
 않았으므로 다른 PC에 배포할 때는 Windows 코드 서명과 설치 프로그램 단계를 추가해야
-합니다. macOS 빌드와 서명·notarization은 macOS 호스트에서 동일한 sidecar 계약으로
-진행합니다.
+합니다. macOS 빌드와 서명·notarization은 macOS 호스트에서 Application Support 기반의
+동일한 sidecar 계약으로 진행합니다. Electron은 iOS를 지원하지 않으므로 iOS 분기는
+향후 네이티브 shell/runtime의 sandbox 데이터 경로 계약입니다.
 
 Windows 네이티브 Codex App과 CLI는 `%USERPROFILE%\.codex`를 하나의 대상으로 사용합니다.
 둘은 같은 `hooks.json`을 공유하므로 설치 토글도 하나이며, 대시보드는 실제로 수집된 프롬프트 증거를 기준으로 App과 CLI의 캡처 확인 상태를 각각 표시합니다.

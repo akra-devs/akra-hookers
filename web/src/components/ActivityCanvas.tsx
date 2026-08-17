@@ -311,7 +311,7 @@ export function ActivityCanvas({
             {Math.round(zoom * 100)}%
           </span>
         </Controls>
-        <Panel className="canvas-interaction-hint" position="bottom-right">
+        <Panel className="canvas-interaction-hint" position="bottom-left">
           Wheel to zoom <span aria-hidden="true">·</span> Drag to pan
         </Panel>
       </ReactFlow>

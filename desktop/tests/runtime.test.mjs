@@ -1,7 +1,62 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
-import { isSafeExternalUrl, parseRuntimeReady, resolveStaticAsset } from "../electron/runtime.mjs";
+import {
+  isSafeExternalUrl,
+  parseRuntimeReady,
+  resolveAkraDataDirectory,
+  resolveStaticAsset,
+} from "../electron/runtime.mjs";
+
+test("Windows portable and development builds share LocalAppData", () => {
+  const options = {
+    platform: "win32",
+    environment: {
+      LOCALAPPDATA: "C:\\Users\\alex\\AppData\\Local",
+      XDG_DATA_HOME: "C:\\wrong-xdg",
+    },
+    homeDirectory: "C:\\Users\\alex",
+    fallbackDataDirectory: "C:\\Users\\alex\\AppData\\Roaming",
+  };
+  assert.equal(resolveAkraDataDirectory(options), "C:\\Users\\alex\\AppData\\Local\\akra-hookers");
+});
+
+test("Ubuntu uses XDG data home with the freedesktop fallback", () => {
+  assert.equal(resolveAkraDataDirectory({
+    platform: "linux",
+    environment: {
+      LOCALAPPDATA: "/mnt/c/Users/alex/AppData/Local",
+      XDG_DATA_HOME: "/home/alex/.data",
+    },
+    homeDirectory: "/home/alex",
+  }), "/home/alex/.data/akra-hookers");
+  assert.equal(resolveAkraDataDirectory({
+    platform: "linux",
+    environment: { LOCALAPPDATA: "/mnt/c/Users/alex/AppData/Local" },
+    homeDirectory: "/home/alex",
+  }), "/home/alex/.local/share/akra-hookers");
+});
+
+test("Apple hosts use their sandbox Application Support directory", () => {
+  for (const platform of ["darwin", "ios"]) {
+    assert.equal(resolveAkraDataDirectory({
+      platform,
+      environment: {},
+      homeDirectory: "/Users/alex",
+    }), "/Users/alex/Library/Application Support/akra-hookers");
+  }
+});
+
+test("an explicit Akra data directory overrides every OS default", () => {
+  assert.equal(resolveAkraDataDirectory({
+    platform: "linux",
+    environment: {
+      AKRA_HOOKERS_DATA_DIR: "/srv/akra-state",
+      XDG_DATA_HOME: "/home/alex/.data",
+    },
+    homeDirectory: "/home/alex",
+  }), "/srv/akra-state");
+});
 
 test("parses only bounded loopback runtime readiness", () => {
   assert.deepEqual(parseRuntimeReady("ready url=http://127.0.0.1:42130 token=akra-test-id"), {
