@@ -64,7 +64,7 @@ function detail(
       result_summary: { status: "unavailable", lines: null },
       prompt_summary: { status: "unavailable", mode: "fallback", text: null },
     },
-    conversation: [], conversation_total: 0, conversation_has_more: false,
+    conversation: [], conversation_index: 1, conversation_total: 0, conversation_has_more: false,
   };
 }
 

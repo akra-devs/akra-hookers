@@ -28,6 +28,7 @@ struct DetailRow {
     origin_resolution_source: String,
     origin_display_path: String,
     origin_activity_count: i64,
+    conversation_index: i64,
     conversation_total: i64,
     project_id: Option<i64>,
     project_name: Option<String>,
@@ -62,6 +63,13 @@ struct TimelineRow {
     prompt_summary_used_previous_result: Option<i64>,
 }
 
+struct ConversationWindow {
+    after_id: Option<i64>,
+    fetch_limit: i64,
+    offset: i64,
+    activity_filter: ActivityKindFilter,
+}
+
 impl ActivityStore {
     pub async fn activity_detail(&self, activity_id: i64) -> Result<ActivityDetail, StoreError> {
         self.activity_detail_page(activity_id, None, i64::MAX).await
@@ -89,6 +97,41 @@ impl ActivityStore {
         conversation_limit: i64,
         activity_filter: ActivityKindFilter,
     ) -> Result<ActivityDetail, StoreError> {
+        self.activity_detail_window_filtered(
+            activity_id,
+            conversation_after_id,
+            0,
+            conversation_limit,
+            activity_filter,
+        )
+        .await
+    }
+
+    pub async fn activity_detail_offset_page_filtered(
+        &self,
+        activity_id: i64,
+        conversation_offset: i64,
+        conversation_limit: i64,
+        activity_filter: ActivityKindFilter,
+    ) -> Result<ActivityDetail, StoreError> {
+        self.activity_detail_window_filtered(
+            activity_id,
+            None,
+            conversation_offset,
+            conversation_limit,
+            activity_filter,
+        )
+        .await
+    }
+
+    async fn activity_detail_window_filtered(
+        &self,
+        activity_id: i64,
+        conversation_after_id: Option<i64>,
+        conversation_offset: i64,
+        conversation_limit: i64,
+        activity_filter: ActivityKindFilter,
+    ) -> Result<ActivityDetail, StoreError> {
         let row = sqlx::query_as::<_, DetailRow>(
             "WITH selected AS (
                  SELECT activity_events.*,
@@ -96,8 +139,9 @@ impl ActivityStore {
                         activity_origins.resolution_source AS origin_resolution_source,
                         activity_origins.display_path AS origin_display_path,
                         (
-                            SELECT COUNT(*) FROM activity_events AS sibling
-                            WHERE sibling.origin_id = activity_events.origin_id
+                             SELECT COUNT(*) FROM activity_events AS sibling
+                             WHERE sibling.origin_id = activity_events.origin_id
+                               AND sibling.deleted_at_us IS NULL
                         ) AS origin_activity_count,
                         CASE
                             WHEN activity_origins.routing_mode = 'dedicated'
@@ -109,6 +153,7 @@ impl ActivityStore {
                  LEFT JOIN activity_project_assignments
                    ON activity_project_assignments.activity_event_id = activity_events.id
                  WHERE activity_events.id = ?
+                   AND activity_events.deleted_at_us IS NULL
              )
              SELECT selected.id, selected.provider, selected.provider_session_id,
                     selected.provider_turn_id, selected.activity_kind,
@@ -121,13 +166,75 @@ impl ActivityStore {
                     (
                         SELECT COUNT(*) FROM activity_events AS turn
                         WHERE turn.provider = selected.provider
-                          AND turn.provider_session_id = selected.provider_session_id
-                          AND (
+                           AND turn.provider_session_id = selected.provider_session_id
+                           AND turn.deleted_at_us IS NULL
+                           AND (
                                  turn.activity_kind = 'user'
                               OR (?2 = 1 AND turn.activity_kind = 'subagent')
                               OR (?3 = 1 AND turn.activity_kind = 'internal')
                           )
                     ) AS conversation_total,
+                    (
+                        SELECT COUNT(*) FROM activity_events AS turn
+                        WHERE turn.provider = selected.provider
+                          AND turn.provider_session_id = selected.provider_session_id
+                          AND turn.deleted_at_us IS NULL
+                          AND (
+                                 turn.activity_kind = 'user'
+                              OR (?2 = 1 AND turn.activity_kind = 'subagent')
+                              OR (?3 = 1 AND turn.activity_kind = 'internal')
+                          )
+                          AND (
+                              (
+                                  COALESCE(
+                                      selected.captured_at_us,
+                                      selected.first_recorded_at_us
+                                  ) IS NULL
+                                  AND (
+                                      COALESCE(
+                                          turn.captured_at_us,
+                                          turn.first_recorded_at_us
+                                      ) IS NOT NULL
+                                      OR (
+                                          COALESCE(
+                                              turn.captured_at_us,
+                                              turn.first_recorded_at_us
+                                          ) IS NULL
+                                          AND turn.id <= selected.id
+                                      )
+                                  )
+                              )
+                              OR (
+                                  COALESCE(
+                                      selected.captured_at_us,
+                                      selected.first_recorded_at_us
+                                  ) IS NOT NULL
+                                  AND COALESCE(
+                                      turn.captured_at_us,
+                                      turn.first_recorded_at_us
+                                  ) IS NOT NULL
+                                  AND (
+                                      COALESCE(
+                                          turn.captured_at_us,
+                                          turn.first_recorded_at_us
+                                      ) < COALESCE(
+                                          selected.captured_at_us,
+                                          selected.first_recorded_at_us
+                                      )
+                                      OR (
+                                          COALESCE(
+                                              turn.captured_at_us,
+                                              turn.first_recorded_at_us
+                                          ) = COALESCE(
+                                              selected.captured_at_us,
+                                              selected.first_recorded_at_us
+                                          )
+                                          AND turn.id <= selected.id
+                                      )
+                                  )
+                              )
+                          )
+                    ) AS conversation_index,
                     selected.project_id, projects.name AS project_name,
                     EXISTS (
                         SELECT 1 FROM canvas_nodes
@@ -160,9 +267,12 @@ impl ActivityStore {
                 &row.provider,
                 &row.provider_session_id,
                 activity_id,
-                conversation_after_id,
-                conversation_limit.saturating_add(1),
-                activity_filter,
+                ConversationWindow {
+                    after_id: conversation_after_id,
+                    fetch_limit: conversation_limit.saturating_add(1),
+                    offset: conversation_offset,
+                    activity_filter,
+                },
             )
             .await?;
         let conversation_has_more =
@@ -226,6 +336,7 @@ impl ActivityStore {
             prompt_summary,
             selected_turn,
             conversation,
+            conversation_index: row.conversation_index,
             conversation_total: row.conversation_total,
             conversation_has_more,
         })
@@ -236,9 +347,7 @@ impl ActivityStore {
         provider: &str,
         session_id: &str,
         selected_id: i64,
-        after_id: Option<i64>,
-        fetch_limit: i64,
-        activity_filter: ActivityKindFilter,
+        window: ConversationWindow,
     ) -> Result<Vec<ActivityConversationTurn>, StoreError> {
         let rows = sqlx::query_as::<_, TimelineRow>(
             "WITH effective AS (
@@ -267,8 +376,9 @@ impl ActivityStore {
                    ON result_summary.activity_event_id = activity_events.id
                  LEFT JOIN activity_prompt_summaries AS prompt_summary
                    ON prompt_summary.activity_event_id = activity_events.id
-                 WHERE activity_events.provider = ?1
-                   AND activity_events.provider_session_id = ?2
+                  WHERE activity_events.provider = ?1
+                    AND activity_events.provider_session_id = ?2
+                    AND activity_events.deleted_at_us IS NULL
                    AND (
                           activity_events.activity_kind = 'user'
                        OR (?3 = 1 AND activity_events.activity_kind = 'subagent')
@@ -312,14 +422,15 @@ impl ActivityStore {
                     9223372036854775807
                 )
              ORDER BY conversation_index
-             LIMIT ?6",
+             LIMIT ?6 OFFSET ?7",
         )
         .bind(provider)
         .bind(session_id)
-        .bind(activity_filter.include_subagent())
-        .bind(activity_filter.include_internal())
-        .bind(after_id)
-        .bind(fetch_limit)
+        .bind(window.activity_filter.include_subagent())
+        .bind(window.activity_filter.include_internal())
+        .bind(window.after_id)
+        .bind(window.fetch_limit)
+        .bind(window.offset)
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter()

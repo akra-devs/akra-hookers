@@ -52,6 +52,7 @@ pub struct ActivityDetail {
     pub prompt_summary: ActivityPromptSummary,
     pub selected_turn: ActivityConversationTurn,
     pub conversation: Vec<ActivityConversationTurn>,
+    pub conversation_index: i64,
     pub conversation_total: i64,
     pub conversation_has_more: bool,
 }

@@ -308,6 +308,32 @@ export function useDashboardData(
       ));
     }
   }, [activities.data, activityItems, canvas, persistedEdges]);
+  const refreshAfterActivityDeletion = useCallback(async (activityId: number) => {
+    setSelectedActivityIds((current) => current.filter((id) => id !== activityId));
+    setOlderActivities([]);
+    setOlderActivitiesHaveMore(null);
+    setOlderActivityPageCursors([]);
+    setOlderActivitiesError("");
+    await Promise.all([
+      activities.refetch(),
+      allCount.refetch(),
+      inboxCount.refetch(),
+      projects.refetch(),
+      origins.refetch(),
+      canvasRevision.refetch(),
+      canvas.refetch(),
+      persistedEdges.refetch(),
+    ]);
+  }, [
+    activities,
+    allCount,
+    canvas,
+    canvasRevision,
+    inboxCount,
+    origins,
+    persistedEdges,
+    projects,
+  ]);
 
   const onNodesChange = useCallback((changes: NodeChange<ActivityFlowNode>[]) => {
     for (const change of changes) {
@@ -408,6 +434,7 @@ export function useDashboardData(
     nodes, setNodes, edges, onNodesChange, commitNodePosition,
     selectedActivityIds, setSelectedActivityIds, assignmentDetails,
     refreshProjectContext, refreshCanvas, refreshCanvasAuthoritatively,
+    refreshAfterActivityDeletion,
     bootstrapError, bootstrapReady, retryBootstrap,
     hasOlderActivities, loadOlderActivities, loadingOlderActivities, olderActivitiesError,
   };

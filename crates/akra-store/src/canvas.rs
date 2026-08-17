@@ -5,10 +5,13 @@ use crate::{ActivityStore, CanvasEdgeSummary, CanvasNodeSummary, StoreError};
 impl ActivityStore {
     pub async fn canvas_nodes(&self) -> Result<Vec<CanvasNodeSummary>, StoreError> {
         Ok(sqlx::query_as::<_, (i64, i64, f64, f64)>(
-            "SELECT id, activity_event_id, position_x, position_y
+            "SELECT canvas_nodes.id, canvas_nodes.activity_event_id,
+                    canvas_nodes.position_x, canvas_nodes.position_y
              FROM canvas_nodes
-             WHERE deleted_at_us IS NULL
-             ORDER BY id",
+             JOIN activity_events ON activity_events.id = canvas_nodes.activity_event_id
+             WHERE canvas_nodes.deleted_at_us IS NULL
+               AND activity_events.deleted_at_us IS NULL
+             ORDER BY canvas_nodes.id",
         )
         .fetch_all(&self.pool)
         .await?
@@ -36,6 +39,15 @@ impl ActivityStore {
         position_y: f64,
     ) -> Result<i64, StoreError> {
         let mut transaction = self.pool.begin().await?;
+        let activity_exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM activity_events WHERE id = ? AND deleted_at_us IS NULL",
+        )
+        .bind(activity_event_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if activity_exists == 0 {
+            return Err(StoreError::ActivityNotFound(activity_event_id));
+        }
         let result = sqlx::query(
             "INSERT INTO canvas_nodes (activity_event_id, position_x, position_y) VALUES (?, ?, ?)",
         )
@@ -124,7 +136,12 @@ impl ActivityStore {
 
     pub async fn canvas_node_exists(&self, canvas_node_id: i64) -> Result<bool, StoreError> {
         Ok(sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM canvas_nodes WHERE id = ? AND deleted_at_us IS NULL",
+            "SELECT COUNT(*)
+             FROM canvas_nodes
+             JOIN activity_events ON activity_events.id = canvas_nodes.activity_event_id
+             WHERE canvas_nodes.id = ?
+               AND canvas_nodes.deleted_at_us IS NULL
+               AND activity_events.deleted_at_us IS NULL",
         )
         .bind(canvas_node_id)
         .fetch_one(&self.pool)

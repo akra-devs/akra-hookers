@@ -499,7 +499,8 @@ impl ActivityStore {
              FROM activity_result_summaries AS summaries
              JOIN activity_events AS activities
                ON activities.id = summaries.activity_event_id
-             WHERE activities.activity_kind = 'user'
+              WHERE activities.activity_kind = 'user'
+                AND activities.deleted_at_us IS NULL
                AND summaries.source_text IS NOT NULL
                AND summaries.attempt_count < ?
                AND (

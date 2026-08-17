@@ -79,6 +79,40 @@ export class FixtureApi {
         ? { status: 200, body: this.detail(detail, url) }
         : error(404, "not_found", "Activity was not found");
     }
+    if (method === "DELETE" && activityId !== null) {
+      if (!this.state.details[activityId]) {
+        return error(404, "not_found", "Activity was not found");
+      }
+      const removedNodeIds = new Set(
+        this.state.canvasNodes
+          .filter((node) => node.activity_event_id === activityId)
+          .map((node) => node.id),
+      );
+      this.state.activities = this.state.activities.filter((activity) => activity.id !== activityId);
+      delete this.state.details[activityId];
+      delete this.state.activityOrigins[activityId];
+      this.state.canvasNodes = this.state.canvasNodes.filter(
+        (node) => node.activity_event_id !== activityId,
+      );
+      this.state.canvasEdges = this.state.canvasEdges.filter(
+        (edge) => !removedNodeIds.has(edge.source_node_id) && !removedNodeIds.has(edge.target_node_id),
+      );
+      for (const [index, activity] of this.state.activities.entries()) {
+        activity.conversation_index = index + 1;
+        activity.conversation_total = this.state.activities.length;
+      }
+      for (const detail of Object.values(this.state.details)) {
+        detail.conversation = detail.conversation.filter((turn) => turn.id !== activityId);
+        detail.conversation_index = this.state.activities.findIndex(
+          (activity) => activity.id === detail.id,
+        ) + 1;
+        detail.conversation_total = Math.max(0, detail.conversation_total - 1);
+        detail.origin.activity_count = Math.max(0, detail.origin.activity_count - 1);
+      }
+      this.model.syncCanvasState();
+      this.canvasRevision += 1;
+      return { status: 204 };
+    }
     if (path === "/v1/projects" && method === "GET") {
       return {
         status: 200,
@@ -303,12 +337,22 @@ export class FixtureApi {
     const hiddenTotal = detail.conversation.filter((turn) =>
       !this.activityKindVisible(turn.activity_kind, url)).length;
     const conversationTotal = Math.max(0, detail.conversation_total - hiddenTotal);
+    const cursor = Number(url.searchParams.get("conversation_after_id"));
+    const cursorStart = Number.isInteger(cursor) && cursor > 0
+      ? conversation.findIndex(({ id }) => id === cursor) + 1
+      : 0;
+    const requestedOffset = Number(url.searchParams.get("conversation_offset"));
+    const start = url.searchParams.has("conversation_offset")
+      && Number.isInteger(requestedOffset) && requestedOffset >= 0
+      ? requestedOffset
+      : cursorStart;
+    const limit = Number(url.searchParams.get("conversation_limit")) || conversation.length;
+    const page = conversation.slice(start, start + limit);
     return {
       ...detail,
-      conversation,
+      conversation: page,
       conversation_total: conversationTotal,
-      conversation_has_more:
-        detail.conversation_has_more && conversation.length < conversationTotal,
+      conversation_has_more: start + page.length < conversationTotal,
     };
   }
 

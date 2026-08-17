@@ -76,6 +76,7 @@ export type ActivityDetail = {
   prompt_summary: ActivityPromptSummary;
   selected_turn: ActivityConversationTurn;
   conversation: ActivityConversationTurn[];
+  conversation_index: number;
   conversation_total: number;
   conversation_has_more: boolean;
 };
