@@ -67,12 +67,20 @@ impl ApiError {
             ),
             error @ (akra_store::StoreError::ProjectNotFound(_)
             | akra_store::StoreError::OriginNotFound(_)
-            | akra_store::StoreError::ActivityNotFound(_)) => Self::not_found(error.to_string()),
+            | akra_store::StoreError::ActivityNotFound(_)
+            | akra_store::StoreError::WorkNotFound(_)
+            | akra_store::StoreError::WorkEdgeNotFound(_)
+            | akra_store::StoreError::CurationProposalNotFound(_)) => {
+                Self::not_found(error.to_string())
+            }
             akra_store::StoreError::InvalidOriginTransition(message) => {
                 Self::unprocessable("invalid_origin_transition", message)
             }
             akra_store::StoreError::InvalidActivityAssignment(message) => {
                 Self::unprocessable("invalid_activity_assignment", message)
+            }
+            akra_store::StoreError::InvalidCuration(message) => {
+                Self::unprocessable("invalid_curation", message)
             }
             akra_store::StoreError::SameProjectMerge => {
                 Self::unprocessable("same_project_merge", error.to_string())

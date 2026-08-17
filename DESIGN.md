@@ -260,6 +260,34 @@ and changing destination is immediate without a hook-restart instruction.
 
 The 288px activity plate is the signature component: 5px corners, registration marks, a lichen project label, conversation position, three-line prompt, ruled metadata footer, provider dot, timestamp, and connection handles. A `문맥 보강` badge appears only when the displayed request used the previous result summary; a compact pending or fallback marker keeps state truthful without changing geometry. Hover lifts by 1px; selection uses a crisp separated lichen ring. Keyboard focus uses the same 2px focus outline with a 5px offset, and Enter or Space opens the inspector.
 
+### Log Curation Workspace
+
+`로그 정리` is an explicit project-scoped, full-canvas workflow rather than a modal.
+Its three visible stages are log selection, AI proposal review, and confirmation.
+Selection rows lead with the compact request summary and one result line, keep exclude
+and confirmed soft-delete controls separate, and end in a sticky summary-only action
+dock. The review stage uses ruled columns for existing-work attachment and new-work
+creation. Drag and a native select provide equivalent reassignment; editable titles,
+confidence, and uncertainty remain visible. No work mutation happens until the final
+apply action, and the workspace states that AI cannot delete evidence or create edges.
+
+### Project Memory Work Plates
+
+The work map is a separate mode from the raw activity log. A 320px work plate has a
+lichen left rule, project and log-count provenance, a user-confirmed title, up to two
+source-log previews, and a `사용자 확인` footer. It deliberately does not imitate an
+individual prompt plate. New works appear without edges; connection handles create
+only user-authored relationships and edge double-click removes only that relationship.
+Removing a work returns its evidence logs to curation instead of deleting them.
+
+### Work Evidence Inspector
+
+The work inspector begins with the editable work identity and then gives the remaining
+height to a scrollable source-log ledger. Each log shows its request summary, all three
+stored result lines, a closed raw-evidence disclosure, an action to open the immutable
+activity detail, and a reversible action to remove it from the work. The inspector must
+never collapse evidence to make a long title or request fit.
+
 ### Detail Inspector
 
 The inspector presents a request summary first, including whether it is contextual, current-request-only, deterministic projection, or fallback. When a derived request is shown, the raw captured prompt is available through a closed, independently scrollable `수집된 원문 보기` disclosure so long evidence does not collapse the conversation area. Project, provider, captured and first-recorded times, submitted and detected paths, collapsed technical IDs with copy actions, and an oldest-first timeline remain available. Timeline rows are compact keyboard-selectable `REQ`/`RES` previews; the selected turn opens its full request and three-line result above. Opening detail moves focus into the inspector; closing restores focus to the originating plate. Selected timeline turns use a muted lichen panel and lichen point, not a new card silhouette.

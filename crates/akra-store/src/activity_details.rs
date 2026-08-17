@@ -461,7 +461,7 @@ impl ActivityStore {
     }
 }
 
-fn result_summary_from_parts(
+pub(crate) fn result_summary_from_parts(
     state: &str,
     line_1: Option<String>,
     line_2: Option<String>,

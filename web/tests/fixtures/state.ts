@@ -3,9 +3,13 @@ import type {
   ActivitySummary,
   CanvasEdge,
   CanvasNode,
+  CurationLog,
+  CurationProposal,
   OriginSummary,
   ProjectSummary,
   ProviderIntegration,
+  WorkEdge,
+  WorkItemDetail,
 } from "../../src/api";
 
 export type FixtureState = {
@@ -20,6 +24,14 @@ export type FixtureState = {
   conversationRoutes: Record<string, number>;
   nextProjectId: number;
   nextEdgeId: number;
+  curationLogs: CurationLog[];
+  curationProposals: Record<number, CurationProposal>;
+  workItems: WorkItemDetail[];
+  workEdges: WorkEdge[];
+  workRevision: number;
+  nextProposalId: number;
+  nextWorkId: number;
+  nextWorkEdgeId: number;
 };
 
 const captured = { value: "2026-08-08T12:00:00Z", provenance: "captured" } as const;
@@ -193,6 +205,14 @@ export function createFixtureState(): FixtureState {
     conversationRoutes: {},
     nextProjectId: 3,
     nextEdgeId: 22,
+    curationLogs: [],
+    curationProposals: {},
+    workItems: [],
+    workEdges: [],
+    workRevision: 0,
+    nextProposalId: 1,
+    nextWorkId: 1,
+    nextWorkEdgeId: 1,
   };
 }
 

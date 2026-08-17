@@ -29,6 +29,8 @@ mod api_provider_concurrency_contracts;
 mod api_provider_contracts;
 #[path = "cases/api_provider_manifest_contracts.rs"]
 mod api_provider_manifest_contracts;
+#[path = "cases/api_work_curation_contracts.rs"]
+mod api_work_curation_contracts;
 
 async fn record(
     store: &akra_store::ActivityStore,
