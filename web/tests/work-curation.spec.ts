@@ -26,7 +26,7 @@ function readyLog(
     time: { value: "2026-08-17T09:00:00Z", provenance: "captured" },
     prompt,
     prompt_summary: { status: "ready", mode: "contextual", text: summary },
-    result_summary: { status: "ready", lines: result },
+    result_summary: { status: "ready", lines: result, can_regenerate: false },
     state: "unreviewed",
   };
 }
@@ -112,8 +112,11 @@ test("selected summaries stay inert until the user confirms a work proposal", as
   await expect(workspace).toContainText(
     "최대 96자 요청·3줄 결과만 전송 · 전체 원문/응답 제외 · 최대 20개",
   );
-  await expect(workspace).not.toContainText("RAW_SECRET_1");
-  await expect(workspace).not.toContainText("RAW_SECRET_2");
+  await expect(workspace.getByText(first.prompt, { exact: true })).not.toBeVisible();
+  await expect(workspace.getByText(second.prompt, { exact: true })).not.toBeVisible();
+  await workspace.locator(".curation-log__details").first().getByText("더보기", { exact: true }).click();
+  await expect(workspace.getByText(first.prompt, { exact: true })).toBeVisible();
+  await expect(workspace.getByRole("list", { name: "저장된 결과 요약" })).toBeVisible();
   await page.screenshot({
     path: "../.omo/evidence/task-work-curation-selection.png",
     fullPage: false,
@@ -189,6 +192,72 @@ test("excluded logs are kept separately from permanent soft deletion", async ({ 
   expect(api.state.curationLogs[0]?.state).toBe("unreviewed");
 });
 
+test("curation offers bounded select-all, red deletion, evidence disclosure, and async regeneration", async ({
+  page,
+  api,
+}) => {
+  const ready = readyLog(
+    30,
+    "REQ 원문: 배포 페이지의 실제 요청",
+    "배포 페이지 요청 정리",
+    ["응답 첫 줄", "응답 둘째 줄", "응답 셋째 줄"],
+  );
+  const failed = readyLog(
+    31,
+    "REQ 원문: 결과 요약을 다시 만들어 주세요",
+    "재생성 실패 요약",
+    ["unused", "unused", "unused"],
+  );
+  failed.result_summary = { status: "failed", lines: null, can_regenerate: true };
+  const unavailable = readyLog(
+    32,
+    "REQ 원문: 보존 기간이 지난 기록",
+    "원 응답이 없는 과거 요약",
+    ["unused", "unused", "unused"],
+  );
+  unavailable.result_summary = { status: "unavailable", lines: null, can_regenerate: false };
+  api.state.curationLogs.push(ready, failed, unavailable);
+
+  await page.goto("/");
+  await page.getByLabel("프로젝트 필터").selectOption("project:1");
+  await page.getByRole("button", { name: "로그 정리" }).click();
+  const workspace = page.getByTestId("curation-workspace");
+
+  const selectAll = workspace.getByRole("checkbox", { name: /전체 선택/ });
+  await selectAll.check();
+  await expect(workspace.getByText("3개 선택", { exact: true })).toBeVisible();
+  await workspace.getByRole("checkbox", { name: "배포 페이지 요청 정리 선택" }).uncheck();
+  expect(await selectAll.evaluate((element: HTMLInputElement) => element.indeterminate)).toBe(true);
+  await selectAll.check();
+  await expect(workspace.getByText("3개 선택", { exact: true })).toBeVisible();
+
+  const deleteButton = workspace.getByRole("button", { name: "로그 영구 제외" }).first();
+  await expect(deleteButton).toHaveCSS("color", "rgb(213, 116, 114)");
+
+  const firstDetails = workspace.locator(".curation-log__details").first();
+  await expect(workspace.getByText(ready.prompt, { exact: true })).not.toBeVisible();
+  await firstDetails.getByText("더보기", { exact: true }).click();
+  await expect(workspace.getByText(ready.prompt, { exact: true })).toBeVisible();
+  await expect(firstDetails.getByRole("list", { name: "저장된 결과 요약" })).toContainText(
+    "응답 셋째 줄",
+  );
+
+  const regenerate = workspace.getByRole("button", {
+    name: "재생성 실패 요약 결과 요약 재생성",
+  });
+  const failedRow = workspace.locator(".curation-log").filter({ hasText: "재생성 실패 요약" });
+  await expect(regenerate).toBeVisible();
+  await expect(workspace.getByRole("button", {
+    name: "원 응답이 없는 과거 요약 결과 요약 재생성",
+  })).toHaveCount(0);
+  await regenerate.click();
+  await expect(workspace.locator(".curation-log__regenerate")).toContainText("로딩...");
+  await expect(failedRow.locator(".curation-log__result")).toContainText(
+    "보관 중인 응답으로 결과 요약을 다시 만들었습니다.",
+  );
+  await expect(regenerate).toHaveCount(0);
+});
+
 test("work relationships are created and removed only through explicit canvas actions", async ({ page, api }) => {
   const first = readyLog(10, "첫 로그", "배포 페이지 구현", ["구현", "검증", "완료"]);
   const second = readyLog(11, "둘째 로그", "릴리스 게시", ["태그", "자산", "게시"]);
@@ -252,6 +321,8 @@ test("curation review and work evidence stay inside a narrow viewport", async ({
   await page.getByLabel("프로젝트 필터").selectOption("project:1");
   await page.getByRole("button", { name: "로그 정리" }).click();
   const workspace = page.getByTestId("curation-workspace");
+  await workspace.locator(".curation-log__details").first().getByText("더보기", { exact: true }).click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await workspace.getByRole("checkbox", { name: "프로젝트 작업 A를 정리 선택" }).check();
   await workspace.getByRole("checkbox", { name: "프로젝트 작업 B를 정리 선택" }).check();
   await workspace.getByRole("button", { name: "선택한 2개 자동 묶기" }).click();

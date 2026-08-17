@@ -100,6 +100,7 @@ pub enum ResultSummaryStatus {
 pub struct ActivityResultSummary {
     pub status: ResultSummaryStatus,
     pub lines: Option<[String; 3]>,
+    pub can_regenerate: bool,
 }
 
 impl ActivityResultSummary {
@@ -107,6 +108,7 @@ impl ActivityResultSummary {
         Self {
             status: ResultSummaryStatus::Unavailable,
             lines: None,
+            can_regenerate: false,
         }
     }
 }

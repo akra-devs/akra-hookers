@@ -22,6 +22,7 @@ pub(crate) struct ActivityQuery {
     include_subagent: Option<bool>,
     include_internal: Option<bool>,
     period: Option<String>,
+    start_at_us: Option<i64>,
 }
 
 #[derive(Default, Deserialize)]
@@ -41,7 +42,7 @@ pub(crate) async fn activities(
     let limit = page_limit(query.limit)?;
     let order = activity_order(query.order.as_deref())?;
     let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
-    let time_range = activity_time_range(query.period.as_deref())?;
+    let time_range = activity_time_range(query.period.as_deref(), query.start_at_us)?;
     validate_cursor(query.after_id)?;
     state
         .store
@@ -69,7 +70,7 @@ pub(crate) async fn activity_count(
 ) -> Result<Json<ActivityCountResponse>, ApiError> {
     let scope = activity_scope(&query)?;
     let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
-    let time_range = activity_time_range(query.period.as_deref())?;
+    let time_range = activity_time_range(query.period.as_deref(), query.start_at_us)?;
     state
         .store
         .activity_summary_count_filtered_in_range(scope, activity_filter, time_range)
@@ -125,6 +126,25 @@ pub(crate) async fn delete_activity(
         .map_err(ApiError::from_store)
 }
 
+pub(crate) async fn regenerate_result_summary(
+    State(state): State<AppState>,
+    Path(activity_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    match state
+        .store
+        .regenerate_result_summary(activity_id, now_us()?)
+        .await
+        .map_err(ApiError::from_store)?
+    {
+        akra_store::ResultSummaryRegenerationOutcome::Scheduled
+        | akra_store::ResultSummaryRegenerationOutcome::AlreadyPending => Ok(StatusCode::ACCEPTED),
+        akra_store::ResultSummaryRegenerationOutcome::Unavailable => Err(ApiError::unprocessable(
+            "result_summary_regeneration_unavailable",
+            "The original assistant result is no longer available for regeneration.",
+        )),
+    }
+}
+
 fn activity_scope(query: &ActivityQuery) -> Result<akra_store::ActivityScope, ApiError> {
     if query.project.is_some() {
         return Err(invalid_pagination(
@@ -164,9 +184,30 @@ pub(crate) fn activity_kind_filter(
 
 pub(crate) fn activity_time_range(
     period: Option<&str>,
+    start_at_us: Option<i64>,
 ) -> Result<akra_store::ActivityTimeRange, ApiError> {
+    let now_us = now_us()?;
     let hours = match period.unwrap_or("all") {
-        "all" => return Ok(akra_store::ActivityTimeRange::ALL),
+        "all" if start_at_us.is_none() => return Ok(akra_store::ActivityTimeRange::ALL),
+        "today" => {
+            let start_at_us = start_at_us.ok_or_else(|| {
+                ApiError::unprocessable(
+                    "invalid_period",
+                    "Today requires the browser's local calendar-day start.",
+                )
+            })?;
+            let maximum_calendar_day_us = 26_i64 * 60 * 60 * 1_000_000;
+            if start_at_us <= 0
+                || start_at_us > now_us
+                || start_at_us < now_us.saturating_sub(maximum_calendar_day_us)
+            {
+                return Err(ApiError::unprocessable(
+                    "invalid_period",
+                    "Today start must be a recent local calendar-day boundary.",
+                ));
+            }
+            return Ok(akra_store::ActivityTimeRange::since(start_at_us));
+        }
         "day" => 24_i64,
         "week" => 24 * 7,
         "month" => 24 * 30,
@@ -174,22 +215,35 @@ pub(crate) fn activity_time_range(
         _ => {
             return Err(ApiError::unprocessable(
                 "invalid_period",
-                "Activity period must be all, day, week, month, or quarter.",
+                "Activity period must be all, today, day, week, month, or quarter.",
             ));
         }
     };
-    let now_us: i64 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| ApiError::unprocessable("invalid_period", "System time is unavailable."))?
-        .as_micros()
-        .try_into()
-        .map_err(|_| ApiError::unprocessable("invalid_period", "System time is unavailable."))?;
+    if start_at_us.is_some() {
+        return Err(ApiError::unprocessable(
+            "invalid_period",
+            "A calendar-day start is only valid for the today period.",
+        ));
+    }
     let duration_us = hours
         .checked_mul(60 * 60 * 1_000_000)
         .ok_or_else(|| ApiError::unprocessable("invalid_period", "Activity period overflowed."))?;
     Ok(akra_store::ActivityTimeRange::since(
         now_us.saturating_sub(duration_us),
     ))
+}
+
+fn now_us() -> Result<i64, ApiError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| {
+            ApiError::unprocessable("system_time_unavailable", "System time is unavailable.")
+        })?
+        .as_micros()
+        .try_into()
+        .map_err(|_| {
+            ApiError::unprocessable("system_time_unavailable", "System time is unavailable.")
+        })
 }
 
 fn page_limit(requested: Option<i64>) -> Result<i64, ApiError> {

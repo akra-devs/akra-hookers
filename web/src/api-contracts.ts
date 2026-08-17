@@ -4,9 +4,10 @@ export type ResultSummaryStatus = "pending" | "ready" | "unavailable" | "failed"
 export type PromptSummaryStatus = "pending" | "ready" | "unavailable" | "failed";
 export type PromptSummaryMode = "contextual" | "standalone" | "passthrough" | "fallback";
 
-export type ActivityResultSummary =
+export type ActivityResultSummary = (
   | { status: "ready"; lines: [string, string, string] }
-  | { status: Exclude<ResultSummaryStatus, "ready">; lines: null };
+  | { status: Exclude<ResultSummaryStatus, "ready">; lines: null }
+) & { can_regenerate: boolean };
 
 export type ActivityPromptSummary = {
   status: PromptSummaryStatus;

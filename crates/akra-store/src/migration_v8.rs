@@ -59,7 +59,7 @@ pub(crate) async fn apply(transaction: &mut Transaction<'_, Sqlite>) -> Result<(
                     AND summary_line_3 IS NULL)
              ),
              CHECK(
-                 state NOT IN ('failed', 'skipped', 'succeeded')
+                 state NOT IN ('skipped', 'succeeded')
                  OR source_text IS NULL
              )
          )",

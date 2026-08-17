@@ -1,6 +1,7 @@
 type IconName =
   | "activity"
   | "brand"
+  | "chevron-down"
   | "close"
   | "expand"
   | "folder"
@@ -8,6 +9,7 @@ type IconName =
   | "location"
   | "logs"
   | "plus"
+  | "refresh"
   | "settings"
   | "terminal"
   | "trash"
@@ -37,6 +39,8 @@ export function UiIcon({ name, size = 18, className }: UiIconProps) {
   switch (name) {
     case "brand":
       return <svg {...common}><path d="M8 4 3 12l5 8M16 4l5 8-5 8M14 3l-4 18" /></svg>;
+    case "chevron-down":
+      return <svg {...common}><path d="m7 10 5 5 5-5" /></svg>;
     case "close":
       return <svg {...common}><path d="m6 6 12 12M18 6 6 18" /></svg>;
     case "expand":
@@ -53,6 +57,8 @@ export function UiIcon({ name, size = 18, className }: UiIconProps) {
       return <svg {...common}><path d="M6 5h14M6 12h14M6 19h14" /><circle cx="3" cy="5" r="1" /><circle cx="3" cy="12" r="1" /><circle cx="3" cy="19" r="1" /></svg>;
     case "plus":
       return <svg {...common}><path d="M12 5v14M5 12h14" /></svg>;
+    case "refresh":
+      return <svg {...common}><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6.1 8.2A7 7 0 0 1 18.7 7M17.9 15.8A7 7 0 0 1 5.3 17" /></svg>;
     case "settings":
       return <svg {...common}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></svg>;
     case "terminal":

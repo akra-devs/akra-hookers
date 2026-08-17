@@ -89,7 +89,8 @@ export function AppCommandBar({
           onChange={(event) => onActivityPeriodChange(event.target.value as ActivityPeriod)}
         >
           <option value="all">전체 기간</option>
-          <option value="day">최근 24시간</option>
+          <option value="today">오늘</option>
+          <option value="day">24시간 동안</option>
           <option value="week">최근 7일</option>
           <option value="month">최근 30일</option>
           <option value="quarter">최근 90일</option>

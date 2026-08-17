@@ -37,6 +37,7 @@ struct DetailRow {
     summary_line_1: Option<String>,
     summary_line_2: Option<String>,
     summary_line_3: Option<String>,
+    result_summary_source_retained: i64,
     prompt_summary_state: Option<String>,
     projected_prompt: Option<String>,
     prompt_summary_text: Option<String>,
@@ -57,6 +58,7 @@ struct TimelineRow {
     summary_line_1: Option<String>,
     summary_line_2: Option<String>,
     summary_line_3: Option<String>,
+    result_summary_source_retained: i64,
     prompt_summary_state: Option<String>,
     projected_prompt: Option<String>,
     prompt_summary_text: Option<String>,
@@ -245,6 +247,7 @@ impl ActivityStore {
                     result_summary.summary_line_1,
                     result_summary.summary_line_2,
                     result_summary.summary_line_3,
+                    result_summary.source_text IS NOT NULL AS result_summary_source_retained,
                     prompt_summary.state AS prompt_summary_state,
                     prompt_summary.projected_prompt,
                     prompt_summary.summary_text AS prompt_summary_text,
@@ -285,6 +288,7 @@ impl ActivityStore {
             row.summary_line_1,
             row.summary_line_2,
             row.summary_line_3,
+            row.result_summary_source_retained != 0,
         )?;
         let prompt_summary = activity_prompt_summary_from_parts(
             row.prompt_summary_state.as_deref().unwrap_or("unavailable"),
@@ -359,6 +363,7 @@ impl ActivityStore {
                         result_summary.summary_line_1,
                         result_summary.summary_line_2,
                         result_summary.summary_line_3,
+                        result_summary.source_text IS NOT NULL AS result_summary_source_retained,
                         prompt_summary.state AS prompt_summary_state,
                         prompt_summary.projected_prompt,
                         prompt_summary.summary_text AS prompt_summary_text,
@@ -413,6 +418,7 @@ impl ActivityStore {
              SELECT id, activity_kind, prompt, project_id, project_name,
                     captured_at_us, first_recorded_at_us, on_canvas,
                     result_summary_state, summary_line_1, summary_line_2, summary_line_3
+                    , result_summary_source_retained
                     , prompt_summary_state, projected_prompt, prompt_summary_text,
                     prompt_summary_used_previous_result
              FROM numbered
@@ -448,6 +454,7 @@ impl ActivityStore {
                         row.summary_line_1,
                         row.summary_line_2,
                         row.summary_line_3,
+                        row.result_summary_source_retained != 0,
                     )?,
                     prompt_summary: activity_prompt_summary_from_parts(
                         row.prompt_summary_state.as_deref().unwrap_or("unavailable"),
@@ -466,6 +473,7 @@ pub(crate) fn result_summary_from_parts(
     line_1: Option<String>,
     line_2: Option<String>,
     line_3: Option<String>,
+    source_retained: bool,
 ) -> Result<ActivityResultSummary, StoreError> {
     let status = result_summary_status(state)?;
     let lines = match (status, line_1, line_2, line_3) {
@@ -479,7 +487,11 @@ pub(crate) fn result_summary_from_parts(
         }
         _ => None,
     };
-    Ok(ActivityResultSummary { status, lines })
+    Ok(ActivityResultSummary {
+        status,
+        lines,
+        can_regenerate: status == ResultSummaryStatus::Failed && source_retained,
+    })
 }
 
 fn parse_activity_kind(value: &str) -> Result<ActivityKind, StoreError> {

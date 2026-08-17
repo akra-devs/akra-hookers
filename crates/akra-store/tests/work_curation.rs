@@ -3,8 +3,8 @@ use std::{fs, path::Path};
 use akra_core::ingress::IngressEvent;
 use akra_git::ProjectIdentity;
 use akra_store::{
-    ActivityStore, CurationLogFilter, CurationLogState, CurationProposalGroup, RecordActivity,
-    StoreError,
+    ActivityStore, ActivityTimeRange, CurationLogFilter, CurationLogState, CurationProposalGroup,
+    RecordActivity, StoreError,
 };
 use tempfile::TempDir;
 
@@ -55,6 +55,22 @@ async fn curation_is_inert_until_apply_and_keeps_logs_as_traceable_evidence() {
         initial
             .iter()
             .all(|log| log.state == CurationLogState::Unreviewed)
+    );
+    assert_eq!(
+        store
+            .curation_logs_in_range(
+                project_id,
+                CurationLogFilter::Unreviewed,
+                ActivityTimeRange::since(25),
+                100,
+            )
+            .await
+            .expect("bounded curation logs")
+            .into_iter()
+            .map(|log| log.id)
+            .collect::<Vec<_>>(),
+        vec![excluded, third],
+        "curation uses the same captured-time boundary as the canvas and counts"
     );
 
     store

@@ -78,8 +78,10 @@ membership, names, placement, and relationships remain user-confirmed organizati
   Source delivery is durable, destination-bound, and queued locally on failure;
   changing the destination never forwards earlier queued data automatically.
   Final assistant result text is sent only to the authenticated Codex Spark
-  summarization run, scrubbed on success or terminal failure, and deleted before
-  recovery once a pending copy is older than 24 hours.
+  summarization run. It is scrubbed immediately on success and retained for no
+  more than 24 hours after capture when a failed summary remains eligible for an
+  explicit user-requested regeneration. Expired or otherwise unavailable source
+  text cannot be regenerated and is deleted before recovery or regeneration.
 - Keeps dashboard and collector capabilities separate. The collector ingress does
   not use browser CORS, accepts full capture envelopes only, and never resolves a
   remote source path against the collector host's filesystem. A source dashboard

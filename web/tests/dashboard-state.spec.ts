@@ -143,9 +143,25 @@ test("a period changes nodes and navigation counts together, then can hide empty
   api,
 }) => {
   const now = Date.now();
+  const localNow = new Date(now);
+  const localTodayStart = new Date(
+    localNow.getFullYear(),
+    localNow.getMonth(),
+    localNow.getDate(),
+  ).getTime();
   for (const activity of api.state.activities) {
     activity.time = { value: new Date(now).toISOString(), provenance: "captured" };
   }
+  const lateYesterday = structuredClone(api.state.activities[0]!);
+  lateYesterday.id = 4;
+  lateYesterday.prompt = "자정 직전의 24시간 내 활동";
+  lateYesterday.time = {
+    value: new Date(localTodayStart - 1).toISOString(),
+    provenance: "captured",
+  };
+  api.state.activities.push(lateYesterday);
+  api.state.activityOrigins[4] = 1;
+  api.state.canvasNodes.push({ id: 14, activity_event_id: 4, position_x: 560, position_y: 360 });
   const old = structuredClone(api.state.activities[0]!);
   old.id = 3;
   old.prompt = "오래된 프로젝트 활동";
@@ -174,11 +190,21 @@ test("a period changes nodes and navigation counts together, then can hide empty
   api.state.canvasNodes.push({ id: 13, activity_event_id: 3, position_x: 720, position_y: 160 });
 
   await page.goto("/");
+  await page.getByLabel("기간 필터").selectOption("today");
+  await expect(page.getByTestId("activity-node-4")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /All activity/ })).toContainText("2");
+  await expect(page.getByRole("button", { name: /^기존 프로젝트 \d+$/ })).toContainText("1");
+
+  await page.getByLabel("기간 필터").selectOption("day");
+  await expect(page.getByTestId("activity-node-4")).toBeVisible();
+  await expect(page.getByRole("button", { name: /All activity/ })).toContainText("3");
+  await expect(page.getByRole("button", { name: /^기존 프로젝트 \d+$/ })).toContainText("2");
+
   await page.getByLabel("기간 필터").selectOption("week");
 
   await expect(page.getByTestId("activity-node-1")).toBeVisible();
   await expect(page.getByTestId("activity-node-3")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /All activity/ })).toContainText("2");
+  await expect(page.getByRole("button", { name: /All activity/ })).toContainText("3");
   await expect(page.getByRole("button", { name: /보관 프로젝트/ })).toContainText("0");
 
   await page.getByLabel("프로젝트 필터").selectOption("project:2");

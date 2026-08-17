@@ -289,6 +289,13 @@ pub enum ResultSummaryFailureDisposition {
     Stale,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResultSummaryRegenerationOutcome {
+    Scheduled,
+    AlreadyPending,
+    Unavailable,
+}
+
 impl ActivityStore {
     pub async fn capture_result(
         &self,
@@ -462,7 +469,7 @@ impl ActivityStore {
                  updated_at_us = ?, completed_at_us = ?
              WHERE source_text IS NOT NULL AND captured_at_us <= ?
                AND (
-                   state IN ('pending', 'retry_wait')
+                   state IN ('pending', 'retry_wait', 'failed')
                    OR (state = 'running' AND lease_expires_at_us <= ?)
                )",
         )
@@ -625,7 +632,10 @@ impl ActivityStore {
         let should_retry =
             retry_at_us.is_some() && claim.attempt_number < MAX_RESULT_SUMMARY_ATTEMPTS;
         let state = if should_retry { "retry_wait" } else { "failed" };
-        let retained_source = should_retry.then_some(claim.source_text.as_str());
+        // A terminal automatic failure remains manually retryable only inside
+        // the same 24-hour raw-result retention window. The claim sweep below
+        // remains authoritative and scrubs it once that window closes.
+        let retained_source = Some(claim.source_text.as_str());
         let completed_at_us = (!should_retry).then_some(failed_at_us);
         let next_attempt_at_us = retry_at_us.filter(|_| should_retry).unwrap_or(0);
         let error = sanitize_error(error);
@@ -668,6 +678,86 @@ impl ActivityStore {
             ResultSummaryFailureDisposition::RetryScheduled
         } else {
             ResultSummaryFailureDisposition::Failed
+        })
+    }
+
+    pub async fn regenerate_result_summary(
+        &self,
+        activity_event_id: i64,
+        requested_at_us: i64,
+    ) -> Result<ResultSummaryRegenerationOutcome, StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT summaries.state, summaries.source_text IS NOT NULL AS source_retained,
+                    summaries.captured_at_us
+             FROM activity_events AS activities
+             LEFT JOIN activity_result_summaries AS summaries
+               ON summaries.activity_event_id = activities.id
+             WHERE activities.id = ? AND activities.activity_kind = 'user'
+               AND activities.deleted_at_us IS NULL",
+        )
+        .bind(activity_event_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(StoreError::ActivityNotFound(activity_event_id))?;
+        let state: Option<String> = row.try_get("state")?;
+        let source_retained: Option<i64> = row.try_get("source_retained")?;
+        let captured_at_us: Option<i64> = row.try_get("captured_at_us")?;
+        let source_retained = source_retained.is_some_and(|value| value != 0);
+
+        if source_retained
+            && state
+                .as_deref()
+                .is_some_and(|value| matches!(value, "pending" | "running" | "retry_wait"))
+        {
+            transaction.commit().await?;
+            return Ok(ResultSummaryRegenerationOutcome::AlreadyPending);
+        }
+
+        let retention_cutoff_us = requested_at_us.saturating_sub(MAX_RESULT_SOURCE_RETENTION_US);
+        if source_retained
+            && captured_at_us.is_some_and(|captured_at_us| captured_at_us <= retention_cutoff_us)
+        {
+            sqlx::query(
+                "UPDATE activity_result_summaries
+                 SET source_text = NULL, lease_token = NULL, lease_expires_at_us = NULL,
+                     last_error = 'result expired before manual regeneration',
+                     updated_at_us = ?, completed_at_us = ?
+                 WHERE activity_event_id = ?",
+            )
+            .bind(requested_at_us)
+            .bind(requested_at_us)
+            .bind(activity_event_id)
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            return Ok(ResultSummaryRegenerationOutcome::Unavailable);
+        }
+
+        if state.as_deref() != Some("failed") || !source_retained {
+            transaction.commit().await?;
+            return Ok(ResultSummaryRegenerationOutcome::Unavailable);
+        }
+
+        let updated = sqlx::query(
+            "UPDATE activity_result_summaries
+             SET state = 'pending', generation = generation + 1, attempt_count = 0,
+                 next_attempt_at_us = 0, lease_token = NULL, lease_expires_at_us = NULL,
+                 summary_model = ?, summary_line_1 = NULL, summary_line_2 = NULL,
+                 summary_line_3 = NULL, last_error = NULL, updated_at_us = ?,
+                 completed_at_us = NULL
+             WHERE activity_event_id = ? AND state = 'failed' AND source_text IS NOT NULL",
+        )
+        .bind(RESULT_SUMMARY_MODEL)
+        .bind(requested_at_us)
+        .bind(activity_event_id)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(if updated.rows_affected() == 1 {
+            ResultSummaryRegenerationOutcome::Scheduled
+        } else {
+            ResultSummaryRegenerationOutcome::Unavailable
         })
     }
 

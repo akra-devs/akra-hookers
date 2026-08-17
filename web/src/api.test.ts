@@ -7,6 +7,7 @@ import {
   type ActivitySummary,
   type OriginSummary,
 } from "./api";
+import { localDayStartUs } from "./activity-period";
 import type { ActivityNodeData } from "./canvas";
 
 const base = "http://127.0.0.1:4319";
@@ -251,6 +252,34 @@ describe("createApiClient", () => {
       `${base}/v1/projects?include_subagent=false&period=quarter`,
       `${base}/v1/origins?include_internal=false&period=day`,
     ]);
+  });
+
+  it("sends one browser-local calendar boundary to every today-filtered surface", async () => {
+    const fetcher = vi.fn().mockImplementation(() => Promise.resolve(json([])));
+    const client = createApiClient(base, "capability", fetcher);
+    const expectedStart = String(localDayStartUs());
+
+    await client.activities({ scope: "all" }, { period: "today" });
+    await client.activityCount({ scope: "inbox" }, { period: "today" });
+    await client.projects({ period: "today" });
+    await client.origins({ period: "today" });
+    await client.curationLogs(7, "unreviewed", "today");
+
+    const urls = fetcher.mock.calls.map(([value]) => new URL(String(value)));
+    expect(urls.every((url) => url.searchParams.get("period") === "today")).toBe(true);
+    expect(urls.map((url) => url.searchParams.get("start_at_us")))
+      .toEqual(Array.from({ length: 5 }, () => expectedStart));
+  });
+
+  it("uses the dedicated asynchronous result-regeneration endpoint", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    const client = createApiClient(base, "capability", fetcher);
+
+    await expect(client.regenerateResultSummary(42)).resolves.toBeUndefined();
+    expect(fetcher).toHaveBeenCalledWith(
+      `${base}/v1/activities/42/result-summary/regenerate`,
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("accepts successful empty mutation responses", async () => {
