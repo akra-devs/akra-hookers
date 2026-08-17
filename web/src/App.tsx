@@ -43,6 +43,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const detailTriggerRef = useRef<HTMLElement | null>(null);
   const clearCanvasTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const focusCanvasAfterClearRef = useRef(false);
   const environmentClient = useMemo(() => {
     if (window.akraDesktop) return null;
     const url = import.meta.env.VITE_AKRA_URL;
@@ -71,6 +72,7 @@ export function App() {
     nodes, setNodes, edges, onNodesChange, commitNodePosition,
     selectedActivityIds, setSelectedActivityIds, assignmentDetails,
     refreshProjectContext, refreshCanvas, refreshCanvasAuthoritatively,
+    refreshAfterActivityDeletion,
     bootstrapError, retryBootstrap,
     hasOlderActivities, loadOlderActivities, loadingOlderActivities, olderActivitiesError,
   } = useDashboardData(client, activityScope, activityVisibility, activityPeriod);
@@ -135,12 +137,17 @@ export function App() {
       });
     });
   }, []);
+  useEffect(() => {
+    if (clearConfirmOpen || nodes.length > 0 || !focusCanvasAfterClearRef.current) return;
+    focusCanvasAfterClearRef.current = false;
+    focusCanvasStage();
+  }, [clearConfirmOpen, focusCanvasStage, nodes.length]);
   const confirmClearCanvas = useCallback(async () => {
     if (!await clearCanvas()) return false;
+    focusCanvasAfterClearRef.current = true;
     setClearConfirmOpen(false);
-    focusCanvasStage();
     return true;
-  }, [clearCanvas, focusCanvasStage]);
+  }, [clearCanvas]);
   const cancelClearCanvas = useCallback(() => {
     setClearConfirmOpen(false);
     requestAnimationFrame(() => clearCanvasTriggerRef.current?.focus());
@@ -441,6 +448,16 @@ export function App() {
           activityVisibility={activityVisibility}
           client={client}
           onClose={closeActivity}
+          onDeleted={(activityId) => {
+            setDetailActivityId(null);
+            void refreshAfterActivityDeletion(activityId)
+              .then(focusCanvasStage)
+              .catch((cause) => setError(
+                cause instanceof Error
+                  ? cause.message
+                  : "삭제된 활동 목록을 새로고침하지 못했습니다.",
+              ));
+          }}
           onSelectActivity={openActivity}
         />
       )}
