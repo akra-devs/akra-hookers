@@ -1,5 +1,5 @@
 use akra_core::ingress::ActivityKind;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 pub struct ActivitySummary {
@@ -15,13 +15,13 @@ pub struct ActivitySummary {
     pub prompt_summary: ActivityPromptSummary,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ActivityProjectSummary {
     pub id: i64,
     pub name: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ActivityTimeSummary {
     pub value: Option<String>,
     pub provenance: ActivityTimeProvenance,
@@ -159,6 +159,83 @@ pub struct CanvasEdgeSummary {
     pub id: i64,
     pub source_node_id: i64,
     pub target_node_id: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurationLogState {
+    Unreviewed,
+    Excluded,
+    Organized,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CurationLogSummary {
+    pub id: i64,
+    pub project: ActivityProjectSummary,
+    pub time: ActivityTimeSummary,
+    pub prompt: String,
+    pub prompt_summary: ActivityPromptSummary,
+    pub result_summary: ActivityResultSummary,
+    pub state: CurationLogState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WorkLogSummary {
+    pub id: i64,
+    pub time: ActivityTimeSummary,
+    pub prompt: String,
+    pub prompt_summary: ActivityPromptSummary,
+    pub result_summary: ActivityResultSummary,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct WorkItemSummary {
+    pub id: i64,
+    pub project: ActivityProjectSummary,
+    pub title: String,
+    pub log_count: i64,
+    pub position_x: f64,
+    pub position_y: f64,
+    pub updated_at_us: i64,
+    pub preview_logs: Vec<WorkLogSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct WorkItemDetail {
+    #[serde(flatten)]
+    pub summary: WorkItemSummary,
+    pub logs: Vec<WorkLogSummary>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WorkEdgeSummary {
+    pub id: i64,
+    pub source_work_item_id: i64,
+    pub target_work_item_id: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CurationProposalGroup {
+    pub target_work_id: Option<i64>,
+    pub title: String,
+    pub log_ids: Vec<i64>,
+    pub confidence: u8,
+    pub uncertain: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CurationProposal {
+    pub id: i64,
+    pub project_id: i64,
+    pub groups: Vec<CurationProposalGroup>,
+    pub model: String,
+    pub cached: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CurationApplyResult {
+    pub work_ids: Vec<i64>,
 }
 
 #[derive(Debug, Serialize)]

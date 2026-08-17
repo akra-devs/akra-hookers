@@ -13,6 +13,7 @@ mod http_error;
 mod http_origins;
 mod http_projects;
 mod http_providers;
+mod http_work;
 pub mod paths;
 pub mod recovery;
 pub mod spool;

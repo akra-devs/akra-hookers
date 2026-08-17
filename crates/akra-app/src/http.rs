@@ -32,6 +32,11 @@ use crate::{
         configure_collector, configure_prompt_summaries, provider, toggle_provider,
         toggle_provider_target, verify_collector,
     },
+    http_work::{
+        apply_proposal, create_proposal, create_work_edge, curation_logs, delete_curation_log,
+        delete_work_edge, delete_work_item, remove_work_log, update_curation_log, update_work_item,
+        work_edges, work_item, work_items, work_revision,
+    },
 };
 
 #[derive(Deserialize)]
@@ -166,6 +171,33 @@ fn router(token: &'static str, state: AppState) -> Router {
         .route(
             "/v1/activities/{activity_id}",
             get(activity_detail).delete(delete_activity),
+        )
+        .route("/v1/curation/logs", get(curation_logs))
+        .route(
+            "/v1/curation/logs/{activity_id}",
+            axum::routing::patch(update_curation_log).delete(delete_curation_log),
+        )
+        .route("/v1/curation/proposals", post(create_proposal))
+        .route(
+            "/v1/curation/proposals/{proposal_id}/apply",
+            post(apply_proposal),
+        )
+        .route("/v1/work-items", get(work_items))
+        .route("/v1/work-items/revision", get(work_revision))
+        .route(
+            "/v1/work-items/edges",
+            get(work_edges).post(create_work_edge),
+        )
+        .route("/v1/work-items/edges/{edge_id}", delete(delete_work_edge))
+        .route(
+            "/v1/work-items/{work_id}",
+            get(work_item)
+                .patch(update_work_item)
+                .delete(delete_work_item),
+        )
+        .route(
+            "/v1/work-items/{work_id}/logs/{activity_id}",
+            delete(remove_work_log),
         )
         .route("/v1/activity-assignments", post(assign_activities))
         .route("/v1/canvas", get(canvas).delete(clear_canvas))

@@ -7,6 +7,11 @@ import type {
   ApiErrorBody,
   CanvasEdge,
   CanvasNode,
+  CurationApplyResult,
+  CurationLog,
+  CurationLogState,
+  CurationProposal,
+  CurationProposalGroup,
   CodexCaptureTarget,
   CodexCaptureClient,
   CollectorIntegration,
@@ -14,6 +19,9 @@ import type {
   OriginSummary,
   ProjectSummary,
   ProviderIntegration,
+  WorkEdge,
+  WorkItem,
+  WorkItemDetail,
 } from "./api-contracts";
 
 export type {
@@ -32,6 +40,11 @@ export type {
   ApiErrorBody,
   CanvasEdge,
   CanvasNode,
+  CurationApplyResult,
+  CurationLog,
+  CurationLogState,
+  CurationProposal,
+  CurationProposalGroup,
   CodexCaptureTarget,
   CodexCaptureClient,
   CollectorIntegration,
@@ -44,6 +57,10 @@ export type {
   PromptSummaryStatus,
   ProviderIntegration,
   ResultSummaryStatus,
+  WorkEdge,
+  WorkItem,
+  WorkItemDetail,
+  WorkLog,
 } from "./api-contracts";
 
 export class ApiError extends Error {
@@ -110,6 +127,26 @@ export type ApiClient = {
   deleteCanvasEdge(edgeId: number): Promise<void>;
   edges(): Promise<CanvasEdge[]>;
   updateCanvasPosition(nodeId: number, position: { x: number; y: number }): Promise<void>;
+  curationLogs(projectId: number, state?: CurationLogState | "all"): Promise<CurationLog[]>;
+  setCurationLogExcluded(activityId: number, excluded: boolean): Promise<void>;
+  deleteCurationLog(activityId: number): Promise<void>;
+  createCurationProposal(projectId: number, activityIds: number[]): Promise<CurationProposal>;
+  applyCurationProposal(
+    proposalId: number,
+    groups: CurationProposalGroup[],
+  ): Promise<CurationApplyResult>;
+  workItems(projectId?: number): Promise<WorkItem[]>;
+  workItem(workId: number): Promise<WorkItemDetail>;
+  workRevision(): Promise<number>;
+  updateWork(
+    workId: number,
+    update: { title?: string; position_x?: number; position_y?: number },
+  ): Promise<void>;
+  deleteWork(workId: number): Promise<void>;
+  removeWorkLog(workId: number, activityId: number): Promise<void>;
+  workEdges(projectId?: number): Promise<WorkEdge[]>;
+  createWorkEdge(sourceWorkId: number, targetWorkId: number): Promise<void>;
+  deleteWorkEdge(edgeId: number): Promise<void>;
   setProviderEnabled(provider: string, enabled: boolean): Promise<void>;
   setPromptSummaryMode(mode: "off" | "smart"): Promise<void>;
   setProviderTargetEnabled(provider: string, targetId: string, enabled: boolean): Promise<void>;
@@ -199,6 +236,52 @@ export function createApiClient(
         position_x: position.x,
         position_y: position.y,
       }),
+    curationLogs: (projectId, state = "unreviewed") =>
+      request<CurationLog[]>(
+        `/v1/curation/logs?project_id=${encodeURIComponent(projectId)}&state=${encodeURIComponent(state)}&limit=200`,
+      ),
+    setCurationLogExcluded: (activityId, excluded) =>
+      request<void>(`/v1/curation/logs/${activityId}`, "PATCH", { excluded }),
+    deleteCurationLog: (activityId) =>
+      request<void>(`/v1/curation/logs/${activityId}`, "DELETE"),
+    createCurationProposal: (projectId, activityIds) =>
+      request<CurationProposal>("/v1/curation/proposals", "POST", {
+        project_id: projectId,
+        activity_ids: activityIds,
+      }),
+    applyCurationProposal: (proposalId, groups) =>
+      request<CurationApplyResult>(
+        `/v1/curation/proposals/${proposalId}/apply`,
+        "POST",
+        { groups },
+      ),
+    workItems: (projectId) => request<WorkItem[]>(
+      projectId === undefined
+        ? "/v1/work-items"
+        : `/v1/work-items?project_id=${encodeURIComponent(projectId)}`,
+    ),
+    workItem: (workId) => request<WorkItemDetail>(`/v1/work-items/${workId}`),
+    workRevision: async () => {
+      const result = await request<{ revision: number }>("/v1/work-items/revision");
+      return result.revision;
+    },
+    updateWork: (workId, update) =>
+      request<void>(`/v1/work-items/${workId}`, "PATCH", update),
+    deleteWork: (workId) => request<void>(`/v1/work-items/${workId}`, "DELETE"),
+    removeWorkLog: (workId, activityId) =>
+      request<void>(`/v1/work-items/${workId}/logs/${activityId}`, "DELETE"),
+    workEdges: (projectId) => request<WorkEdge[]>(
+      projectId === undefined
+        ? "/v1/work-items/edges"
+        : `/v1/work-items/edges?project_id=${encodeURIComponent(projectId)}`,
+    ),
+    createWorkEdge: (sourceWorkId, targetWorkId) =>
+      request<void>("/v1/work-items/edges", "POST", {
+        source_work_item_id: sourceWorkId,
+        target_work_item_id: targetWorkId,
+      }),
+    deleteWorkEdge: (edgeId) =>
+      request<void>(`/v1/work-items/edges/${edgeId}`, "DELETE"),
     setProviderEnabled: (provider, enabled) =>
       request<void>(`/v1/providers/${encodeURIComponent(provider)}`, "PATCH", { enabled }),
     setPromptSummaryMode: (mode) =>

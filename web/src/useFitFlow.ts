@@ -4,6 +4,7 @@ import type { Edge, Node, ReactFlowInstance } from "@xyflow/react";
 export function useFitFlow<NodeType extends Node, EdgeType extends Edge>(
   flow: ReactFlowInstance<NodeType, EdgeType> | null,
   fitKey: string,
+  maxZoom?: number,
 ) {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
 
@@ -16,7 +17,7 @@ export function useFitFlow<NodeType extends Node, EdgeType extends Edge>(
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         frame = 0;
-        void flow.fitView({ padding: 0.12, minZoom: 0.64 });
+        void flow.fitView({ padding: 0.12, minZoom: 0.64, maxZoom });
       });
     };
     const onResize = () => {
@@ -53,7 +54,7 @@ export function useFitFlow<NodeType extends Node, EdgeType extends Edge>(
       window.removeEventListener("pointercancel", onPointerEnd, true);
       cancelAnimationFrame(frame);
     };
-  }, [element, fitKey, flow]);
+  }, [element, fitKey, flow, maxZoom]);
 
   return setElement;
 }

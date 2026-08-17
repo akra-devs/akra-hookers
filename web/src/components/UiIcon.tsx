@@ -6,10 +6,13 @@ type IconName =
   | "folder"
   | "inbox"
   | "location"
+  | "logs"
   | "plus"
   | "settings"
   | "terminal"
-  | "trash";
+  | "trash"
+  | "work"
+  | "spark";
 
 type UiIconProps = {
   name: IconName;
@@ -46,6 +49,8 @@ export function UiIcon({ name, size = 18, className }: UiIconProps) {
       return <svg {...common}><path d="M3 6.5h7l2 2h9v10H3v-12Z" /></svg>;
     case "location":
       return <svg {...common}><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z" /><circle cx="12" cy="10" r="2.5" /></svg>;
+    case "logs":
+      return <svg {...common}><path d="M6 5h14M6 12h14M6 19h14" /><circle cx="3" cy="5" r="1" /><circle cx="3" cy="12" r="1" /><circle cx="3" cy="19" r="1" /></svg>;
     case "plus":
       return <svg {...common}><path d="M12 5v14M5 12h14" /></svg>;
     case "settings":
@@ -54,5 +59,9 @@ export function UiIcon({ name, size = 18, className }: UiIconProps) {
       return <svg {...common}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3m6 0h4" /></svg>;
     case "trash":
       return <svg {...common}><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></svg>;
+    case "work":
+      return <svg {...common}><path d="M4 7h16v12H4zM9 7V4h6v3M4 12h16M10 12v2h4v-2" /></svg>;
+    case "spark":
+      return <svg {...common}><path d="m12 2 1.5 5.5L19 9l-5.5 1.5L12 16l-1.5-5.5L5 9l5.5-1.5L12 2Z" /><path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z" /></svg>;
   }
 }

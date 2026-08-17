@@ -18,6 +18,7 @@ mod ingest;
 mod migration;
 mod migration_v10;
 mod migration_v11;
+mod migration_v12;
 mod migration_v2;
 mod migration_v3;
 mod migration_v4;
@@ -35,6 +36,7 @@ mod prompt_summaries;
 mod providers;
 mod result_summaries;
 mod routing;
+mod work_curation;
 
 pub use activities::{ActivityKindFilter, ActivityOrder, ActivityScope, ActivityTimeRange};
 pub use activity_assignments::{
@@ -47,8 +49,10 @@ pub use models::{
     ActivityConversationTurn, ActivityDetail, ActivityOriginDetail, ActivityProjectSummary,
     ActivityPromptSummary, ActivityResultSummary, ActivitySummary, ActivityTechnicalDetail,
     ActivityTimeProvenance, ActivityTimeSummary, CanvasEdgeSummary, CanvasNodeSummary,
-    OriginSummary, ProjectSummary, PromptSummaryMode, PromptSummaryStatus, ProviderIntegration,
-    ResultSummaryStatus,
+    CurationApplyResult, CurationLogState, CurationLogSummary, CurationProposal,
+    CurationProposalGroup, OriginSummary, ProjectSummary, PromptSummaryMode, PromptSummaryStatus,
+    ProviderIntegration, ResultSummaryStatus, WorkEdgeSummary, WorkItemDetail, WorkItemSummary,
+    WorkLogSummary,
 };
 pub use origin_transitions::{OriginRoutingCommand, OriginRoutingMode, ProjectDestination};
 pub use project_names::{ProjectName, ProjectNameError, ProjectNames};
@@ -63,6 +67,10 @@ pub use result_summaries::{
     RESULT_SUMMARY_MODEL, RecordResult, ResultCaptureOutcome, ResultSummary, ResultSummaryClaim,
     ResultSummaryFailureDisposition, ResultSummaryLines, ResultSummaryState,
     ResultSummaryValidationError,
+};
+pub use work_curation::{
+    CURATION_MODEL, CurationLogFilter, CurationModelInput, CurationModelLog, CurationModelWork,
+    CurationPreparation, MAX_CURATION_CANDIDATES, MAX_CURATION_LOGS, MAX_WORK_TITLE_CHARS,
 };
 
 #[derive(Debug)]
@@ -106,10 +114,18 @@ pub enum StoreError {
     OriginNotFound(i64),
     #[error("activity not found: {0}")]
     ActivityNotFound(i64),
+    #[error("work not found: {0}")]
+    WorkNotFound(i64),
+    #[error("work edge not found: {0}")]
+    WorkEdgeNotFound(i64),
+    #[error("curation proposal not found: {0}")]
+    CurationProposalNotFound(i64),
     #[error("invalid origin transition: {0}")]
     InvalidOriginTransition(String),
     #[error("invalid activity assignment: {0}")]
     InvalidActivityAssignment(String),
+    #[error("invalid work curation: {0}")]
+    InvalidCuration(String),
     #[error("a project cannot be merged into itself")]
     SameProjectMerge,
     #[error("store invariant violated: {0}")]

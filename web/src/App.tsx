@@ -14,11 +14,16 @@ import { ActivityCanvas } from "./components/ActivityCanvas";
 import { ActivityDetailPanel } from "./components/ActivityDetailPanel";
 import { ActivityNode } from "./components/ActivityNode";
 import { ClearCanvasDialog } from "./components/ClearCanvasDialog";
+import { CurationWorkspace } from "./components/CurationWorkspace";
 import { OriginSetupDialog } from "./components/OriginSetupDialog";
 import { ProjectDialog } from "./components/ProjectDialog";
 import { ProjectRail, type ProjectFilter } from "./components/ProjectRail";
+import { ProjectMemoryCanvas } from "./components/ProjectMemoryCanvas";
+import { UiIcon } from "./components/UiIcon";
+import { WorkDetailPanel } from "./components/WorkDetailPanel";
 import type { CollectorOperation } from "./components/CollectorEndpointControl";
 import { useDashboardData } from "./hooks/useDashboardData";
+import { useWorkMemoryData } from "./hooks/useWorkMemoryData";
 import "./desktop";
 const nodeTypes = { activity: ActivityNode } satisfies NodeTypes;
 export function App() {
@@ -39,11 +44,15 @@ export function App() {
   const [projectDialog, setProjectDialog] = useState<"new" | number | null>(null);
   const [originDialog, setOriginDialog] = useState<number | null>(null);
   const [detailActivityId, setDetailActivityId] = useState<number | null>(null);
+  const [detailWorkId, setDetailWorkId] = useState<number | null>(null);
+  const [canvasMode, setCanvasMode] = useState<"activity" | "memory">("activity");
+  const [curationProjectId, setCurationProjectId] = useState<number | null>(null);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const detailTriggerRef = useRef<HTMLElement | null>(null);
   const clearCanvasTriggerRef = useRef<HTMLButtonElement | null>(null);
   const focusCanvasAfterClearRef = useRef(false);
+  const curationTriggerRef = useRef<HTMLButtonElement | null>(null);
   const environmentClient = useMemo(() => {
     if (window.akraDesktop) return null;
     const url = import.meta.env.VITE_AKRA_URL;
@@ -67,6 +76,9 @@ export function App() {
     : filter === "inbox"
       ? { scope: "inbox" } as const
       : { scope: "project", projectId: Number(filter.slice("project:".length)) } as const;
+  const filteredProjectId = filter.startsWith("project:")
+    ? Number(filter.slice("project:".length))
+    : undefined;
   const {
     activities, allCount, inboxCount, projects, origins, provider, canvas,
     nodes, setNodes, edges, onNodesChange, commitNodePosition,
@@ -76,6 +88,7 @@ export function App() {
     bootstrapError, retryBootstrap,
     hasOlderActivities, loadOlderActivities, loadingOlderActivities, olderActivitiesError,
   } = useDashboardData(client, activityScope, activityVisibility, activityPeriod);
+  const workMemory = useWorkMemoryData(client, filteredProjectId);
   useEffect(() => {
     saveActivityVisibility(activityVisibility);
   }, [activityVisibility]);
@@ -94,6 +107,15 @@ export function App() {
       setDetailActivityId(null);
     }
   }, [detailActivityId, nodes]);
+  useEffect(() => {
+    if (
+      detailWorkId !== null
+      && workMemory.works.data !== undefined
+      && workMemory.works.data.every(({ id }) => id !== detailWorkId)
+    ) {
+      setDetailWorkId(null);
+    }
+  }, [detailWorkId, workMemory.works.data]);
   const changeSelection = useCallback((selection: { nodes: Node<ActivityNodeData>[] }) => {
     const selected = selection.nodes.map(({ data }) => data.activityId);
     setSelectedActivityIds((current) =>
@@ -121,11 +143,43 @@ export function App() {
       `[data-testid="activity-node-${activityId}"]`,
     );
     detailTriggerRef.current = content?.closest<HTMLElement>(".react-flow__node") ?? null;
+    setCanvasMode("activity");
+    setDetailWorkId(null);
     setDetailActivityId(activityId);
   }, []);
   const closeActivity = useCallback(() => {
     setDetailActivityId(null);
     requestAnimationFrame(() => detailTriggerRef.current?.focus());
+  }, []);
+  const openWork = useCallback((workId: number) => {
+    detailTriggerRef.current = document
+      .querySelector<HTMLElement>(`[data-testid="work-node-${workId}"]`)
+      ?.closest<HTMLElement>(".react-flow__node") ?? null;
+    setCanvasMode("memory");
+    setDetailActivityId(null);
+    setDetailWorkId(workId);
+  }, []);
+  const closeWork = useCallback(() => {
+    setDetailWorkId(null);
+    requestAnimationFrame(() => detailTriggerRef.current?.focus());
+  }, []);
+  const closeCuration = useCallback(() => {
+    setCurationProjectId(null);
+    requestAnimationFrame(() => curationTriggerRef.current?.focus());
+  }, []);
+  const finishCuration = useCallback((workIds: number[]) => {
+    setCurationProjectId(null);
+    setCanvasMode("memory");
+    const firstWorkId = workIds[0];
+    if (firstWorkId === undefined) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document
+          .querySelector<HTMLElement>(`[data-testid="work-node-${firstWorkId}"]`)
+          ?.closest<HTMLElement>(".react-flow__node")
+          ?.focus();
+      });
+    });
   }, []);
   const focusCanvasStage = useCallback(() => {
     // React Flow can restore its own viewport focus on the same frame as an
@@ -290,15 +344,18 @@ export function App() {
     assignmentDetails,
     origins.data ?? [],
   );
-  const selectedProjectId = assignmentDetails?.[0]?.project?.id;
-  const currentProjectId = selectedProjectId !== undefined
-    && assignmentDetails?.every(({ project }) => project?.id === selectedProjectId)
-    ? selectedProjectId
+  const assignedProjectId = assignmentDetails?.[0]?.project?.id;
+  const currentProjectId = assignedProjectId !== undefined
+    && assignmentDetails?.every(({ project }) => project?.id === assignedProjectId)
+    ? assignedProjectId
     : null;
   const canvasDataIsReady = !bootstrapError
     && activities.data !== undefined
     && canvas.data !== undefined;
   const showCanvasEmptyState = canvasDataIsReady && nodes.length === 0;
+  const curationProject = curationProjectId === null
+    ? undefined
+    : currentProjects.find((project) => project.id === curationProjectId);
   const currentOrigins = origins.data ?? [];
   const currentTargets = provider.data?.targets ?? [];
   const currentCollector = provider.data?.collector ?? {
@@ -317,7 +374,11 @@ export function App() {
     target?.focus({ preventScroll: true });
   };
   return (
-    <main className={detailActivityId === null ? "app-shell" : "app-shell app-shell--detail"}>
+    <main className={
+      detailActivityId === null && detailWorkId === null
+        ? "app-shell"
+        : "app-shell app-shell--detail"
+    }>
       <AppCommandBar
         filter={filter}
         projects={visibleProjects}
@@ -364,59 +425,155 @@ export function App() {
       <section className="canvas-panel">
         <header className="canvas-toolbar">
           <div className="canvas-context">
-            <span>Project activity</span>
-            <strong>{nodes.length} activities</strong>
+            <span>{curationProject ? "Log curation" : canvasMode === "memory" ? "Project memory" : "Project activity"}</span>
+            <strong>
+              {curationProject
+                ? curationProject.name
+                : canvasMode === "memory"
+                  ? `${workMemory.works.data?.length ?? 0} works`
+                  : `${nodes.length} activities`}
+            </strong>
           </div>
           <div className="canvas-header-actions">
-            {hasOlderActivities && (
-              <button
-                type="button"
-                disabled={loadingOlderActivities}
-                onClick={() => void loadOlderActivities()}
-              >
-                {loadingOlderActivities ? "불러오는 중…" : "이전 활동 불러오기"}
-              </button>
-            )}
-            {nodes.length > 0 && (
-              <button
-                ref={clearCanvasTriggerRef}
-                className="canvas-clear"
-                type="button"
-                onClick={() => setClearConfirmOpen(true)}
-              >
-                Clear canvas
-              </button>
+            {!curationProject && (
+              <>
+                <div className="canvas-mode-switch" role="group" aria-label="캔버스 보기">
+                  <button
+                    type="button"
+                    aria-pressed={canvasMode === "activity"}
+                    className={canvasMode === "activity" ? "is-active" : undefined}
+                    onClick={() => {
+                      setCanvasMode("activity");
+                      setDetailWorkId(null);
+                    }}
+                  >
+                    활동 로그
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={canvasMode === "memory"}
+                    className={canvasMode === "memory" ? "is-active" : undefined}
+                    onClick={() => {
+                      setCanvasMode("memory");
+                      setDetailActivityId(null);
+                    }}
+                  >
+                    작업 지도
+                  </button>
+                </div>
+                <button
+                  ref={curationTriggerRef}
+                  type="button"
+                  className="curation-launch"
+                  disabled={filteredProjectId === undefined}
+                  title={filteredProjectId === undefined ? "프로젝트를 먼저 선택하세요" : undefined}
+                  onClick={() => {
+                    if (filteredProjectId !== undefined) {
+                      setDetailActivityId(null);
+                      setDetailWorkId(null);
+                      setCurationProjectId(filteredProjectId);
+                    }
+                  }}
+                >
+                  로그 정리
+                </button>
+                {canvasMode === "activity" && hasOlderActivities && (
+                  <button
+                    type="button"
+                    disabled={loadingOlderActivities}
+                    onClick={() => void loadOlderActivities()}
+                  >
+                    {loadingOlderActivities ? "불러오는 중…" : "이전 활동 불러오기"}
+                  </button>
+                )}
+                {canvasMode === "activity" && nodes.length > 0 && (
+                  <button
+                    ref={clearCanvasTriggerRef}
+                    className="canvas-clear"
+                    type="button"
+                    onClick={() => setClearConfirmOpen(true)}
+                  >
+                    Clear canvas
+                  </button>
+                )}
+              </>
             )}
           </div>
         </header>
-        {bootstrapError && (
-          <div className="dashboard-error" role="alert">
-            <span>대시보드 데이터를 불러오지 못했습니다.</span>
-            <button type="button" onClick={() => void retryBootstrap()}>
-              다시 시도
-            </button>
-          </div>
-        )}
-        {olderActivitiesError && (
-          <p className="dashboard-error" role="alert">{olderActivitiesError}</p>
-        )}
-        <ActivityCanvas
-          client={client} canvasNodes={canvas.data ?? []}
-          nodes={nodes} setNodes={setNodes} edges={edges} nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange} onPositionCommit={commitNodePosition}
-          onActivityOpen={openActivity} onError={setError}
-          onPersistedChange={refreshCanvas}
-          onAuthoritativeRefresh={refreshCanvasAuthoritatively}
-          onSelectionChange={changeSelection}
-        />
-        {showCanvasEmptyState && (
-          <div className="empty-state">
-            <strong>No activity on this canvas</strong>
-            <span>Enable Codex capture and submit a prompt to add your first activity.</span>
-          </div>
+        {curationProject && client ? (
+          <CurationWorkspace
+            client={client}
+            project={curationProject}
+            onCancel={closeCuration}
+            onApplied={async () => {
+              setCanvasMode("memory");
+              await Promise.all([workMemory.refresh(), refreshProjectContext()]);
+            }}
+            onFinish={finishCuration}
+          />
+        ) : canvasMode === "activity" ? (
+          <>
+            {bootstrapError && (
+              <div className="dashboard-error" role="alert">
+                <span>대시보드 데이터를 불러오지 못했습니다.</span>
+                <button type="button" onClick={() => void retryBootstrap()}>
+                  다시 시도
+                </button>
+              </div>
+            )}
+            {olderActivitiesError && (
+              <p className="dashboard-error" role="alert">{olderActivitiesError}</p>
+            )}
+            <ActivityCanvas
+              client={client} canvasNodes={canvas.data ?? []}
+              nodes={nodes} setNodes={setNodes} edges={edges} nodeTypes={nodeTypes}
+              onNodesChange={onNodesChange} onPositionCommit={commitNodePosition}
+              onActivityOpen={openActivity} onError={setError}
+              onPersistedChange={refreshCanvas}
+              onAuthoritativeRefresh={refreshCanvasAuthoritatively}
+              onSelectionChange={changeSelection}
+            />
+            {showCanvasEmptyState && (
+              <div className="empty-state">
+                <strong>No activity on this canvas</strong>
+                <span>Enable Codex capture and submit a prompt to add your first activity.</span>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {workMemory.isError && (
+              <div className="dashboard-error" role="alert">
+                <span>작업 지도를 불러오지 못했습니다.</span>
+                <button type="button" onClick={() => void workMemory.refresh()}>다시 시도</button>
+              </div>
+            )}
+            {client && workMemory.isReady && (
+              <ProjectMemoryCanvas
+                client={client}
+                works={workMemory.works.data ?? []}
+                persistedEdges={workMemory.edges.data ?? []}
+                onOpenWork={openWork}
+                onRefresh={workMemory.refresh}
+                onError={setError}
+              />
+            )}
+            {workMemory.isReady && (workMemory.works.data?.length ?? 0) === 0 && (
+              <div className="empty-state work-memory-empty">
+                <UiIcon name="work" size={24} />
+                <strong>아직 확정된 작업이 없습니다.</strong>
+                <span>프로젝트를 선택하고 로그 정리를 시작해 작업 단위를 만드세요.</span>
+                {filteredProjectId !== undefined && (
+                  <button type="button" onClick={() => setCurationProjectId(filteredProjectId)}>
+                    첫 로그 정리 시작
+                  </button>
+                )}
+              </div>
+            )}
+          </>
         )}
         {error && <p className="error-message" role="alert">{error}</p>}
-        {client && (
+        {client && canvasMode === "activity" && curationProject === undefined && (
           <ActivityAssignmentBar
             key={assignmentSelection.state === "assignable"
               ? assignmentSelection.activityIds.join(":")
@@ -459,6 +616,16 @@ export function App() {
               ));
           }}
           onSelectActivity={openActivity}
+        />
+      )}
+      {client && detailWorkId !== null && (
+        <WorkDetailPanel
+          key={detailWorkId}
+          client={client}
+          workId={detailWorkId}
+          onClose={closeWork}
+          onOpenActivity={openActivity}
+          onChanged={workMemory.refresh}
         />
       )}
       {clearConfirmOpen && (

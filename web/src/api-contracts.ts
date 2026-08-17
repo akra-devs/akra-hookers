@@ -156,6 +156,67 @@ export type CanvasEdge = {
   target_node_id: number;
 };
 
+export type CurationLogState = "unreviewed" | "excluded" | "organized";
+
+export type CurationLog = {
+  id: number;
+  project: ActivityProject;
+  time: ActivityTime;
+  prompt: string;
+  prompt_summary: ActivityPromptSummary;
+  result_summary: ActivityResultSummary;
+  state: CurationLogState;
+};
+
+export type WorkLog = {
+  id: number;
+  time: ActivityTime;
+  prompt: string;
+  prompt_summary: ActivityPromptSummary;
+  result_summary: ActivityResultSummary;
+};
+
+export type WorkItem = {
+  id: number;
+  project: ActivityProject;
+  title: string;
+  log_count: number;
+  position_x: number;
+  position_y: number;
+  updated_at_us: number;
+  preview_logs: WorkLog[];
+};
+
+export type WorkItemDetail = WorkItem & {
+  logs: WorkLog[];
+};
+
+export type WorkEdge = {
+  id: number;
+  source_work_item_id: number;
+  target_work_item_id: number;
+};
+
+export type CurationProposalGroup = {
+  target_work_id: number | null;
+  title: string;
+  log_ids: number[];
+  confidence: number;
+  uncertain: boolean;
+};
+
+export type CurationProposal = {
+  id: number;
+  project_id: number;
+  groups: CurationProposalGroup[];
+  model: string;
+  cached: boolean;
+};
+
+export type CurationApplyResult = {
+  work_ids: number[];
+};
+
 export type ActivityScope =
   | { scope: "all" }
   | { scope: "inbox" }

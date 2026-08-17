@@ -1,6 +1,12 @@
 import type { Page, Route } from "@playwright/test";
 
-import type { ActivityAssignmentRequest, OriginRoutingRequest } from "../../src/api";
+import type {
+  ActivityAssignmentRequest,
+  CurationLog,
+  CurationProposalGroup,
+  OriginRoutingRequest,
+  WorkLog,
+} from "../../src/api";
 import { FixtureModel } from "./model";
 import { createFixtureState, type FixtureState } from "./state";
 
@@ -207,6 +213,171 @@ export class FixtureApi {
       node.position_x = numeric(body, "position_x");
       node.position_y = numeric(body, "position_y");
       this.canvasRevision += 1;
+      return { status: 204 };
+    }
+    if (path === "/v1/curation/logs" && method === "GET") {
+      const projectId = Number(url.searchParams.get("project_id"));
+      const state = url.searchParams.get("state") ?? "unreviewed";
+      return {
+        status: 200,
+        body: this.state.curationLogs.filter((log) =>
+          log.project.id === projectId && (state === "all" || log.state === state)),
+      };
+    }
+    const curationLogId = match(path, /^\/v1\/curation\/logs\/(\d+)$/);
+    if (curationLogId !== null && method === "PATCH") {
+      const log = required(this.state.curationLogs.find(({ id }) => id === curationLogId));
+      log.state = boolean(body, "excluded") ? "excluded" : "unreviewed";
+      return { status: 204 };
+    }
+    if (curationLogId !== null && method === "DELETE") {
+      this.state.curationLogs = this.state.curationLogs.filter(({ id }) => id !== curationLogId);
+      this.state.activities = this.state.activities.filter(({ id }) => id !== curationLogId);
+      delete this.state.details[curationLogId];
+      return { status: 204 };
+    }
+    if (path === "/v1/curation/proposals" && method === "POST") {
+      const projectId = numeric(body, "project_id");
+      const activityIds = numericArray(body, "activity_ids");
+      const proposalId = this.state.nextProposalId++;
+      const existing = this.state.workItems.find(({ project }) => project.id === projectId);
+      const proposal = {
+        id: proposalId,
+        project_id: projectId,
+        groups: [{
+          target_work_id: existing?.id ?? null,
+          title: existing?.title ?? "선택한 로그에서 만든 작업",
+          log_ids: activityIds,
+          confidence: 86,
+          uncertain: false,
+        }],
+        model: "gpt-5.3-codex-spark",
+        cached: false,
+      };
+      this.state.curationProposals[proposalId] = proposal;
+      return { status: 200, body: proposal };
+    }
+    const applyProposalId = match(path, /^\/v1\/curation\/proposals\/(\d+)\/apply$/);
+    if (applyProposalId !== null && method === "POST") {
+      const proposal = required(this.state.curationProposals[applyProposalId]);
+      const groups = record(body).groups;
+      if (!Array.isArray(groups)) throw new Error("Fixture proposal groups must be an array");
+      const workIds: number[] = [];
+      for (const rawGroup of groups) {
+        const group = rawGroup as CurationProposalGroup;
+        const logs = group.log_ids.map((id) => required(
+          this.state.curationLogs.find((log) => log.id === id),
+        ));
+        let work = group.target_work_id === null
+          ? undefined
+          : this.state.workItems.find(({ id }) => id === group.target_work_id);
+        if (!work) {
+          const id = this.state.nextWorkId++;
+          const project = required(this.state.projects.find(({ id: candidate }) => candidate === proposal.project_id));
+          work = {
+            id,
+            project: { id: project.id, name: project.name },
+            title: group.title,
+            log_count: 0,
+            position_x: 80 + (id - 1) * 360,
+            position_y: 120,
+            updated_at_us: Date.now() * 1_000,
+            preview_logs: [],
+            logs: [],
+          };
+          this.state.workItems.push(work);
+        }
+        work.title = group.title;
+        work.logs = [
+          ...work.logs.filter((log) => !group.log_ids.includes(log.id)),
+          ...logs.map(toWorkLog),
+        ];
+        work.log_count = work.logs.length;
+        work.preview_logs = work.logs.slice(0, 2);
+        work.updated_at_us = Date.now() * 1_000;
+        for (const log of logs) log.state = "organized";
+        workIds.push(work.id);
+      }
+      this.state.workRevision += 1;
+      return { status: 200, body: { work_ids: workIds } };
+    }
+    if (path === "/v1/work-items/revision" && method === "GET") {
+      return { status: 200, body: { revision: this.state.workRevision } };
+    }
+    if (path === "/v1/work-items" && method === "GET") {
+      const projectId = url.searchParams.get("project_id");
+      const items = projectId === null
+        ? this.state.workItems
+        : this.state.workItems.filter(({ project }) => project.id === Number(projectId));
+      return { status: 200, body: items.map(({ logs: _logs, ...summary }) => summary) };
+    }
+    if (path === "/v1/work-items/edges" && method === "GET") {
+      const projectId = url.searchParams.get("project_id");
+      const visibleIds = new Set((projectId === null
+        ? this.state.workItems
+        : this.state.workItems.filter(({ project }) => project.id === Number(projectId)))
+        .map(({ id }) => id));
+      return { status: 200, body: this.state.workEdges.filter((edge) =>
+        visibleIds.has(edge.source_work_item_id) && visibleIds.has(edge.target_work_item_id)) };
+    }
+    if (path === "/v1/work-items/edges" && method === "POST") {
+      this.state.workEdges.push({
+        id: this.state.nextWorkEdgeId++,
+        source_work_item_id: numeric(body, "source_work_item_id"),
+        target_work_item_id: numeric(body, "target_work_item_id"),
+      });
+      this.state.workRevision += 1;
+      return { status: 201 };
+    }
+    const workEdgeId = match(path, /^\/v1\/work-items\/edges\/(\d+)$/);
+    if (workEdgeId !== null && method === "DELETE") {
+      this.state.workEdges = this.state.workEdges.filter(({ id }) => id !== workEdgeId);
+      this.state.workRevision += 1;
+      return { status: 204 };
+    }
+    const workLogMatch = /^\/v1\/work-items\/(\d+)\/logs\/(\d+)$/.exec(path);
+    if (workLogMatch !== null && method === "DELETE") {
+      const workId = Number(workLogMatch[1]);
+      const activityId = Number(workLogMatch[2]);
+      const work = required(this.state.workItems.find(({ id }) => id === workId));
+      work.logs = work.logs.filter(({ id }) => id !== activityId);
+      work.log_count = work.logs.length;
+      work.preview_logs = work.logs.slice(0, 2);
+      const log = this.state.curationLogs.find(({ id }) => id === activityId);
+      if (log) log.state = "unreviewed";
+      if (work.logs.length === 0) {
+        this.state.workItems = this.state.workItems.filter(({ id }) => id !== workId);
+      }
+      this.state.workRevision += 1;
+      return { status: 204 };
+    }
+    const workId = match(path, /^\/v1\/work-items\/(\d+)$/);
+    if (workId !== null && method === "GET") {
+      const work = this.state.workItems.find(({ id }) => id === workId);
+      return work ? { status: 200, body: work } : error(404, "not_found", "Work was not found");
+    }
+    if (workId !== null && method === "PATCH") {
+      const work = required(this.state.workItems.find(({ id }) => id === workId));
+      const update = record(body);
+      if (typeof update.title === "string") work.title = update.title;
+      if (typeof update.position_x === "number") work.position_x = update.position_x;
+      if (typeof update.position_y === "number") work.position_y = update.position_y;
+      work.updated_at_us = Date.now() * 1_000;
+      this.state.workRevision += 1;
+      return { status: 204 };
+    }
+    if (workId !== null && method === "DELETE") {
+      const removed = this.state.workItems.find(({ id }) => id === workId);
+      if (removed) {
+        for (const source of removed.logs) {
+          const log = this.state.curationLogs.find(({ id }) => id === source.id);
+          if (log) log.state = "unreviewed";
+        }
+      }
+      this.state.workItems = this.state.workItems.filter(({ id }) => id !== workId);
+      this.state.workEdges = this.state.workEdges.filter((edge) =>
+        edge.source_work_item_id !== workId && edge.target_work_item_id !== workId);
+      this.state.workRevision += 1;
       return { status: 204 };
     }
     const providerTarget = /^\/v1\/providers\/([^/]+)\/targets\/([^/]+)$/.exec(path);
@@ -459,6 +630,24 @@ function optionalText(body: unknown, key: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") throw new Error(`Fixture request ${key} must be a string`);
   return value;
+}
+
+function numericArray(body: unknown, key: string): number[] {
+  const value = record(body)[key];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "number")) {
+    throw new Error(`Fixture request ${key} must be a number array`);
+  }
+  return value;
+}
+
+function toWorkLog(log: CurationLog): WorkLog {
+  return {
+    id: log.id,
+    time: log.time,
+    prompt: log.prompt,
+    prompt_summary: log.prompt_summary,
+    result_summary: log.result_summary,
+  };
 }
 
 function error(status: number, code: string, message: string): FixtureResponse {

@@ -13,17 +13,16 @@ worktrees and need to recover the intent and context behind local coding work.
 
 ## Product Purpose
 
-akra-hookers records submitted Codex prompts and their work locations locally,
-then lets the user recall, arrange, connect, inspect, and route those activity
-records on a spatial canvas. Success means a developer can understand what was
-asked, where it happened, and which project it belongs to without searching
-through multiple terminal histories.
+akra-hookers records submitted Codex prompts and their results as immutable logs,
+then lets the user curate related logs into a smaller set of confirmed work nodes.
+Success means a developer can recover both the original evidence and the meaningful
+units of work without treating every short follow-up prompt as a standalone task.
 
 ## Positioning
 
-The product combines capture-time provenance with an editable spatial work map:
-activity events remain immutable evidence while canvas placement, connections,
-project assignment, and future routing remain user-controlled organization.
+The product combines capture-time provenance with user-curated project memory:
+activity events remain evidence, AI grouping remains an inert proposal, and work
+membership, names, placement, and relationships remain user-confirmed organization.
 
 ## Operating Context
 
@@ -57,6 +56,16 @@ project assignment, and future routing remain user-controlled organization.
 - Discovers Windows and WSL Codex homes and manages the akra hook independently
   per installation without removing unrelated hooks.
 - Groups linked Git worktrees under a shared project identity.
+- Lets a user select up to 20 project logs and request one compact Spark grouping.
+  Only a prompt summary (or deterministic 96-character request preview), result
+  summary, anonymous session-group hint, and at most five locally shortlisted works
+  are sent. Full raw prompts, raw assistant output, transcripts, paths, and provider
+  session/turn IDs are excluded from this request.
+- Treats project as a candidate boundary and session as a weak signal, never as proof
+  that two logs represent one work. A proposal is inert until explicit user apply.
+- Represents confirmed work as one or more evidence logs. Work edges are user-authored
+  only; removing a work or membership returns its logs to the curation queue.
+- Separates reversible curation exclusion from confirmed activity soft deletion.
 - Supports project filtering, work-location setup and management, Inbox assignment,
   future routing, editable canvas positions, node connections, and detailed
   conversation history.
@@ -97,10 +106,11 @@ project assignment, and future routing remain user-controlled organization.
 
 ## Product Principles
 
-1. Preserve submitted activity as trustworthy local evidence.
+1. Preserve submitted activity as trustworthy evidence behind every derived work.
 2. Make cross-runtime provenance understandable without exposing technical noise
    by default.
-3. Keep organization spatial, reversible, and explicitly controlled by the user.
+3. Keep AI grouping provisional and organization spatial, reversible, and explicitly
+   controlled by the user.
 4. Prefer local resilience and safe recovery over hidden automation.
 5. Keep capture state and historical visibility clearly independent.
 
