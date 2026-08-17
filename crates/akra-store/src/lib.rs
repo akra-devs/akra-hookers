@@ -10,14 +10,12 @@ use thiserror::Error;
 
 mod activities;
 mod activity_assignments;
-mod activity_deletions;
 mod activity_details;
 mod canvas;
 mod capture_sources;
 mod ingest;
 mod migration;
 mod migration_v10;
-mod migration_v11;
 mod migration_v2;
 mod migration_v3;
 mod migration_v4;

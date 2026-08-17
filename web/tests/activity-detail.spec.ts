@@ -86,7 +86,6 @@ function syncDetails(api: FixtureApi) {
           ? detail.prompt_summary
           : activity.prompt_summary,
       };
-      detail.conversation_index = activities.findIndex(({ id }) => id === activity.id) + 1;
       detail.conversation_total = activities.length;
       detail.conversation_has_more = false;
     }
@@ -352,8 +351,7 @@ test("contextual prompt summaries replace wrapper-heavy node copy while the raw 
   await expect(card).not.toContainText("ambient-ui-state");
 
   const detailPanel = await open(page, 1);
-  await expect(detailPanel.locator(".activity-detail__selected .expandable-prompt > p"))
-    .toHaveText(summary.text);
+  await expect(detailPanel.locator(".activity-detail__selected > p")).toHaveText(summary.text);
   const rawDisclosure = detailPanel.locator(".activity-detail__raw-prompt");
   await expect(rawDisclosure).not.toHaveAttribute("open", "");
   await rawDisclosure.getByText("수집된 원문 보기", { exact: true }).click();
@@ -428,7 +426,7 @@ test("conversation history opens as a focused, expanded flow and restores focus 
   const dialog = page.getByRole("dialog", { name: "대화 흐름" });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator("#conversation-flow-description"))
-    .toContainText("오래된 기록부터 · 1/1 페이지 · 총 3개");
+    .toContainText("오래된 기록부터 · 3/3");
   await expect(dialog.locator(".activity-conversation-dialog__timeline > li")).toHaveCount(3);
   await expect(dialog.locator("[data-activity-id='2']")).toHaveAttribute("aria-current", "true");
   await expect(dialog.locator(".activity-conversation-dialog__result-lines > span"))
@@ -449,147 +447,6 @@ test("conversation history opens as a focused, expanded flow and restores focus 
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(expand).toBeFocused();
-});
-
-test("long request prompts stay at four lines until each view is expanded", async ({ page, api }) => {
-  const prompt = Array.from(
-    { length: 10 },
-    (_, index) => `요청 프롬프트 ${index + 1}번째 줄을 확인합니다.`,
-  ).join("\n");
-  api.state.activities[1]!.prompt = prompt;
-  syncDetails(api);
-  await page.goto("/");
-  const detailPanel = await open(page, 2);
-
-  const selectedPrompt = detailPanel.locator(".activity-detail__selected .expandable-prompt");
-  const selectedText = selectedPrompt.locator("p");
-  await expect(selectedPrompt.getByRole("button", { name: "더 보기" })).toBeVisible();
-  const collapsed = await selectedText.evaluate((element) => ({
-    clientHeight: element.clientHeight,
-    scrollHeight: element.scrollHeight,
-  }));
-  expect(collapsed.scrollHeight).toBeGreaterThan(collapsed.clientHeight);
-  await selectedPrompt.getByRole("button", { name: "더 보기" }).click();
-  await expect(selectedPrompt.getByRole("button", { name: "접기" }))
-    .toHaveAttribute("aria-expanded", "true");
-  expect(await selectedText.evaluate((element) => element.clientHeight))
-    .toBeGreaterThan(collapsed.clientHeight);
-
-  await detailPanel.getByRole("button", { name: "대화 기록 크게 보기" }).click();
-  const selectedTurn = page.getByRole("dialog", { name: "대화 흐름" })
-    .locator("[data-activity-id='2']");
-  const modalPrompt = selectedTurn.locator(".activity-conversation-dialog__prompt");
-  await expect(modalPrompt.getByRole("button", { name: "더 보기" })).toBeVisible();
-  await modalPrompt.getByRole("button", { name: "더 보기" }).click();
-  await expect(modalPrompt.getByRole("button", { name: "접기" }))
-    .toHaveAttribute("aria-expanded", "true");
-});
-
-test("the expanded flow opens on the selected page and supports previous and next paging", async ({
-  page,
-  api,
-}) => {
-  setConversation(api);
-  for (let id = 4; id <= 18; id += 1) {
-    const activity = structuredClone(api.state.activities[1]!);
-    activity.id = id;
-    activity.prompt = `페이지 검증 대화 ${id}`;
-    activity.time = {
-      value: `2026-08-${String(8 + Math.floor(id / 8)).padStart(2, "0")}T${String(id % 24).padStart(2, "0")}:00:00Z`,
-      provenance: "captured",
-    };
-    api.state.activities.push(activity);
-    api.state.details[id] = {
-      ...structuredClone(api.state.details[2]!),
-      id,
-      prompt: activity.prompt,
-      project: activity.project,
-    };
-    api.state.canvasNodes.push({
-      id: 100 + id,
-      activity_event_id: id,
-      position_x: 100 + id * 20,
-      position_y: 180,
-    });
-  }
-  syncDetails(api);
-  await page.goto("/");
-  const response = page.waitForResponse((candidate) =>
-    candidate.request().method() === "GET"
-    && new URL(candidate.url()).pathname === "/v1/activities/14"
-    && candidate.status() === 200,
-  );
-  await page.getByTestId("activity-node-14").dispatchEvent("click");
-  await response;
-  const detailPanel = panel(page);
-  await detailPanel.getByRole("button", { name: "대화 기록 크게 보기" }).click();
-  const dialog = page.getByRole("dialog", { name: "대화 흐름" });
-
-  await expect(dialog.locator("#conversation-flow-description"))
-    .toContainText("2/3 페이지 · 총 18개");
-  await expect(dialog.locator(".activity-conversation-dialog__timeline > li")).toHaveCount(8);
-  await expect(dialog.locator("[data-activity-id='14']")).toHaveAttribute("aria-current", "true");
-
-  await dialog.getByRole("button", { name: "이전" }).click();
-  await expect(dialog.locator("#conversation-flow-description")).toContainText("1/3 페이지");
-  await expect(dialog.locator("[data-activity-id='1']")).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "이전" })).toBeDisabled();
-
-  await dialog.getByRole("button", { name: "다음" }).click();
-  await expect(dialog.locator("#conversation-flow-description")).toContainText("2/3 페이지");
-  await dialog.getByRole("button", { name: "다음" }).click();
-  await expect(dialog.locator("#conversation-flow-description")).toContainText("3/3 페이지");
-  await expect(dialog.locator(".activity-conversation-dialog__timeline > li")).toHaveCount(2);
-  await expect(dialog.locator("[data-activity-id='18']")).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "다음" })).toBeDisabled();
-});
-
-test("an unwanted historical log is deleted from the modal after confirmation", async ({
-  page,
-  api,
-}) => {
-  setConversation(api);
-  await page.goto("/");
-  const detailPanel = await open(page, 2);
-  await detailPanel.getByRole("button", { name: "대화 기록 크게 보기" }).click();
-  const flow = page.getByRole("dialog", { name: "대화 흐름" });
-  const deleted = page.waitForResponse((candidate) =>
-    candidate.request().method() === "DELETE"
-    && new URL(candidate.url()).pathname === "/v1/activities/1"
-    && candidate.status() === 204,
-  );
-  await flow.locator("[data-activity-id='1']")
-    .getByRole("button", { name: "활동 기록 1 삭제" }).click();
-  const confirmation = page.getByRole("alertdialog", { name: "활동 기록을 삭제할까요?" });
-  await expect(confirmation).toContainText("활동 목록, 대화 흐름, Canvas에서 사라집니다");
-  await confirmation.getByRole("button", { name: "기록 삭제" }).click();
-  await deleted;
-
-  await expect(confirmation).toHaveCount(0);
-  await expect(flow).toBeVisible();
-  await expect(flow.locator("[data-activity-id='1']")).toHaveCount(0);
-  await expect(flow.locator("#conversation-flow-description")).toContainText("총 2개");
-  expect(api.state.activities.map(({ id }) => id)).toEqual([2, 3]);
-  expect(api.state.canvasNodes.map(({ activity_event_id }) => activity_event_id)).toEqual([2, 3]);
-});
-
-test("the selected activity can be deleted from the detail header", async ({ page, api }) => {
-  await page.goto("/");
-  const detailPanel = await open(page, 2);
-  const deleted = page.waitForResponse((candidate) =>
-    candidate.request().method() === "DELETE"
-    && new URL(candidate.url()).pathname === "/v1/activities/2"
-    && candidate.status() === 204,
-  );
-  await detailPanel.getByRole("button", { name: "이 활동 기록 삭제" }).click();
-  const confirmation = page.getByRole("alertdialog", { name: "활동 기록을 삭제할까요?" });
-  await confirmation.getByRole("button", { name: "기록 삭제" }).click();
-  await deleted;
-
-  await expect(panel(page)).toHaveCount(0);
-  await expect(page.getByTestId("activity-node-2")).toHaveCount(0);
-  expect(api.state.details[2]).toBeUndefined();
-  expect(api.state.activities.map(({ id }) => id)).toEqual([1]);
 });
 
 test("a long selected prompt and bounded result preserve a usable conversation viewport", async ({

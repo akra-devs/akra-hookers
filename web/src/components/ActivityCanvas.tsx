@@ -97,10 +97,6 @@ export function ActivityCanvas({
   const removeNode = useCallback((nodeId: string) => {
     const canvasNode = persistedNode(nodeId);
     if (!client || !canvasNode || pendingNodeIds.current.has(nodeId)) return;
-    if (openNodeTimer.current !== null) {
-      clearTimeout(openNodeTimer.current);
-      openNodeTimer.current = null;
-    }
 
     pendingNodeIds.current.add(nodeId);
     const removedNode = nodes.find((node) => node.id === nodeId);

@@ -469,8 +469,7 @@ impl ActivityStore {
                ON context_summary.activity_event_id = summaries.context_activity_event_id
               AND context_summary.generation = summaries.context_result_generation
               AND context_summary.state = 'succeeded'
-              WHERE activities.activity_kind = 'user'
-                AND activities.deleted_at_us IS NULL
+             WHERE activities.activity_kind = 'user'
                AND summaries.attempt_count < ?
                AND (
                    (summaries.state IN ('pending', 'retry_wait')
@@ -761,7 +760,7 @@ async fn activity_input(
 ) -> Result<ActivityInput, StoreError> {
     let row = sqlx::query(
         "SELECT id, provider, prompt, activity_kind
-         FROM activity_events WHERE id = ? AND deleted_at_us IS NULL",
+         FROM activity_events WHERE id = ?",
     )
     .bind(activity_event_id)
     .fetch_optional(&mut **transaction)
@@ -886,7 +885,7 @@ async fn previous_user_context(
                     CASE WHEN COALESCE(captured_at_us, first_recorded_at_us) IS NULL
                          THEN 1 ELSE 0 END AS time_class,
                     COALESCE(captured_at_us, first_recorded_at_us) AS ordered_at_us
-             FROM activity_events WHERE id = ? AND deleted_at_us IS NULL
+             FROM activity_events WHERE id = ?
          )
          SELECT prior.id, results.activity_event_id AS result_activity_event_id,
                 COALESCE(results.state, 'unavailable') AS result_state,
@@ -898,8 +897,7 @@ async fn previous_user_context(
           AND prior.provider_session_id = current.provider_session_id
          LEFT JOIN activity_result_summaries AS results
            ON results.activity_event_id = prior.id
-          WHERE prior.activity_kind = 'user'
-            AND prior.deleted_at_us IS NULL
+         WHERE prior.activity_kind = 'user'
            AND prior.id != current.id
            AND (
                (CASE WHEN COALESCE(prior.captured_at_us, prior.first_recorded_at_us) IS NULL
@@ -977,15 +975,14 @@ async fn next_user_activity(
                     CASE WHEN COALESCE(captured_at_us, first_recorded_at_us) IS NULL
                          THEN 1 ELSE 0 END AS time_class,
                     COALESCE(captured_at_us, first_recorded_at_us) AS ordered_at_us
-             FROM activity_events WHERE id = ? AND deleted_at_us IS NULL
+             FROM activity_events WHERE id = ?
          )
          SELECT successor.id
          FROM activity_events AS successor
          JOIN current
            ON successor.provider = current.provider
           AND successor.provider_session_id = current.provider_session_id
-          WHERE successor.activity_kind = 'user'
-            AND successor.deleted_at_us IS NULL
+         WHERE successor.activity_kind = 'user'
            AND (
                (CASE WHEN COALESCE(successor.captured_at_us, successor.first_recorded_at_us) IS NULL
                      THEN 1 ELSE 0 END) > current.time_class

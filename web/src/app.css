@@ -1281,8 +1281,7 @@ button.command-control {
 
 .activity-detail__header .eyebrow { display: none; }
 .activity-detail__header h2 { color: #edf1ed; font-size: 17px; font-weight: 620; letter-spacing: -.015em; }
-.activity-detail__header > button,
-.activity-detail__header-actions button {
+.activity-detail__header > button {
   width: 44px;
   height: 44px;
   padding: 0;
@@ -1292,25 +1291,7 @@ button.command-control {
   color: var(--color-muted);
   font-size: 11px;
 }
-.activity-detail__header > button:hover,
-.activity-detail__header-actions button:hover { border-color: var(--color-border-strong); color: var(--color-text); }
-.activity-detail__header-actions { display: flex; align-items: center; gap: 7px; }
-.activity-detail__header-actions .activity-detail__delete {
-  display: inline-flex;
-  width: auto;
-  min-width: 66px;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 10px;
-  border-color: #704846;
-  color: #d9a09d;
-}
-.activity-detail__header-actions .activity-detail__delete:hover {
-  border-color: #a85b59;
-  background: #251918;
-  color: #ffd6d2;
-}
+.activity-detail__header > button:hover { border-color: var(--color-border-strong); color: var(--color-text); }
 
 .activity-detail__selected {
   position: relative;
@@ -1328,7 +1309,7 @@ button.command-control {
   content: "";
 }
 
-.activity-detail__selected .expandable-prompt > p {
+.activity-detail__selected > p {
   color: #eff3ef;
   font-size: 17px;
   font-weight: 570;
@@ -1336,37 +1317,6 @@ button.command-control {
   letter-spacing: -.014em;
   white-space: pre-wrap;
 }
-
-.expandable-prompt {
-  display: grid;
-  min-width: 0;
-  gap: 7px;
-}
-.expandable-prompt > p {
-  display: -webkit-box;
-  min-width: 0;
-  overflow: hidden;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-}
-.expandable-prompt.is-expanded > p {
-  display: block;
-  overflow: visible;
-  -webkit-line-clamp: unset;
-}
-.expandable-prompt__toggle {
-  justify-self: start;
-  min-height: 30px;
-  padding: 4px 7px;
-  border: 1px solid #435258;
-  border-radius: var(--radius-control);
-  background: #131c1f;
-  color: #b8c6c1;
-  font-size: 10px;
-}
-.expandable-prompt__toggle:hover { border-color: #65767c; color: #f0f4f1; }
 
 .activity-detail__project { color: var(--color-accent); font-size: 11px; font-weight: 640; }
 .activity-detail__provider { color: var(--color-steel); font: 500 10px var(--font-mono); text-transform: lowercase; }
@@ -1855,22 +1805,6 @@ select:not([aria-label="프로젝트 필터"]) {
   font: 500 9px/1.5 var(--font-mono);
 }
 .activity-conversation-dialog__turn-meta .is-selected-label { color: var(--color-accent); font-weight: 650; }
-.activity-conversation-dialog__delete {
-  display: inline-flex;
-  min-height: 28px;
-  align-items: center;
-  gap: 5px;
-  margin-block: -5px;
-  padding: 4px 7px;
-  border: 1px solid #704846;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: #d9a09d;
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 1.4;
-}
-.activity-conversation-dialog__delete:hover { border-color: #a85b59; background: #251918; color: #ffd6d2; }
 .activity-conversation-dialog__request,
 .activity-conversation-dialog__result {
   display: grid;
@@ -1902,7 +1836,6 @@ select:not([aria-label="프로젝트 필터"]) {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.activity-conversation-dialog__prompt .expandable-prompt__toggle { margin-top: 1px; }
 .activity-conversation-dialog__result > span:not(.activity-conversation-dialog__result-lines) {
   color: var(--color-muted);
   font-size: 12px;
@@ -1932,44 +1865,14 @@ select:not([aria-label="프로젝트 필터"]) {
   display: flex;
   min-height: 62px;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   padding: 12px 22px;
   border-top: 1px solid var(--color-border);
   background: #141d20;
 }
-.activity-conversation-dialog__footer > span { color: var(--color-muted); font: 500 10px var(--font-mono); }
+.activity-conversation-dialog__footer .inline-error { margin-right: auto; }
 .activity-conversation-dialog__footer button { min-height: 38px; padding: 8px 12px; }
-.activity-conversation-dialog__pagination { display: flex; align-items: center; gap: 9px; }
-.activity-conversation-dialog__pagination strong {
-  min-width: 54px;
-  color: #c8d2ce;
-  font: 600 10px var(--font-mono);
-  text-align: center;
-}
-.activity-conversation-dialog__page-state {
-  display: grid;
-  min-height: 0;
-  place-content: center;
-  justify-items: center;
-  gap: 12px;
-  padding: 28px;
-  color: var(--color-muted);
-  font-size: 12px;
-  text-align: center;
-}
-.activity-conversation-dialog__page-state button { min-height: 38px; padding: 8px 12px; }
-.activity-delete-dialog__backdrop { z-index: 40; }
-.activity-delete-dialog { width: min(520px, 100%); }
-.activity-delete-dialog__description { color: #c5cfca; font-size: 13px; line-height: 1.65; }
-.activity-delete-dialog__prompt {
-  padding: 12px;
-  border: 1px solid #354247;
-  border-radius: var(--radius-control);
-  background: #0e1618;
-}
-.activity-delete-dialog__prompt > p { color: #d7dfdb; font-size: 12px; line-height: 1.6; }
-.activity-delete-dialog__actions { justify-content: flex-end; }
 .dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .dialog-heading .eyebrow { display: none; }
 .dialog-heading h2 { color: #ecf1ed; font-size: 18px; font-weight: 620; }

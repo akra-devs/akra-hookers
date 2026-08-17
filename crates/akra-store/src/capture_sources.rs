@@ -17,7 +17,6 @@ impl ActivityStore {
              WHERE capture_target IS NOT NULL
                AND capture_client IS NOT NULL
                AND captured_at_us IS NOT NULL
-               AND deleted_at_us IS NULL
              GROUP BY capture_target, capture_client
              ORDER BY capture_target, capture_client",
         )

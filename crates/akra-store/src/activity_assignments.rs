@@ -120,10 +120,9 @@ async fn load_selected(
         let row = sqlx::query_as::<_, (String, String, Option<String>)>(
             "SELECT activity_events.provider, activity_events.provider_session_id,
                     activity_origins.routing_mode
-              FROM activity_events
-              LEFT JOIN activity_origins ON activity_origins.id = activity_events.origin_id
-              WHERE activity_events.id = ?
-                AND activity_events.deleted_at_us IS NULL",
+             FROM activity_events
+             LEFT JOIN activity_origins ON activity_origins.id = activity_events.origin_id
+             WHERE activity_events.id = ?",
         )
         .bind(activity_id)
         .fetch_optional(&mut **transaction)

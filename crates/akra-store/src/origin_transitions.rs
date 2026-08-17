@@ -128,7 +128,7 @@ async fn make_shared(
              activity_event_id, project_id, updated_at_us
          )
          SELECT id, ?, CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER)
-         FROM activity_events WHERE origin_id = ? AND deleted_at_us IS NULL
+         FROM activity_events WHERE origin_id = ?
          ON CONFLICT(activity_event_id) DO UPDATE SET
              project_id = excluded.project_id,
              updated_at_us = excluded.updated_at_us",
@@ -174,8 +174,7 @@ async fn make_dedicated(
     sqlx::query(
         "DELETE FROM activity_project_assignments
          WHERE activity_event_id IN (
-             SELECT id FROM activity_events
-             WHERE origin_id = ? AND deleted_at_us IS NULL
+             SELECT id FROM activity_events WHERE origin_id = ?
          )",
     )
     .bind(origin_id)
@@ -187,7 +186,6 @@ async fn make_dedicated(
              WHERE EXISTS (
                  SELECT 1 FROM activity_events
                  WHERE activity_events.origin_id = ?
-                   AND activity_events.deleted_at_us IS NULL
                    AND activity_events.provider = conversation_routes.provider
                    AND activity_events.provider_session_id =
                        conversation_routes.provider_session_id
@@ -198,7 +196,6 @@ async fn make_dedicated(
                  JOIN activity_origins AS other_origins
                    ON other_origins.id = other_events.origin_id
                  WHERE other_events.origin_id != ?
-                   AND other_events.deleted_at_us IS NULL
                    AND other_origins.routing_mode = 'shared'
                    AND other_events.provider = conversation_routes.provider
                    AND other_events.provider_session_id =

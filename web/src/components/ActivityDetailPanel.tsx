@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 
@@ -23,29 +23,8 @@ type ActivityDetailPanelProps = {
   activityVisibility: ActivityVisibility;
   client: ApiClient;
   onClose: () => void;
-  onDeleted: (activityId: number) => void;
   onSelectActivity: (activityId: number) => void;
 };
-
-const CONVERSATION_PAGE_SIZE = 8;
-let bodyScrollLockCount = 0;
-let bodyOverflowBeforeLock = "";
-
-function useBodyScrollLock() {
-  useEffect(() => {
-    if (bodyScrollLockCount === 0) {
-      bodyOverflowBeforeLock = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-    }
-    bodyScrollLockCount += 1;
-    return () => {
-      bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
-      if (bodyScrollLockCount === 0) {
-        document.body.style.overflow = bodyOverflowBeforeLock;
-      }
-    };
-  }, []);
-}
 
 function DetailTime({
   label,
@@ -171,60 +150,8 @@ function RequestSummary({
           <strong>REQ</strong>
           <span>{text}</span>
         </p>
-      ) : <ExpandablePrompt text={text} ariaLive="polite" />}
+      ) : <p aria-live="polite">{text}</p>}
     </>
-  );
-}
-
-function ExpandablePrompt({
-  text,
-  ariaLive,
-  className = "",
-}: {
-  text: string;
-  ariaLive?: "polite";
-  className?: string;
-}) {
-  const contentId = useId();
-  const contentRef = useRef<HTMLParagraphElement>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [canExpand, setCanExpand] = useState(false);
-
-  useLayoutEffect(() => {
-    setExpanded(false);
-    const content = contentRef.current;
-    if (!content) return;
-    const measure = () => {
-      const lineHeight = Number.parseFloat(window.getComputedStyle(content).lineHeight);
-      const collapsedHeight = Number.isFinite(lineHeight)
-        ? lineHeight * 4
-        : content.clientHeight;
-      setCanExpand(content.scrollHeight > collapsedHeight + 1);
-    };
-    const frame = window.requestAnimationFrame(measure);
-    const observer = new ResizeObserver(measure);
-    observer.observe(content);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-  }, [text]);
-
-  return (
-    <div className={`expandable-prompt${expanded ? " is-expanded" : ""}${className ? ` ${className}` : ""}`}>
-      <p ref={contentRef} id={contentId} aria-live={ariaLive}>{text}</p>
-      {canExpand && (
-        <button
-          type="button"
-          className="expandable-prompt__toggle"
-          aria-controls={contentId}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {expanded ? "접기" : "더 보기"}
-        </button>
-      )}
-    </div>
   );
 }
 
@@ -243,59 +170,40 @@ function hasDerivedPrompt(summary: ActivityPromptSummary, prompt: string) {
 
 type ConversationFlowDialogProps = {
   activityId: number;
-  activityVisibility: ActivityVisibility;
-  client: ApiClient;
-  conversationIndex: number;
   conversationTotal: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  pageError: string;
   provider: string;
-  refreshKey: number;
+  timelineKey: string;
+  turns: ActivityConversationTurn[];
   onClose: () => void;
-  onDeleteRequest: (turn: ActivityConversationTurn) => void;
+  onLoadMore: () => void;
 };
 
 function ConversationFlowDialog({
   activityId,
-  activityVisibility,
-  client,
-  conversationIndex,
   conversationTotal,
+  hasMore,
+  loadingMore,
+  pageError,
   provider,
-  refreshKey,
+  timelineKey,
+  turns,
   onClose,
-  onDeleteRequest,
+  onLoadMore,
 }: ConversationFlowDialogProps) {
   const dialogRef = useRef<HTMLElement>(null);
-  const initialPage = Math.max(0, Math.floor((conversationIndex - 1) / CONVERSATION_PAGE_SIZE));
-  const [pageIndex, setPageIndex] = useState(initialPage);
-  const pageQuery = useQuery({
-    queryKey: [
-      "activity-conversation-page",
-      activityId,
-      pageIndex,
-      activityVisibility,
-      refreshKey,
-    ],
-    queryFn: () => client.activity(activityId, {
-      limit: CONVERSATION_PAGE_SIZE,
-      offset: pageIndex * CONVERSATION_PAGE_SIZE,
-      includeSubagent: activityVisibility.subagent,
-      includeInternal: activityVisibility.internal,
-    }),
-    retry: false,
-    refetchInterval: (query) => query.state.status === "success" ? 500 : false,
-  });
-  const turns = pageQuery.data?.conversation ?? [];
-  const total = pageQuery.data?.conversation_total ?? conversationTotal;
-  const pageCount = Math.max(1, Math.ceil(total / CONVERSATION_PAGE_SIZE));
-  const timelineKey = `${pageIndex}:${turns.map(({ id }) => id).join(":")}`;
   const timelineRef = useTimelineAnchor(activityId, timelineKey);
   useDialogFocus(dialogRef, "[data-conversation-dialog-close]");
-  useBodyScrollLock();
 
   useEffect(() => {
-    if (pageIndex < pageCount) return;
-    setPageIndex(pageCount - 1);
-  }, [pageCount, pageIndex]);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
 
   return createPortal(
     <div className="dialog-backdrop activity-conversation-dialog__backdrop">
@@ -318,7 +226,7 @@ function ConversationFlowDialog({
             <h2 id="conversation-flow-title">대화 흐름</h2>
             <p id="conversation-flow-description">
               <span>{provider}</span>
-              오래된 기록부터 · {pageIndex + 1}/{pageCount} 페이지 · 총 {total}개
+              오래된 기록부터 · {turns.length}/{conversationTotal}
             </p>
           </div>
           <button
@@ -332,182 +240,62 @@ function ConversationFlowDialog({
           </button>
         </header>
 
-        {pageQuery.isError ? (
-          <div className="activity-conversation-dialog__page-state" role="alert">
-            <p>이 페이지의 대화 기록을 불러오지 못했습니다.</p>
-            <button type="button" onClick={() => void pageQuery.refetch()}>다시 시도</button>
-          </div>
-        ) : pageQuery.isPending ? (
-          <div className="activity-conversation-dialog__page-state" aria-live="polite">
-            대화 기록을 불러오는 중입니다.
-          </div>
-        ) : (
-          <ol
-            ref={timelineRef}
-            className="activity-conversation-dialog__timeline"
-            aria-label="확대된 대화 기록"
-          >
-            {turns.map((turn) => {
-              const summaryLabel = promptSummaryLabel(turn.prompt_summary);
-              return (
-                <li
-                  key={turn.id}
-                  className={turn.selected ? "is-selected" : undefined}
-                  data-activity-id={turn.id}
-                  aria-current={turn.selected ? "true" : undefined}
-                >
-                  <div className="activity-conversation-dialog__turn-heading">
-                    <span className="activity-conversation-dialog__project">
-                      {turn.project?.name ?? "Inbox"}
-                    </span>
-                    <span className="activity-conversation-dialog__turn-meta">
-                      {turn.selected && <span className="is-selected-label">선택됨</span>}
-                      {!turn.on_canvas && <span>캔버스에 없음</span>}
-                      <time dateTime={turn.time.value ?? undefined}>
-                        {formatActivityTime(turn.time)}
-                      </time>
-                      <button
-                        type="button"
-                        className="activity-conversation-dialog__delete"
-                        aria-label={`활동 기록 ${turn.id} 삭제`}
-                        title="이 활동 기록 삭제"
-                        onClick={() => onDeleteRequest(turn)}
+        <ol
+          ref={timelineRef}
+          className="activity-conversation-dialog__timeline"
+          aria-label="확대된 대화 기록"
+        >
+          {turns.map((turn) => {
+            const summaryLabel = promptSummaryLabel(turn.prompt_summary);
+            return (
+              <li
+                key={turn.id}
+                className={turn.selected ? "is-selected" : undefined}
+                data-activity-id={turn.id}
+                aria-current={turn.selected ? "true" : undefined}
+              >
+                <div className="activity-conversation-dialog__turn-heading">
+                  <span className="activity-conversation-dialog__project">
+                    {turn.project?.name ?? "Inbox"}
+                  </span>
+                  <span className="activity-conversation-dialog__turn-meta">
+                    {turn.selected && <span className="is-selected-label">선택됨</span>}
+                    {!turn.on_canvas && <span>캔버스에 없음</span>}
+                    <time dateTime={turn.time.value ?? undefined}>
+                      {formatActivityTime(turn.time)}
+                    </time>
+                  </span>
+                </div>
+                <div className="activity-conversation-dialog__request">
+                  <span className="activity-conversation-dialog__section-heading">
+                    <strong>REQ</strong>
+                    {summaryLabel && (
+                      <span
+                        className={`activity-detail__request-status activity-detail__request-status--${turn.prompt_summary.status}`}
+                        data-status={turn.prompt_summary.status}
                       >
-                        <UiIcon name="trash" size={14} />
-                        삭제
-                      </button>
-                    </span>
-                  </div>
-                  <div className="activity-conversation-dialog__request">
-                    <span className="activity-conversation-dialog__section-heading">
-                      <strong>REQ</strong>
-                      {summaryLabel && (
-                        <span
-                          className={`activity-detail__request-status activity-detail__request-status--${turn.prompt_summary.status}`}
-                          data-status={turn.prompt_summary.status}
-                        >
-                          {summaryLabel}
-                        </span>
-                      )}
-                    </span>
-                    <ExpandablePrompt
-                      className="activity-conversation-dialog__prompt"
-                      text={turn.prompt_summary.text ?? turn.prompt}
-                    />
-                  </div>
-                  <ExpandedTimelineResultSummary summary={turn.result_summary} />
-                </li>
-              );
-            })}
-          </ol>
+                        {summaryLabel}
+                      </span>
+                    )}
+                  </span>
+                  <p>{turn.prompt_summary.text ?? turn.prompt}</p>
+                </div>
+                <ExpandedTimelineResultSummary summary={turn.result_summary} />
+              </li>
+            );
+          })}
+        </ol>
+
+        {(pageError || hasMore) && (
+          <footer className="activity-conversation-dialog__footer">
+            {pageError && <p className="inline-error" role="alert">{pageError}</p>}
+            {hasMore && (
+              <button type="button" disabled={loadingMore} onClick={onLoadMore}>
+                {loadingMore ? "불러오는 중…" : "대화 기록 더 보기"}
+              </button>
+            )}
+          </footer>
         )}
-
-        <footer className="activity-conversation-dialog__footer">
-          <span aria-live="polite">
-            {total === 0
-              ? "기록 없음"
-              : `${pageIndex * CONVERSATION_PAGE_SIZE + 1}–${Math.min(
-                (pageIndex + 1) * CONVERSATION_PAGE_SIZE,
-                total,
-              )} / ${total}`}
-          </span>
-          <div className="activity-conversation-dialog__pagination">
-            <button
-              type="button"
-              disabled={pageIndex === 0 || pageQuery.isFetching}
-              onClick={() => setPageIndex((current) => Math.max(0, current - 1))}
-            >
-              이전
-            </button>
-            <strong>{pageIndex + 1} / {pageCount}</strong>
-            <button
-              type="button"
-              disabled={pageIndex + 1 >= pageCount || pageQuery.isFetching}
-              onClick={() => setPageIndex((current) => Math.min(pageCount - 1, current + 1))}
-            >
-              다음
-            </button>
-          </div>
-        </footer>
-      </section>
-    </div>,
-    document.body,
-  );
-}
-
-type DeleteActivityDialogProps = {
-  activityId: number;
-  prompt: string;
-  onCancel: () => void;
-  onConfirm: () => Promise<void>;
-};
-
-function DeleteActivityDialog({
-  activityId,
-  prompt,
-  onCancel,
-  onConfirm,
-}: DeleteActivityDialogProps) {
-  const dialogRef = useRef<HTMLElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  useDialogFocus(dialogRef, "[data-cancel-activity-delete]");
-  useBodyScrollLock();
-
-  const confirm = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      await onConfirm();
-    } catch (cause) {
-      setError(cause instanceof Error
-        ? cause.message
-        : "활동 기록을 삭제하지 못했습니다. 다시 시도하세요.");
-      setBusy(false);
-    }
-  };
-
-  return createPortal(
-    <div className="dialog-backdrop activity-delete-dialog__backdrop">
-      <section
-        ref={dialogRef}
-        className="dialog-card activity-delete-dialog"
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="activity-delete-title"
-        aria-describedby="activity-delete-description"
-        onKeyDown={(event) => {
-          if (event.key !== "Escape" || busy) return;
-          event.stopPropagation();
-          onCancel();
-        }}
-      >
-        <div className="dialog-heading">
-          <h2 id="activity-delete-title">활동 기록을 삭제할까요?</h2>
-        </div>
-        <p id="activity-delete-description" className="activity-delete-dialog__description">
-          기록 #{activityId}가 활동 목록, 대화 흐름, Canvas에서 사라집니다. 이 작업은 화면에서 되돌릴 수 없습니다.
-        </p>
-        <ExpandablePrompt className="activity-delete-dialog__prompt" text={prompt} />
-        {error && <p className="inline-error" role="alert">{error}</p>}
-        <footer className="dialog-actions activity-delete-dialog__actions">
-          <button
-            data-cancel-activity-delete
-            type="button"
-            disabled={busy}
-            onClick={onCancel}
-          >
-            취소
-          </button>
-          <button
-            type="button"
-            className="danger-button"
-            disabled={busy}
-            onClick={() => void confirm()}
-          >
-            {busy ? "삭제하는 중…" : "기록 삭제"}
-          </button>
-        </footer>
       </section>
     </div>,
     document.body,
@@ -519,7 +307,6 @@ export function ActivityDetailPanel({
   activityVisibility,
   client,
   onClose,
-  onDeleted,
   onSelectActivity,
 }: ActivityDetailPanelProps) {
   const panelRef = useRef<HTMLElement>(null);
@@ -542,8 +329,6 @@ export function ActivityDetailPanel({
   const [loadingMore, setLoadingMore] = useState(false);
   const [pageError, setPageError] = useState("");
   const [conversationExpanded, setConversationExpanded] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<{ id: number; prompt: string } | null>(null);
-  const [deletionRevision, setDeletionRevision] = useState(0);
   useEffect(() => {
     panelRef.current?.focus({ preventScroll: false });
   }, [activityId]);
@@ -646,23 +431,6 @@ export function ActivityDetailPanel({
       setCopyStatus(`${label}을 복사하지 못했습니다.`);
     }
   };
-  const confirmActivityDelete = async () => {
-    if (!deleteTarget) return;
-    const deletedId = deleteTarget.id;
-    await client.deleteActivity(deletedId);
-    setDeleteTarget(null);
-    setAdditionalTurns([]);
-    setAdditionalPageCursors([]);
-    setPageHasMore(null);
-    setPageError("");
-    setDeletionRevision((current) => current + 1);
-    if (deletedId === activityId) {
-      setConversationExpanded(false);
-      onDeleted(deletedId);
-      return;
-    }
-    void detailQuery.refetch();
-  };
 
   if (detailQuery.isError) {
     return (
@@ -727,21 +495,9 @@ export function ActivityDetailPanel({
           <p className="eyebrow">ACTIVITY DETAIL</p>
           <h2>활동 상세</h2>
         </div>
-        <div className="activity-detail__header-actions">
-          <button
-            type="button"
-            className="activity-detail__delete"
-            onClick={() => setDeleteTarget({ id: detail.id, prompt: detail.prompt })}
-            aria-label="이 활동 기록 삭제"
-            title="이 활동 기록 삭제"
-          >
-            <UiIcon name="trash" size={15} />
-            삭제
-          </button>
-          <button type="button" onClick={onClose} aria-label="상세 닫기" title="상세 닫기">
-            <UiIcon name="close" />
-          </button>
-        </div>
+        <button type="button" onClick={onClose} aria-label="상세 닫기" title="상세 닫기">
+          <UiIcon name="close" />
+        </button>
       </header>
       <div
         className="activity-detail__context"
@@ -896,22 +652,15 @@ export function ActivityDetailPanel({
       {conversationExpanded && (
         <ConversationFlowDialog
           activityId={activityId}
-          activityVisibility={activityVisibility}
-          client={client}
-          conversationIndex={detail.conversation_index}
           conversationTotal={detail.conversation_total}
+          hasMore={pageHasMore ?? detail.conversation_has_more}
+          loadingMore={loadingMore}
+          pageError={pageError}
           provider={detail.provider}
-          refreshKey={deletionRevision}
+          timelineKey={timelineKey}
+          turns={timelineTurns}
           onClose={() => setConversationExpanded(false)}
-          onDeleteRequest={(turn) => setDeleteTarget({ id: turn.id, prompt: turn.prompt })}
-        />
-      )}
-      {deleteTarget && (
-        <DeleteActivityDialog
-          activityId={deleteTarget.id}
-          prompt={deleteTarget.prompt}
-          onCancel={() => setDeleteTarget(null)}
-          onConfirm={confirmActivityDelete}
+          onLoadMore={() => void loadMore()}
         />
       )}
     </aside>
