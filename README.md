@@ -170,8 +170,9 @@ npm run dev # http://127.0.0.1:42131
 Windows 데스크톱 빌드는 현재 React 대시보드와 Rust runtime을 하나의 Electron 앱으로
 묶습니다. 앱은 두 구성 요소를 임의의 `127.0.0.1` 포트에서만 실행하며 API token은
 URL·빌드 파일·렌더러 저장소에 기록하지 않고 제한된 preload bridge로 전달합니다.
-Codex 훅은 버전별 패키지 경로가 아니라 사용자 데이터 디렉터리의 안정된 sidecar
-경로를 사용합니다.
+배포본의 Electron 설정, SQLite, spool, collector 설정과 안정된 sidecar는 실행 파일
+옆의 `Akra Hookers Data`에 저장됩니다. ZIP을 새 위치로 옮긴 뒤에는 앱을 한 번 열어
+Codex 훅이 새 sidecar 경로를 사용하도록 갱신해야 합니다.
 
 ```powershell
 cd desktop
