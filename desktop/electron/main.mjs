@@ -10,6 +10,10 @@ import { isSafeExternalUrl, parseRuntimeReady, startStaticServer } from "./runti
 const DESKTOP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SIDECAR_NAME = process.platform === "win32" ? "akra-hookers.exe" : "akra-hookers";
 const STARTUP_TIMEOUT_MS = 30_000;
+const PORTABLE_ROOT = app.isPackaged
+  ? path.join(path.dirname(process.execPath), "Akra Hookers Data")
+  : app.getPath("userData");
+if (app.isPackaged) app.setPath("userData", path.join(PORTABLE_ROOT, "electron"));
 let mainWindow = null;
 let runtimeProcess = null;
 let runtimeCredentials = null;
@@ -33,7 +37,7 @@ async function digest(file) {
 async function installStableSidecar() {
   const source = bundledSidecarPath();
   await access(source);
-  const binDir = path.join(app.getPath("userData"), "bin");
+  const binDir = path.join(PORTABLE_ROOT, "bin");
   const destination = path.join(binDir, SIDECAR_NAME);
   await mkdir(binDir, { recursive: true });
   try {
@@ -66,7 +70,9 @@ async function installStableSidecar() {
 
 async function startRuntime() {
   const executable = await installStableSidecar();
-  const child = spawn(executable, ["serve", "--bind", "127.0.0.1", "--port", "0"], {
+  const dataDir = path.join(PORTABLE_ROOT, "runtime");
+  await mkdir(dataDir, { recursive: true });
+  const child = spawn(executable, ["serve", "--bind", "127.0.0.1", "--port", "0", "--data-dir", dataDir], {
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
