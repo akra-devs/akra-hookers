@@ -2,4 +2,8 @@
 /web/node_modules/
 /web/dist/
 /web/.env.local
+/desktop/node_modules/
+/desktop/dist/
+/desktop/renderer/
+/desktop/resources/bin/
 /.omo/
