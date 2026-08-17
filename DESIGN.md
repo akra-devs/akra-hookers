@@ -266,7 +266,15 @@ The 288px activity plate is the signature component: 5px corners, registration m
 Its three visible stages are log selection, AI proposal review, and confirmation.
 Selection rows lead with the compact request summary and one result line, keep exclude
 and confirmed soft-delete controls separate, and end in a sticky summary-only action
-dock. The review stage uses ruled columns for existing-work attachment and new-work
+dock. `오늘` is the browser-local calendar day while `24시간 동안` is a rolling
+window, and the same boundary must drive canvas nodes, project/origin counts, and
+curation logs. The unreviewed list exposes a native, indeterminate `전체 선택` bounded
+to the same 20-log model limit. Destructive trash actions remain visibly red. A closed
+`더보기` disclosure reveals the full stored request and the available three-line result
+without making every row tall. Failed results show a compact asynchronous regeneration
+action only while the original assistant result is still inside its bounded retention
+window; unavailable historical results never imply that the original prompt can be
+rerun. The review stage uses ruled columns for existing-work attachment and new-work
 creation. Drag and a native select provide equivalent reassignment; editable titles,
 confidence, and uncertainty remain visible. No work mutation happens until the final
 apply action, and the workspace states that AI cannot delete evidence or create edges.

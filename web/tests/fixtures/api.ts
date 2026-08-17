@@ -2,6 +2,7 @@ import type { Page, Route } from "@playwright/test";
 
 import type {
   ActivityAssignmentRequest,
+  ActivityResultSummary,
   CurationLog,
   CurationProposalGroup,
   OriginRoutingRequest,
@@ -72,6 +73,37 @@ export class FixtureApi {
     }
     if (method === "GET" && path === "/v1/activities/count") {
       return { status: 200, body: { count: this.activities(url).length } };
+    }
+    const resultRegenerationId = match(
+      path,
+      /^\/v1\/activities\/(\d+)\/result-summary\/regenerate$/,
+    );
+    if (method === "POST" && resultRegenerationId !== null) {
+      const log = this.state.curationLogs.find(({ id }) => id === resultRegenerationId);
+      const detail = this.state.details[resultRegenerationId];
+      const summary = log?.result_summary ?? detail?.result_summary;
+      if (!summary?.can_regenerate) {
+        return error(
+          422,
+          "result_summary_regeneration_unavailable",
+          "The original assistant result is no longer available for regeneration.",
+        );
+      }
+      this.setResultSummary(resultRegenerationId, {
+        status: "pending",
+        lines: null,
+        can_regenerate: false,
+      });
+      setTimeout(() => this.setResultSummary(resultRegenerationId, {
+        status: "ready",
+        lines: [
+          "보관 중인 응답으로 결과 요약을 다시 만들었습니다.",
+          "세 줄과 180자 제한을 다시 검증했습니다.",
+          "완료된 요약을 즉시 로그에 반영했습니다.",
+        ],
+        can_regenerate: false,
+      }), 250);
+      return { status: 202 };
     }
     const activityId = match(path, /^\/v1\/activities\/(\d+)$/);
     if (method === "GET" && activityId !== null) {
@@ -221,7 +253,9 @@ export class FixtureApi {
       return {
         status: 200,
         body: this.state.curationLogs.filter((log) =>
-          log.project.id === projectId && (state === "all" || log.state === state)),
+          log.project.id === projectId
+          && (state === "all" || log.state === state)
+          && this.activityPeriodVisible(log.time.value, url)),
       };
     }
     const curationLogId = match(path, /^\/v1\/curation\/logs\/(\d+)$/);
@@ -537,6 +571,30 @@ export class FixtureApi {
     return true;
   }
 
+  private setResultSummary(activityId: number, summary: ActivityResultSummary) {
+    const status = summary.status;
+    const activity = this.state.activities.find(({ id }) => id === activityId);
+    if (activity) activity.result_summary_status = status;
+    const curationLog = this.state.curationLogs.find(({ id }) => id === activityId);
+    if (curationLog) curationLog.result_summary = structuredClone(summary);
+    for (const detail of Object.values(this.state.details)) {
+      if (detail.id === activityId) detail.result_summary = structuredClone(summary);
+      if (detail.selected_turn.id === activityId) {
+        detail.selected_turn.result_summary = structuredClone(summary);
+      }
+      const turn = detail.conversation.find(({ id }) => id === activityId);
+      if (turn) turn.result_summary = structuredClone(summary);
+    }
+    for (const work of this.state.workItems) {
+      for (const log of work.logs) {
+        if (log.id === activityId) log.result_summary = structuredClone(summary);
+      }
+      for (const log of work.preview_logs) {
+        if (log.id === activityId) log.result_summary = structuredClone(summary);
+      }
+    }
+  }
+
   private activityVisible(activity: FixtureState["activities"][number], url: URL) {
     return this.activityKindVisible(activity.activity_kind, url)
       && this.activityPeriodVisible(activity.time.value, url);
@@ -545,6 +603,12 @@ export class FixtureApi {
   private activityPeriodVisible(value: string | null, url: URL) {
     const period = url.searchParams.get("period") ?? "all";
     if (period === "all") return true;
+    if (period === "today") {
+      const startAtUs = Number(url.searchParams.get("start_at_us"));
+      if (value === null || !Number.isFinite(startAtUs)) return false;
+      const capturedAt = Date.parse(value);
+      return Number.isFinite(capturedAt) && capturedAt >= startAtUs / 1_000;
+    }
     const hours = {
       day: 24,
       week: 24 * 7,

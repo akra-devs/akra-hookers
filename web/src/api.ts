@@ -23,6 +23,10 @@ import type {
   WorkItem,
   WorkItemDetail,
 } from "./api-contracts";
+import {
+  appendActivityPeriodParameters,
+  type ActivityPeriod,
+} from "./activity-period";
 
 export type {
   ActivityAssignmentRequest,
@@ -62,6 +66,7 @@ export type {
   WorkItemDetail,
   WorkLog,
 } from "./api-contracts";
+export type { ActivityPeriod } from "./activity-period";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -81,8 +86,6 @@ export type ActivityVisibilityQuery = {
   includeSubagent?: boolean;
   includeInternal?: boolean;
 };
-
-export type ActivityPeriod = "all" | "day" | "week" | "month" | "quarter";
 
 export type ActivityFilterQuery = ActivityVisibilityQuery & {
   period?: ActivityPeriod;
@@ -111,6 +114,7 @@ export type ApiClient = {
     page?: ConversationPageQuery,
   ): Promise<ActivityDetail>;
   deleteActivity(activityId: number): Promise<void>;
+  regenerateResultSummary(activityId: number): Promise<void>;
   projects(filters?: ActivityFilterQuery): Promise<ProjectSummary[]>;
   createProject(name: string): Promise<ProjectSummary>;
   renameProject(projectId: number, name: string): Promise<ProjectSummary>;
@@ -127,7 +131,11 @@ export type ApiClient = {
   deleteCanvasEdge(edgeId: number): Promise<void>;
   edges(): Promise<CanvasEdge[]>;
   updateCanvasPosition(nodeId: number, position: { x: number; y: number }): Promise<void>;
-  curationLogs(projectId: number, state?: CurationLogState | "all"): Promise<CurationLog[]>;
+  curationLogs(
+    projectId: number,
+    state?: CurationLogState | "all",
+    period?: ActivityPeriod,
+  ): Promise<CurationLog[]>;
   setCurationLogExcluded(activityId: number, excluded: boolean): Promise<void>;
   deleteCurationLog(activityId: number): Promise<void>;
   createCurationProposal(projectId: number, activityIds: number[]): Promise<CurationProposal>;
@@ -200,6 +208,8 @@ export function createApiClient(
       request<ActivityDetail>(conversationPath(activityId, page)),
     deleteActivity: (activityId) =>
       request<void>(`/v1/activities/${activityId}`, "DELETE"),
+    regenerateResultSummary: (activityId) =>
+      request<void>(`/v1/activities/${activityId}/result-summary/regenerate`, "POST"),
     projects: (filters) =>
       request<ProjectSummary[]>(appendActivityFilters("/v1/projects", filters)),
     createProject: (name) => request<ProjectSummary>("/v1/projects", "POST", { name }),
@@ -236,10 +246,15 @@ export function createApiClient(
         position_x: position.x,
         position_y: position.y,
       }),
-    curationLogs: (projectId, state = "unreviewed") =>
-      request<CurationLog[]>(
-        `/v1/curation/logs?project_id=${encodeURIComponent(projectId)}&state=${encodeURIComponent(state)}&limit=200`,
-      ),
+    curationLogs: (projectId, state = "unreviewed", period = "all") => {
+      const parameters = new URLSearchParams({
+        project_id: String(projectId),
+        state,
+        limit: "200",
+      });
+      appendActivityPeriodParameters(parameters, period);
+      return request<CurationLog[]>(`/v1/curation/logs?${parameters.toString()}`);
+    },
     setCurationLogExcluded: (activityId, excluded) =>
       request<void>(`/v1/curation/logs/${activityId}`, "PATCH", { excluded }),
     deleteCurationLog: (activityId) =>
@@ -385,9 +400,7 @@ function appendActivityFilterParameters(
   if (filters.includeInternal !== undefined) {
     parameters.set("include_internal", String(filters.includeInternal));
   }
-  if (filters.period !== undefined && filters.period !== "all") {
-    parameters.set("period", filters.period);
-  }
+  if (filters.period !== undefined) appendActivityPeriodParameters(parameters, filters.period);
 }
 
 async function apiError(response: Response): Promise<ApiError> {

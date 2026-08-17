@@ -3,10 +3,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use akra_core::ingress::{ActivityKind, IngressEvent};
+use akra_core::ingress::{ActivityKind, IngressEvent, ResultEvent};
 use akra_store::{
     ActivityAssignmentCommand, AssignmentDestination, FutureRouteAction, OriginRoutingCommand,
-    RecordActivity,
+    RecordActivity, RecordResult, ResultSummaryFailureDisposition,
 };
 use axum::http::{Method, StatusCode};
 use serde_json::Value;
@@ -291,6 +291,14 @@ async fn period_filters_keep_nodes_and_every_navigation_count_in_sync() {
         .try_into()
         .expect("timestamp fits i64");
     let recent = record(&harness.store, cwd, "period", "recent", Some(now_us)).await;
+    let within_day_before_today = record(
+        &harness.store,
+        cwd,
+        "period",
+        "within-day-before-today",
+        Some(now_us - 3 * 60 * 60 * 1_000_000),
+    )
+    .await;
     record(
         &harness.store,
         cwd,
@@ -308,22 +316,157 @@ async fn period_filters_keep_nodes_and_every_navigation_count_in_sync() {
     assert_eq!(activity_status, StatusCode::OK);
     assert_eq!(
         ids(activities.as_array().expect("activities")),
-        vec![recent]
+        vec![within_day_before_today, recent]
     );
 
     let (_, count) = get(&harness.app, "/v1/activities/count?scope=all&period=week").await;
-    assert_eq!(count["count"], 1);
+    assert_eq!(count["count"], 2);
 
     let (_, projects) = get(&harness.app, "/v1/projects?period=week").await;
-    assert_eq!(projects[0]["activity_count"], 1);
+    assert_eq!(projects[0]["activity_count"], 2);
 
     let (_, origins) = get(&harness.app, "/v1/origins?period=week").await;
-    assert_eq!(origins[0]["activity_count"], 1);
+    assert_eq!(origins[0]["activity_count"], 2);
+
+    let today_start_us = now_us - 2 * 60 * 60 * 1_000_000;
+    let (_, today) = get(
+        &harness.app,
+        &format!("/v1/activities?scope=all&period=today&start_at_us={today_start_us}&order=newest"),
+    )
+    .await;
+    assert_eq!(ids(today.as_array().expect("today")), vec![recent]);
+    let (_, today_count) = get(
+        &harness.app,
+        &format!("/v1/activities/count?scope=all&period=today&start_at_us={today_start_us}"),
+    )
+    .await;
+    assert_eq!(today_count["count"], 1);
+    let (_, today_projects) = get(
+        &harness.app,
+        &format!("/v1/projects?period=today&start_at_us={today_start_us}"),
+    )
+    .await;
+    assert_eq!(today_projects[0]["activity_count"], 1);
+    let (_, today_origins) = get(
+        &harness.app,
+        &format!("/v1/origins?period=today&start_at_us={today_start_us}"),
+    )
+    .await;
+    assert_eq!(today_origins[0]["activity_count"], 1);
+
+    let (_, rolling_day) = get(
+        &harness.app,
+        "/v1/activities?scope=all&period=day&order=newest",
+    )
+    .await;
+    assert_eq!(
+        ids(rolling_day.as_array().expect("rolling day")),
+        vec![within_day_before_today, recent]
+    );
+
+    let (missing_today_start, invalid_today) =
+        get(&harness.app, "/v1/activities?scope=all&period=today").await;
+    assert_eq!(missing_today_start, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(invalid_today["code"], "invalid_period");
+    let (unexpected_start, invalid_day) = get(
+        &harness.app,
+        &format!("/v1/activities?scope=all&period=day&start_at_us={today_start_us}"),
+    )
+    .await;
+    assert_eq!(unexpected_start, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(invalid_day["code"], "invalid_period");
 
     let (invalid_status, invalid) =
         get(&harness.app, "/v1/activities?scope=all&period=calendar").await;
     assert_eq!(invalid_status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(invalid["code"], "invalid_period");
+}
+
+#[tokio::test]
+async fn failed_result_summary_can_only_be_regenerated_while_its_source_is_retained() {
+    let harness = harness().await;
+    let cwd = Path::new(r"C:\summary-regeneration");
+    let captured_at_us: i64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_micros()
+        .try_into()
+        .expect("timestamp fits i64");
+    let activity_id = record(
+        &harness.store,
+        cwd,
+        "regeneration-session",
+        "regeneration-turn",
+        Some(captured_at_us),
+    )
+    .await;
+    harness
+        .store
+        .capture_result(RecordResult::captured(
+            ResultEvent::try_new(
+                "codex",
+                "regeneration-session",
+                "regeneration-turn",
+                cwd.to_string_lossy(),
+                Some("The implementation failed its final verification.".to_owned()),
+                Some("gpt-5.3-codex".to_owned()),
+            )
+            .expect("result event"),
+            captured_at_us + 1,
+        ))
+        .await
+        .expect("capture result");
+    let claim = harness
+        .store
+        .claim_result_summary(captured_at_us + 2, 1_000_000)
+        .await
+        .expect("claim")
+        .expect("pending result");
+    assert_eq!(
+        harness
+            .store
+            .fail_result_summary(&claim, "invalid output", None, captured_at_us + 3)
+            .await
+            .expect("terminal failure"),
+        ResultSummaryFailureDisposition::Failed
+    );
+
+    let (_, failed_detail) = get(&harness.app, &format!("/v1/activities/{activity_id}")).await;
+    assert_eq!(failed_detail["result_summary"]["status"], "failed");
+    assert_eq!(failed_detail["result_summary"]["can_regenerate"], true);
+
+    let (scheduled, body) = call(
+        &harness.app,
+        Method::POST,
+        &format!("/v1/activities/{activity_id}/result-summary/regenerate"),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(scheduled, StatusCode::ACCEPTED);
+    assert!(body.is_null());
+    let (_, pending_detail) = get(&harness.app, &format!("/v1/activities/{activity_id}")).await;
+    assert_eq!(pending_detail["result_summary"]["status"], "pending");
+    assert_eq!(pending_detail["result_summary"]["can_regenerate"], false);
+
+    let without_source = record(
+        &harness.store,
+        cwd,
+        "regeneration-session",
+        "no-source-turn",
+        Some(captured_at_us),
+    )
+    .await;
+    let (unavailable, error) = call(
+        &harness.app,
+        Method::POST,
+        &format!("/v1/activities/{without_source}/result-summary/regenerate"),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(unavailable, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(error["code"], "result_summary_regeneration_unavailable");
 }
 
 async fn get(app: &axum::Router, uri: &str) -> (StatusCode, Value) {

@@ -3,7 +3,8 @@ use akra_git::ProjectIdentity;
 use akra_store::{
     ActivityStore, MAX_RESULT_SOURCE_RETENTION_US, MAX_RESULT_SUMMARY_CHARS, RecordActivity,
     RecordResult, ResultCaptureOutcome, ResultSummaryFailureDisposition, ResultSummaryLines,
-    ResultSummaryState, ResultSummaryStatus, ResultSummaryValidationError,
+    ResultSummaryRegenerationOutcome, ResultSummaryState, ResultSummaryStatus,
+    ResultSummaryValidationError,
 };
 
 #[test]
@@ -239,7 +240,7 @@ async fn changed_results_cannot_replace_an_equal_or_newer_capture() {
 }
 
 #[tokio::test]
-async fn retries_are_due_time_bounded_and_terminal_failure_scrubs_source() {
+async fn terminal_failure_keeps_a_bounded_manual_regeneration_window() {
     let store = migrated_store().await;
     let activity_id = record(&store, "retry", ActivityKind::User).await;
     store
@@ -300,13 +301,100 @@ async fn retries_are_due_time_bounded_and_terminal_failure_scrubs_source() {
         .expect("summary")
         .expect("stored state");
     assert_eq!(summary.state, ResultSummaryState::Failed);
-    assert!(!summary.source_retained);
+    assert!(summary.source_retained);
     assert!(
         store
             .claim_result_summary(1_000, 10)
             .await
             .expect("claim")
             .is_none()
+    );
+
+    assert_eq!(
+        store
+            .regenerate_result_summary(activity_id, 1_001)
+            .await
+            .expect("manual regeneration"),
+        ResultSummaryRegenerationOutcome::Scheduled
+    );
+    let pending = store
+        .result_summary(activity_id)
+        .await
+        .expect("summary")
+        .expect("pending state");
+    assert_eq!(pending.state, ResultSummaryState::Pending);
+    assert_eq!(pending.attempt_count, 0);
+    assert_eq!(pending.generation, summary.generation + 1);
+    assert!(pending.source_retained);
+
+    let regenerated = store
+        .claim_result_summary(1_002, 10)
+        .await
+        .expect("claim")
+        .expect("manual attempt");
+    assert_eq!(regenerated.attempt_number(), 1);
+    assert!(
+        store
+            .complete_result_summary(
+                &regenerated,
+                &lines("new one", "new two", "new three"),
+                1_003
+            )
+            .await
+            .expect("complete regenerated summary")
+    );
+    let completed = store
+        .result_summary(activity_id)
+        .await
+        .expect("summary")
+        .expect("completed state");
+    assert_eq!(completed.state, ResultSummaryState::Succeeded);
+    assert!(!completed.source_retained);
+}
+
+#[tokio::test]
+async fn manual_regeneration_refuses_missing_or_expired_result_source() {
+    let store = migrated_store().await;
+    let missing_id = record(&store, "missing-regeneration", ActivityKind::User).await;
+    assert_eq!(
+        store
+            .regenerate_result_summary(missing_id, 10)
+            .await
+            .expect("missing result"),
+        ResultSummaryRegenerationOutcome::Unavailable
+    );
+
+    let expired_id = record(&store, "expired-regeneration", ActivityKind::User).await;
+    store
+        .capture_result(result("expired-regeneration", "temporary result", 1))
+        .await
+        .expect("capture");
+    let claim = store
+        .claim_result_summary(1, 10)
+        .await
+        .expect("claim")
+        .expect("summary claim");
+    store
+        .fail_result_summary(&claim, "terminal", None, 2)
+        .await
+        .expect("terminal failure");
+    assert_eq!(
+        store
+            .regenerate_result_summary(
+                expired_id,
+                MAX_RESULT_SOURCE_RETENTION_US.saturating_add(2),
+            )
+            .await
+            .expect("expired result"),
+        ResultSummaryRegenerationOutcome::Unavailable
+    );
+    assert!(
+        !store
+            .result_summary(expired_id)
+            .await
+            .expect("summary")
+            .expect("stored state")
+            .source_retained
     );
 }
 

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     http::AppState,
+    http_activities::activity_time_range,
     http_error::ApiError,
     summarization::{CodexWorkCurator, SummarizationError},
 };
@@ -21,6 +22,8 @@ pub(crate) struct CurationLogsQuery {
     project_id: i64,
     state: Option<String>,
     limit: Option<i64>,
+    period: Option<String>,
+    start_at_us: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -93,7 +96,12 @@ pub(crate) async fn curation_logs(
     }
     state
         .store
-        .curation_logs(query.project_id, filter, limit)
+        .curation_logs_in_range(
+            query.project_id,
+            filter,
+            activity_time_range(query.period.as_deref(), query.start_at_us)?,
+            limit,
+        )
         .await
         .map(Json)
         .map_err(ApiError::from_store)

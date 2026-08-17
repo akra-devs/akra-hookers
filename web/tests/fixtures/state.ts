@@ -35,7 +35,11 @@ export type FixtureState = {
 };
 
 const captured = { value: "2026-08-08T12:00:00Z", provenance: "captured" } as const;
-const unavailableResult = { status: "unavailable", lines: null } as const;
+const unavailableResult = {
+  status: "unavailable",
+  lines: null,
+  can_regenerate: false,
+} as const;
 const unavailablePrompt = { status: "unavailable", mode: "fallback", text: null } as const;
 
 export function createFixtureState(): FixtureState {

@@ -66,26 +66,52 @@ function DetailTime({
   );
 }
 
-function ResultSummary({ summary }: { summary: ActivityResultSummary }) {
+function ResultSummary({
+  summary,
+  regenerating,
+  regenerationError,
+  onRegenerate,
+}: {
+  summary: ActivityResultSummary;
+  regenerating: boolean;
+  regenerationError: string;
+  onRegenerate: () => void;
+}) {
   return (
     <section
       className={`activity-detail__result activity-detail__result--${summary.status}`}
       data-testid="activity-result-summary"
       data-status={summary.status}
       aria-labelledby="result-summary-heading"
-      aria-busy={summary.status === "pending" || undefined}
+      aria-busy={summary.status === "pending" || regenerating || undefined}
     >
-      <h3 id="result-summary-heading">결과 요약</h3>
-      {summary.status === "ready" && (
+      <div className="activity-detail__result-heading">
+        <h3 id="result-summary-heading">결과 요약</h3>
+        {(summary.can_regenerate || regenerating) && (
+          <button
+            type="button"
+            disabled={regenerating}
+            onClick={onRegenerate}
+            aria-label="결과 요약 재생성"
+            title="보관 중인 응답으로 결과 요약 재생성"
+          >
+            <UiIcon name="refresh" size={13} />
+            {regenerating ? "로딩..." : "재생성"}
+          </button>
+        )}
+      </div>
+      {regenerating && <p aria-live="polite">로딩...</p>}
+      {!regenerating && summary.status === "ready" && (
         <ol>
           {summary.lines.map((line, index) => <li key={`${index}-${line}`}>{line}</li>)}
         </ol>
       )}
-      {summary.status === "pending" && (
+      {!regenerating && summary.status === "pending" && (
         <p aria-live="polite">Codex Spark가 결과를 요약하는 중입니다.</p>
       )}
-      {summary.status === "failed" && <p>결과 요약을 만들지 못했습니다.</p>}
-      {summary.status === "unavailable" && <p>저장된 결과 요약이 없습니다.</p>}
+      {!regenerating && summary.status === "failed" && <p>결과 요약을 만들지 못했습니다.</p>}
+      {!regenerating && summary.status === "unavailable" && <p>저장된 결과 요약이 없습니다.</p>}
+      {regenerationError && <p className="inline-error" role="alert">{regenerationError}</p>}
     </section>
   );
 }
@@ -544,6 +570,9 @@ export function ActivityDetailPanel({
   const [conversationExpanded, setConversationExpanded] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; prompt: string } | null>(null);
   const [deletionRevision, setDeletionRevision] = useState(0);
+  const [regeneratingResult, setRegeneratingResult] = useState(false);
+  const [resultRegenerationError, setResultRegenerationError] = useState("");
+  const regenerationAcceptedRef = useRef(false);
   useEffect(() => {
     panelRef.current?.focus({ preventScroll: false });
   }, [activityId]);
@@ -558,6 +587,17 @@ export function ActivityDetailPanel({
     activityVisibility.subagent,
     detail?.conversation_total,
   ]);
+  useEffect(() => {
+    regenerationAcceptedRef.current = false;
+    setRegeneratingResult(false);
+    setResultRegenerationError("");
+  }, [activityId]);
+  useEffect(() => {
+    if (!regeneratingResult || !regenerationAcceptedRef.current || !detail) return;
+    if (detail.result_summary.status === "pending") return;
+    regenerationAcceptedRef.current = false;
+    setRegeneratingResult(false);
+  }, [detail, regeneratingResult]);
   const pageTurns = detail
     ? [...detail.conversation, ...additionalTurns].filter(
       (turn, index, turns) => turns.findIndex(({ id }) => id === turn.id) === index,
@@ -663,6 +703,24 @@ export function ActivityDetailPanel({
     }
     void detailQuery.refetch();
   };
+  const regenerateResult = async () => {
+    if (!detail?.result_summary.can_regenerate || regeneratingResult) return;
+    setRegeneratingResult(true);
+    setResultRegenerationError("");
+    try {
+      await client.regenerateResultSummary(detail.id);
+      regenerationAcceptedRef.current = true;
+      await detailQuery.refetch({ throwOnError: true });
+    } catch (cause) {
+      regenerationAcceptedRef.current = false;
+      setRegeneratingResult(false);
+      setResultRegenerationError(
+        cause instanceof Error
+          ? cause.message
+          : "보관 중인 응답으로 결과 요약을 다시 만들지 못했습니다.",
+      );
+    }
+  };
 
   if (detailQuery.isError) {
     return (
@@ -757,7 +815,12 @@ export function ActivityDetailPanel({
         )}
         <span className="activity-detail__provider">{detail.provider}</span>
       </section>
-      <ResultSummary summary={detail.result_summary} />
+      <ResultSummary
+        summary={detail.result_summary}
+        regenerating={regeneratingResult}
+        regenerationError={resultRegenerationError}
+        onRegenerate={() => void regenerateResult()}
+      />
       <dl className="activity-detail__facts">
         <DetailTime label="수집 시각" testId="captured-at" time={detail.captured_at} />
         <DetailTime label="최초 기록 시각" testId="first-recorded-at" time={detail.first_recorded_at} />

@@ -9,7 +9,7 @@ use sqlx::{FromRow, QueryBuilder, Sqlite, SqliteConnection, Transaction};
 
 use crate::{
     ActivityProjectSummary, ActivityPromptSummary, ActivityResultSummary, ActivityStore,
-    CurationApplyResult, CurationLogState, CurationLogSummary, CurationProposal,
+    ActivityTimeRange, CurationApplyResult, CurationLogState, CurationLogSummary, CurationProposal,
     CurationProposalGroup, StoreError, WorkEdgeSummary, WorkItemDetail, WorkItemSummary,
     WorkLogSummary, activities::activity_time, activity_details::result_summary_from_parts,
     canvas::bump_canvas_revision, prompt_summaries::activity_prompt_summary_from_parts,
@@ -112,6 +112,7 @@ struct LogRow {
     summary_line_1: Option<String>,
     summary_line_2: Option<String>,
     summary_line_3: Option<String>,
+    result_summary_source_retained: i64,
     result_summary_source_digest: Option<String>,
     result_summary_generation: Option<i64>,
     curation_state: String,
@@ -143,6 +144,17 @@ impl ActivityStore {
         filter: CurationLogFilter,
         limit: i64,
     ) -> Result<Vec<CurationLogSummary>, StoreError> {
+        self.curation_logs_in_range(project_id, filter, ActivityTimeRange::ALL, limit)
+            .await
+    }
+
+    pub async fn curation_logs_in_range(
+        &self,
+        project_id: i64,
+        filter: CurationLogFilter,
+        time_range: ActivityTimeRange,
+        limit: i64,
+    ) -> Result<Vec<CurationLogSummary>, StoreError> {
         ensure_positive_limit(limit)?;
         ensure_project_exists_on_pool(&self.pool, project_id).await?;
         let rows = sqlx::query_as::<_, LogRow>(&format!(
@@ -151,6 +163,13 @@ impl ActivityStore {
                AND activity_events.activity_kind = 'user'
                AND activity_events.deleted_at_us IS NULL
                AND (? = 'all' OR curation_state = ?)
+               AND (
+                   ? IS NULL
+                   OR COALESCE(
+                       activity_events.captured_at_us,
+                       activity_events.first_recorded_at_us
+                   ) >= ?
+               )
              ORDER BY COALESCE(
                  activity_events.captured_at_us,
                  activity_events.first_recorded_at_us
@@ -160,6 +179,8 @@ impl ActivityStore {
         .bind(project_id)
         .bind(filter.as_storage())
         .bind(filter.as_storage())
+        .bind(time_range.start_at_us())
+        .bind(time_range.start_at_us())
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -979,6 +1000,7 @@ const LOG_SELECT: &str = "WITH effective AS (
             COALESCE(result_summary.state, 'unavailable') AS result_summary_state,
             result_summary.summary_line_1, result_summary.summary_line_2,
             result_summary.summary_line_3,
+            result_summary.source_text IS NOT NULL AS result_summary_source_retained,
             result_summary.source_digest AS result_summary_source_digest,
             result_summary.generation AS result_summary_generation,
             CASE
@@ -1038,6 +1060,7 @@ fn result_summary_from_row(row: &LogRow) -> Result<ActivityResultSummary, StoreE
         row.summary_line_1.clone(),
         row.summary_line_2.clone(),
         row.summary_line_3.clone(),
+        row.result_summary_source_retained != 0,
     )
 }
 

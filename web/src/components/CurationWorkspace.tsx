@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import type {
   ApiClient,
+  ActivityPeriod,
   CurationApplyResult,
   CurationLog,
   CurationLogState,
@@ -21,24 +22,10 @@ type CurationWorkspaceProps = {
   onFinish: (workIds: number[]) => void;
 };
 
-type Period = "all" | "week" | "month" | "quarter";
 type Step = "select" | "review" | "complete";
-
-const PERIOD_DAYS: Record<Exclude<Period, "all">, number> = {
-  week: 7,
-  month: 30,
-  quarter: 90,
-};
 
 function visibleRequest(log: CurationLog) {
   return log.prompt_summary.text ?? log.prompt;
-}
-
-function inPeriod(log: CurationLog, period: Period) {
-  if (period === "all") return true;
-  if (!log.time.value) return false;
-  const cutoff = Date.now() - PERIOD_DAYS[period] * 24 * 60 * 60 * 1_000;
-  return new Date(log.time.value).getTime() >= cutoff;
 }
 
 function moveLog(
@@ -59,24 +46,37 @@ function CurationLogRow({
   checked,
   disabled,
   confirmingDelete,
+  regenerating,
   onChecked,
   onExclude,
   onDelete,
   onCancelDelete,
+  onRegenerate,
 }: {
   log: CurationLog;
   checked: boolean;
   disabled: boolean;
   confirmingDelete: boolean;
+  regenerating: boolean;
   onChecked: (checked: boolean) => void;
   onExclude: () => void;
   onDelete: () => void;
   onCancelDelete: () => void;
+  onRegenerate: () => void;
 }) {
+  const checkboxId = `curation-log-${log.id}`;
+  const resultStatus = regenerating
+    ? "로딩..."
+    : log.result_summary.status === "pending"
+      ? "결과 요약 중"
+      : log.result_summary.status === "failed"
+        ? "결과 요약 실패"
+        : "결과 없음";
   return (
     <li className={checked ? "curation-log is-selected" : "curation-log"}>
-      <label className="curation-log__select">
+      <div className="curation-log__select">
         <input
+          id={checkboxId}
           type="checkbox"
           checked={checked}
           disabled={disabled}
@@ -85,27 +85,38 @@ function CurationLogRow({
         />
         <span className="curation-log__body">
           <span className="curation-log__heading">
-            <strong>{visibleRequest(log)}</strong>
+            <label htmlFor={checkboxId}><strong>{visibleRequest(log)}</strong></label>
             <time dateTime={log.time.value ?? undefined}>{formatActivityTime(log.time)}</time>
           </span>
-          {log.result_summary.status === "ready" ? (
-            <span className="curation-log__result">
-              <b>RES</b>
-              {log.result_summary.lines[0]}
-              <em>+2</em>
-            </span>
-          ) : (
-            <span className={`curation-log__result is-${log.result_summary.status}`}>
-              <b>RES</b>
-              {log.result_summary.status === "pending"
-                ? "결과 요약 중"
-                : log.result_summary.status === "failed"
-                  ? "결과 요약 실패"
-                  : "결과 없음"}
-            </span>
-          )}
+          <span className="curation-log__result-row">
+            {log.result_summary.status === "ready" ? (
+              <span className="curation-log__result">
+                <b>RES</b>
+                {log.result_summary.lines[0]}
+                <em>+2</em>
+              </span>
+            ) : (
+              <span className={`curation-log__result is-${log.result_summary.status}`}>
+                <b>RES</b>
+                {resultStatus}
+              </span>
+            )}
+            {(log.result_summary.can_regenerate || regenerating) && (
+              <button
+                type="button"
+                className="curation-log__regenerate"
+                disabled={regenerating}
+                onClick={onRegenerate}
+                aria-label={`${visibleRequest(log)} 결과 요약 재생성`}
+                title="보관 중인 응답으로 결과 요약 재생성"
+              >
+                <UiIcon name="refresh" size={13} />
+                {regenerating ? "로딩..." : "재생성"}
+              </button>
+            )}
+          </span>
         </span>
-      </label>
+      </div>
       <div className="curation-log__actions">
         {confirmingDelete ? (
           <>
@@ -122,12 +133,43 @@ function CurationLogRow({
                 {log.state === "excluded" ? "정리 대상으로 복원" : "이번 정리에서 제외"}
               </button>
             )}
-            <button type="button" className="icon-button" onClick={onDelete} aria-label="로그 영구 제외">
+            <button
+              type="button"
+              className="icon-button curation-log__delete"
+              onClick={onDelete}
+              aria-label="로그 영구 제외"
+              title="이 로그를 영구 제외"
+            >
               <UiIcon name="trash" size={15} />
             </button>
           </>
         )}
       </div>
+      <details className="curation-log__details">
+        <summary>
+          <span>더보기</span>
+          <UiIcon name="chevron-down" size={15} />
+        </summary>
+        <div className="curation-log__evidence">
+          <section>
+            <h3>REQ · 수집된 요청 원문</h3>
+            <p>{log.prompt}</p>
+          </section>
+          <section>
+            <h3>RES · 저장된 응답</h3>
+            {log.result_summary.status === "ready" ? (
+              <ol aria-label="저장된 결과 요약">
+                {log.result_summary.lines.map((line, index) => (
+                  <li key={`${index}-${line}`}>{line}</li>
+                ))}
+              </ol>
+            ) : (
+              <p>{resultStatus}</p>
+            )}
+            <small>응답 원문은 화면에 노출하거나 장기 저장하지 않고 3줄 요약만 보관합니다.</small>
+          </section>
+        </div>
+      </details>
     </li>
   );
 }
@@ -141,29 +183,47 @@ export function CurationWorkspace({
 }: CurationWorkspaceProps) {
   const [step, setStep] = useState<Step>("select");
   const [stateFilter, setStateFilter] = useState<CurationLogState>("unreviewed");
-  const [period, setPeriod] = useState<Period>("month");
+  const [period, setPeriod] = useState<ActivityPeriod>("month");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(null);
+  const [regeneratingIds, setRegeneratingIds] = useState<number[]>([]);
   const [proposal, setProposal] = useState<CurationProposal | null>(null);
   const [groups, setGroups] = useState<CurationProposalGroup[]>([]);
   const [appliedWorkIds, setAppliedWorkIds] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const draggedLogId = useRef<number | null>(null);
+  const selectAllRef = useRef<HTMLInputElement>(null);
   const logs = useQuery({
-    queryKey: ["curation-logs", project.id, stateFilter],
-    queryFn: () => client.curationLogs(project.id, stateFilter),
+    queryKey: ["curation-logs", project.id, stateFilter, period],
+    queryFn: () => client.curationLogs(project.id, stateFilter, period),
     retry: false,
-    refetchInterval: step === "select" ? 2_000 : false,
+    refetchInterval: (query) => {
+      if (step !== "select") return false;
+      const hasPending = (query.state.data ?? []).some(
+        ({ result_summary }) => result_summary.status === "pending",
+      );
+      return hasPending || regeneratingIds.length > 0 ? 500 : 2_000;
+    },
   });
-  const visibleLogs = useMemo(
-    () => (logs.data ?? []).filter((log) => inPeriod(log, period)),
-    [logs.data, period],
-  );
+  const visibleLogs = logs.data ?? [];
   const selectedById = useMemo(
     () => new Map((logs.data ?? []).map((log) => [log.id, log])),
     [logs.data],
   );
+  const selectableLogs = useMemo(
+    () => visibleLogs.filter(({ state }) => state === "unreviewed").slice(0, 20),
+    [visibleLogs],
+  );
+  const selectedSelectableCount = selectableLogs.filter(({ id }) =>
+    selectedIds.includes(id)).length;
+  const allSelectableSelected = selectableLogs.length > 0
+    && selectedSelectableCount === selectableLogs.length;
+  const partiallySelected = selectedSelectableCount > 0 && !allSelectableSelected;
+  useLayoutEffect(() => {
+    if (!selectAllRef.current) return;
+    selectAllRef.current.indeterminate = partiallySelected;
+  }, [logs.data, partiallySelected]);
   useEffect(() => {
     if (!logs.data) return;
     const selectable = new Set(
@@ -173,6 +233,15 @@ export function CurationWorkspace({
       const next = current.filter((id) => selectable.has(id));
       return next.length === current.length ? current : next;
     });
+  }, [logs.data]);
+  useEffect(() => {
+    if (!logs.data) return;
+    const pending = new Set(
+      logs.data
+        .filter(({ result_summary }) => result_summary.status === "pending")
+        .map(({ id }) => id),
+    );
+    setRegeneratingIds((current) => current.filter((id) => pending.has(id)));
   }, [logs.data]);
 
   const updateExcluded = async (log: CurationLog) => {
@@ -198,6 +267,22 @@ export function CurationWorkspace({
       await logs.refetch();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "로그를 삭제하지 못했습니다.");
+    }
+  };
+  const regenerateResultSummary = async (log: CurationLog) => {
+    if (!log.result_summary.can_regenerate || regeneratingIds.includes(log.id)) return;
+    setError("");
+    setRegeneratingIds((current) => [...current, log.id]);
+    try {
+      await client.regenerateResultSummary(log.id);
+      await logs.refetch();
+    } catch (cause) {
+      setRegeneratingIds((current) => current.filter((id) => id !== log.id));
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "보관 중인 응답으로 결과 요약을 다시 만들지 못했습니다.",
+      );
     }
   };
   const requestProposal = async () => {
@@ -265,10 +350,12 @@ export function CurationWorkspace({
               <select
                 value={period}
                 onChange={(event) => {
-                  setPeriod(event.target.value as Period);
+                  setPeriod(event.target.value as ActivityPeriod);
                   setSelectedIds([]);
                 }}
               >
+                <option value="today">오늘</option>
+                <option value="day">24시간 동안</option>
                 <option value="week">최근 7일</option>
                 <option value="month">최근 30일</option>
                 <option value="quarter">최근 90일</option>
@@ -307,6 +394,30 @@ export function CurationWorkspace({
             </div>
           )}
           <ul className="curation-log-list">
+            {stateFilter === "unreviewed" && visibleLogs.length > 0 && (
+              <li className="curation-log-list__bulk">
+                <label>
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    checked={allSelectableSelected}
+                    aria-checked={partiallySelected ? "mixed" : allSelectableSelected}
+                    disabled={selectableLogs.length === 0}
+                    onChange={(event) => setSelectedIds(
+                      event.target.checked ? selectableLogs.map(({ id }) => id) : [],
+                    )}
+                  />
+                  <span>
+                    <strong>전체 선택</strong>
+                    <small>
+                      {visibleLogs.length > 20
+                        ? `현재 목록의 앞 20개 · ${visibleLogs.length}개 중 최대 선택 수`
+                        : `현재 목록 ${selectableLogs.length}개`}
+                    </small>
+                  </span>
+                </label>
+              </li>
+            )}
             {visibleLogs.map((log) => (
               <CurationLogRow
                 key={log.id}
@@ -314,12 +425,14 @@ export function CurationWorkspace({
                 checked={selectedIds.includes(log.id)}
                 disabled={log.state !== "unreviewed" || (!selectedIds.includes(log.id) && selectedIds.length >= 20)}
                 confirmingDelete={confirmingDeleteId === log.id}
+                regenerating={regeneratingIds.includes(log.id)}
                 onChecked={(checked) => setSelectedIds((current) => checked
                   ? [...current, log.id]
                   : current.filter((id) => id !== log.id))}
                 onExclude={() => void updateExcluded(log)}
                 onDelete={() => void deleteLog(log)}
                 onCancelDelete={() => setConfirmingDeleteId(null)}
+                onRegenerate={() => void regenerateResultSummary(log)}
               />
             ))}
           </ul>

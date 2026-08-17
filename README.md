@@ -120,7 +120,7 @@ the user's selected installation to another detected target.
 
 사용자 입력 프롬프트, 작업 위치와 활동 데이터는 기본적으로 로컬 SQLite와 로컬 spool에 저장합니다. 기본 런타임은 `127.0.0.1`에만 바인딩하며 텔레메트리나 Git 변경을 수행하지 않습니다. 사용자가 Collection destination에 외부 HTTPS collector와 access token을 명시적으로 저장한 경우에만, 위의 원격 수집 범위에 적은 데이터가 그 collector로 전송됩니다.
 
-결과 요약은 예외입니다. Codex의 최종 assistant 결과(`Stop.last_assistant_message`)만 해당 활동을 저장한 인증된 Codex summary runtime의 `codex exec --model gpt-5.3-codex-spark`에 전달합니다. 저장된 사용자 입력 프롬프트는 **결과 요약 요청**에 포함하지 않습니다. 원문 결과는 재시도를 위해 로컬에 일시 보관되며, 요약 성공·최종 실패 시 즉시 삭제됩니다. 완료되지 않은 원문은 24시간이 지나면 다음 runtime recovery에서 처리 전에 삭제됩니다. 장기 저장되는 결과 데이터는 정확히 3줄이며, 앞뒤 공백을 제거한 세 줄의 Unicode scalar 수 합계가 180자 이하인 경우만 허용됩니다. 줄 구분자는 합계에서 제외합니다. Spark를 사용할 수 없거나 인증·네트워크·출력 검증에 실패하면 다른 모델로 대체하지 않고 요약 상태를 실패로 표시합니다.
+결과 요약은 예외입니다. Codex의 최종 assistant 결과(`Stop.last_assistant_message`)만 해당 활동을 저장한 인증된 Codex summary runtime의 `codex exec --model gpt-5.3-codex-spark`에 전달합니다. 저장된 사용자 입력 프롬프트는 **결과 요약 요청**에 포함하지 않습니다. 원문 결과는 자동 재시도와 사용자가 명시적으로 누르는 `재생성`을 위해 로컬에 최대 24시간만 일시 보관됩니다. 요약 성공 시 즉시 삭제하며, 실패 상태여도 24시간이 지나면 다음 runtime recovery 또는 재생성 요청에서 먼저 삭제합니다. 따라서 이미 원문이 삭제된 과거 기록에는 재생성 버튼이 나타나지 않습니다. 장기 저장되는 결과 데이터는 정확히 3줄이며, 앞뒤 공백을 제거한 세 줄의 Unicode scalar 수 합계가 180자 이하인 경우만 허용됩니다. 줄 구분자는 합계에서 제외합니다. Spark를 사용할 수 없거나 인증·네트워크·출력 검증에 실패하면 다른 모델로 대체하지 않고 요약 상태를 실패로 표시합니다.
 
 문맥 기반 프롬프트 요약은 별도 opt-in입니다. Smart mode에서는 현재 user request의
 결정론적 projection과, 필요할 때 같은 session의 바로 이전 user activity에 이미

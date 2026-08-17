@@ -81,7 +81,7 @@ function syncDetails(api: FixtureApi) {
         selected: true,
         result_summary: activity.id === detail.id
           ? detail.result_summary
-          : { status: "unavailable", lines: null },
+          : { status: "unavailable", lines: null, can_regenerate: false },
         prompt_summary: activity.id === detail.id
           ? detail.prompt_summary
           : activity.prompt_summary,
@@ -98,7 +98,7 @@ function syncDetails(api: FixtureApi) {
       on_canvas: visible.has(activity.id), selected: activity.id === detail.id,
       result_summary: activity.id === detail.id
         ? detail.result_summary
-        : { status: "unavailable", lines: null },
+        : { status: "unavailable", lines: null, can_regenerate: false },
       prompt_summary: activity.id === detail.id
         ? detail.prompt_summary
         : activity.prompt_summary,
@@ -110,7 +110,7 @@ test("conversation pages load explicitly without duplicate turns", async ({ page
   const detail = api.state.details[1]!;
   const initial = structuredClone(detail.conversation[0]!);
   const later = structuredClone(detail.conversation[1]!);
-  later.result_summary = { status: "pending", lines: null };
+  later.result_summary = { status: "pending", lines: null, can_regenerate: false };
   detail.conversation = [initial];
   detail.conversation_total = 2;
   detail.conversation_has_more = true;
@@ -144,6 +144,7 @@ test("conversation pages load explicitly without duplicate turns", async ({ page
   later.result_summary = {
     status: "ready",
     lines: ["갱신된 첫 줄", "갱신된 둘째 줄", "갱신된 셋째 줄"],
+    can_regenerate: false,
   };
   await expect(detailPanel.getByText("갱신된 첫 줄", { exact: true })).toBeVisible({
     timeout: 2_500,
@@ -311,8 +312,8 @@ test("a ready Spark result renders exactly three stored lines without expanding 
   ] as [string, string, string];
   expect(Array.from(lines.join("")).length).toBeLessThanOrEqual(180);
   api.state.activities[0]!.result_summary_status = "ready";
-  api.state.details[1]!.result_summary = { status: "ready", lines };
-  api.state.details[1]!.selected_turn.result_summary = { status: "ready", lines };
+  api.state.details[1]!.result_summary = { status: "ready", lines, can_regenerate: false };
+  api.state.details[1]!.selected_turn.result_summary = { status: "ready", lines, can_regenerate: false };
   await page.goto("/");
 
   const card = page.getByTestId("activity-node-1");
@@ -367,8 +368,8 @@ test("pending and failed result states remain non-blocking and update through po
   api,
 }) => {
   api.state.activities[0]!.result_summary_status = "pending";
-  api.state.details[1]!.result_summary = { status: "pending", lines: null };
-  api.state.details[1]!.selected_turn.result_summary = { status: "pending", lines: null };
+  api.state.details[1]!.result_summary = { status: "pending", lines: null, can_regenerate: false };
+  api.state.details[1]!.selected_turn.result_summary = { status: "pending", lines: null, can_regenerate: false };
   await page.goto("/");
   const detailPanel = await open(page, 1);
   const result = detailPanel.getByTestId("activity-result-summary");
@@ -377,18 +378,47 @@ test("pending and failed result states remain non-blocking and update through po
   await expect(result).toContainText("Codex Spark가 결과를 요약하는 중입니다.");
 
   api.state.activities[0]!.result_summary_status = "failed";
-  api.state.details[1]!.result_summary = { status: "failed", lines: null };
-  api.state.details[1]!.selected_turn.result_summary = { status: "failed", lines: null };
+  api.state.details[1]!.result_summary = { status: "failed", lines: null, can_regenerate: false };
+  api.state.details[1]!.selected_turn.result_summary = { status: "failed", lines: null, can_regenerate: false };
   await expect(result).toHaveAttribute("data-status", "failed", { timeout: 2_000 });
   await expect(result).toContainText("결과 요약을 만들지 못했습니다.");
+  await expect(detailPanel.getByRole("button", { name: "결과 요약 재생성" })).toHaveCount(0);
   await expect(detailPanel.getByRole("heading", { name: "대화 기록 (2/2)" })).toBeVisible();
   await expect(page.getByTestId("activity-node-1")).toContainText("요약 실패");
+});
+
+test("a retained failed result regenerates asynchronously and appears without reopening detail", async ({
+  page,
+  api,
+}) => {
+  const failed = { status: "failed", lines: null, can_regenerate: true } as const;
+  api.state.activities[0]!.result_summary_status = "failed";
+  api.state.details[1]!.result_summary = failed;
+  api.state.details[1]!.selected_turn.result_summary = failed;
+
+  await page.goto("/");
+  const detailPanel = await open(page, 1);
+  const result = detailPanel.getByTestId("activity-result-summary");
+  const regenerate = detailPanel.getByRole("button", { name: "결과 요약 재생성" });
+  await expect(regenerate).toBeVisible();
+
+  await regenerate.click();
+  await expect(regenerate).toContainText("로딩...");
+  await expect(result).toHaveAttribute("aria-busy", "true");
+  await expect(result).toHaveAttribute("data-status", "ready", { timeout: 2_500 });
+  await expect(result.locator("li")).toHaveText([
+    "보관 중인 응답으로 결과 요약을 다시 만들었습니다.",
+    "세 줄과 180자 제한을 다시 검증했습니다.",
+    "완료된 요약을 즉시 로그에 반영했습니다.",
+  ]);
+  await expect(regenerate).toHaveCount(0);
+  await expect(page.getByTestId("activity-node-1")).toContainText("요약 있음");
 });
 
 test("a historical turn keeps its request/result preview compact and remains keyboard selectable", async ({ page, api }) => {
   const lines = ["첫 줄", "둘째 줄", "셋째 줄"] as [string, string, string];
   const historical = api.state.details[1]!.conversation.find(({ id }) => id === 2)!;
-  historical.result_summary = { status: "ready", lines };
+  historical.result_summary = { status: "ready", lines, can_regenerate: false };
   await page.goto("/");
   const detailPanel = await open(page, 1);
   const historicalTurn = detailPanel.locator("[data-activity-id='2']");
@@ -418,6 +448,7 @@ test("conversation history opens as a focused, expanded flow and restores focus 
   api.state.details[2]!.conversation.find(({ id }) => id === 1)!.result_summary = {
     status: "ready",
     lines,
+    can_regenerate: false,
   };
   await page.goto("/");
   const detailPanel = await open(page, 2);
@@ -607,8 +638,8 @@ test("a long selected prompt and bounded result preserve a usable conversation v
     "검증 결과와 남은 주의점을 포함하면서 전체 180자 제한을 지켰습니다.",
   ] as [string, string, string];
   expect(Array.from(longResult.join("")).length).toBeLessThanOrEqual(180);
-  api.state.details[1]!.result_summary = { status: "ready", lines: longResult };
-  api.state.details[1]!.selected_turn.result_summary = { status: "ready", lines: longResult };
+  api.state.details[1]!.result_summary = { status: "ready", lines: longResult, can_regenerate: false };
+  api.state.details[1]!.selected_turn.result_summary = { status: "ready", lines: longResult, can_regenerate: false };
   await page.goto("/");
   const detailPanel = await open(page, 1);
 
