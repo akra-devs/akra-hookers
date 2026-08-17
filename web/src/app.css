@@ -1003,7 +1003,7 @@ button.command-control {
 }
 
 .canvas-interaction-hint {
-  margin: 0 8px 5px 0 !important;
+  margin: 0 0 5px 8px !important;
   color: #748184;
   font: 500 10px var(--font-mono);
   letter-spacing: .01em;

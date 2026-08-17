@@ -8,22 +8,13 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use thiserror::Error;
 
 pub fn default_data_dir() -> PathBuf {
-    if let Some(path) = env::var_os("AKRA_HOOKERS_DATA_DIR") {
-        return PathBuf::from(path);
-    }
-
-    if let Some(path) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(path).join("akra-hookers");
-    }
-
-    if let Some(path) = env::var_os("XDG_DATA_HOME") {
-        return PathBuf::from(path).join("akra-hookers");
-    }
-
-    user_home()
-        .join(".local")
-        .join("share")
-        .join("akra-hookers")
+    resolve_default_data_dir(
+        current_data_platform(),
+        environment_path("AKRA_HOOKERS_DATA_DIR"),
+        environment_path("LOCALAPPDATA"),
+        environment_path("XDG_DATA_HOME"),
+        user_home(),
+    )
 }
 
 pub fn codex_home() -> PathBuf {
@@ -35,10 +26,74 @@ pub fn codex_home() -> PathBuf {
 }
 
 pub fn user_home() -> PathBuf {
-    env::var_os("USERPROFILE")
-        .or_else(|| env::var_os("HOME"))
+    resolve_user_home(
+        current_data_platform(),
+        environment_path("USERPROFILE"),
+        environment_path("HOME"),
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DataPlatform {
+    Windows,
+    Linux,
+    MacOs,
+    Ios,
+    Other,
+}
+
+const fn current_data_platform() -> DataPlatform {
+    if cfg!(target_os = "windows") {
+        DataPlatform::Windows
+    } else if cfg!(target_os = "linux") {
+        DataPlatform::Linux
+    } else if cfg!(target_os = "macos") {
+        DataPlatform::MacOs
+    } else if cfg!(target_os = "ios") {
+        DataPlatform::Ios
+    } else {
+        DataPlatform::Other
+    }
+}
+
+fn environment_path(name: &str) -> Option<PathBuf> {
+    env::var_os(name)
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn resolve_default_data_dir(
+    platform: DataPlatform,
+    configured: Option<PathBuf>,
+    local_app_data: Option<PathBuf>,
+    xdg_data_home: Option<PathBuf>,
+    home: PathBuf,
+) -> PathBuf {
+    if let Some(configured) = configured {
+        return configured;
+    }
+
+    let base = match platform {
+        DataPlatform::Windows => {
+            local_app_data.unwrap_or_else(|| home.join("AppData").join("Local"))
+        }
+        DataPlatform::Linux => xdg_data_home.unwrap_or_else(|| home.join(".local").join("share")),
+        DataPlatform::MacOs | DataPlatform::Ios => home.join("Library").join("Application Support"),
+        DataPlatform::Other => xdg_data_home.unwrap_or_else(|| home.join(".local").join("share")),
+    };
+    base.join("akra-hookers")
+}
+
+fn resolve_user_home(
+    platform: DataPlatform,
+    user_profile: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> PathBuf {
+    match platform {
+        DataPlatform::Windows => user_profile.or(home),
+        _ => home.or(user_profile),
+    }
+    .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[cfg(windows)]
@@ -426,6 +481,107 @@ pub enum HookCommandError {
     InvalidWslCwd(String),
     #[error("invalid capture target identifier: {0}")]
     InvalidCaptureTarget(String),
+}
+
+#[cfg(test)]
+mod data_directory_tests {
+    use std::path::PathBuf;
+
+    use super::{DataPlatform, resolve_default_data_dir, resolve_user_home};
+
+    #[test]
+    fn explicit_directory_overrides_every_platform_default() {
+        assert_eq!(
+            resolve_default_data_dir(
+                DataPlatform::Linux,
+                Some(PathBuf::from("/srv/akra-state")),
+                Some(PathBuf::from("/mnt/c/Users/alex/AppData/Local")),
+                Some(PathBuf::from("/home/alex/.data")),
+                PathBuf::from("/home/alex"),
+            ),
+            PathBuf::from("/srv/akra-state")
+        );
+    }
+
+    #[test]
+    fn windows_uses_local_app_data() {
+        let local_app_data = PathBuf::from(r"C:\Users\alex\AppData\Local");
+        assert_eq!(
+            resolve_default_data_dir(
+                DataPlatform::Windows,
+                None,
+                Some(local_app_data.clone()),
+                Some(PathBuf::from(r"C:\wrong-xdg")),
+                PathBuf::from(r"C:\Users\alex"),
+            ),
+            local_app_data.join("akra-hookers")
+        );
+    }
+
+    #[test]
+    fn ubuntu_uses_xdg_and_ignores_inherited_windows_environment() {
+        let xdg_data_home = PathBuf::from("/home/alex/.data");
+        assert_eq!(
+            resolve_default_data_dir(
+                DataPlatform::Linux,
+                None,
+                Some(PathBuf::from("/mnt/c/Users/alex/AppData/Local")),
+                Some(xdg_data_home.clone()),
+                PathBuf::from("/home/alex"),
+            ),
+            xdg_data_home.join("akra-hookers")
+        );
+        assert_eq!(
+            resolve_default_data_dir(
+                DataPlatform::Linux,
+                None,
+                Some(PathBuf::from("/mnt/c/Users/alex/AppData/Local")),
+                None,
+                PathBuf::from("/home/alex"),
+            ),
+            PathBuf::from("/home/alex")
+                .join(".local")
+                .join("share")
+                .join("akra-hookers")
+        );
+    }
+
+    #[test]
+    fn apple_platforms_use_application_support() {
+        for platform in [DataPlatform::MacOs, DataPlatform::Ios] {
+            assert_eq!(
+                resolve_default_data_dir(
+                    platform,
+                    None,
+                    None,
+                    Some(PathBuf::from("/wrong-xdg")),
+                    PathBuf::from("/sandbox/home"),
+                ),
+                PathBuf::from("/sandbox/home")
+                    .join("Library")
+                    .join("Application Support")
+                    .join("akra-hookers")
+            );
+        }
+    }
+
+    #[test]
+    fn unix_home_wins_over_an_inherited_windows_profile() {
+        let windows_profile = Some(PathBuf::from(r"C:\Users\alex"));
+        let unix_home = Some(PathBuf::from("/home/alex"));
+        assert_eq!(
+            resolve_user_home(
+                DataPlatform::Linux,
+                windows_profile.clone(),
+                unix_home.clone()
+            ),
+            PathBuf::from("/home/alex")
+        );
+        assert_eq!(
+            resolve_user_home(DataPlatform::Other, windows_profile, unix_home),
+            PathBuf::from("/home/alex")
+        );
+    }
 }
 
 #[cfg(all(test, windows))]

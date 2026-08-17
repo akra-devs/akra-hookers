@@ -30,6 +30,9 @@ membership, names, placement, and relationships remain user-confirmed organizati
   one or more WSL distributions.
 - Work happens across repositories, clones, linked worktrees, and shared or
   dedicated work locations.
+- Windows CLI and the official portable desktop shell share one stable
+  `%LOCALAPPDATA%\akra-hookers` store. Linux/Ubuntu follows XDG data-directory
+  rules, while Apple native hosts use their sandbox Application Support directory.
 - The dashboard is a localhost-first operational workspace used alongside coding
   sessions, not a cloud analytics product. A user can explicitly configure a
   separate HTTPS collector for a source machine when they need to centralize

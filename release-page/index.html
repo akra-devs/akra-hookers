@@ -11,6 +11,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;600;700&family=Playfair+Display:ital,wght@0,500;0,600;1,500&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./walkthrough.css" />
   </head>
   <body>
     <!--
@@ -25,7 +26,7 @@
       <a class="brand" href="https://akra.kr/" aria-label="Akra Dev 홈으로 이동">
         <svg viewBox="0 0 44 44" aria-hidden="true"><path d="M22 4 39 36h-9.4l-4.2-8-11.8 8H5L22 4Zm0 15.1L15.7 30l7.1-4.8L22 19.1Z" /></svg><span>AKRA DEV</span>
       </a>
-      <div class="nav-links"><a href="#mechanism">제품</a><a href="#portable">포터블</a><a href="https://github.com/akra-devs/akra-hookers">GitHub</a></div>
+      <div class="nav-links"><a href="#mechanism">작동 방식</a><a href="#walkthrough">사용법</a><a href="https://github.com/akra-devs/akra-hookers">GitHub</a></div>
       <a class="nav-download" href="#download-section">다운로드</a>
     </nav>
     <main>
@@ -42,8 +43,8 @@
         </div>
         <figure class="product-stage" aria-labelledby="stage-caption">
           <div class="stage-aurora" aria-hidden="true"></div>
-          <div class="canvas-window"><img src="./product-canvas.png" alt="프로젝트별 프롬프트 노드, 연결선, 활동 상세가 표시된 Akra Hookers 실제 대시보드" /></div>
-          <figcaption id="stage-caption">Akra Hookers 실제 제품 화면 · 프로젝트 캔버스와 활동 상세</figcaption>
+          <div class="canvas-window"><img src="./product-canvas.png" width="1280" height="900" decoding="async" alt="왼쪽 프로젝트 탐색, 중앙의 연결된 활동 노드, 오른쪽 활동 상세가 함께 표시된 Akra Hookers 실제 대시보드" /></div>
+          <figcaption id="stage-caption">실제 제품 화면 · 탐색, 활동 지도, 근거 상세를 한 화면에서</figcaption>
         </figure>
         <a class="scroll-cue" href="#mechanism">맥락이 이어지는 방식 <span aria-hidden="true">↓</span></a>
       </section>
@@ -55,9 +56,84 @@
           <article><em>NEXT</em><h3>짧은 후속 요청의 맥락</h3><p>“진행해” 같은 요청도 직전 결과 요약과 함께 이해할 수 있게 표시합니다.</p></article>
         </div>
       </section>
+      <section id="walkthrough" class="walkthrough section-shell" aria-labelledby="walkthrough-title">
+        <div class="section-heading">
+          <h2 id="walkthrough-title">한 화면을<br />이렇게 읽습니다.</h2>
+          <p>먼저 기록의 범위를 고르고, 필요한 로그만 작업으로 승격한 뒤, 작업 사이 관계와 원본 근거를 오갑니다. 아래 화면은 모두 실제 Akra Hookers 렌더 결과를 영역별로 나눈 것입니다.</p>
+        </div>
+        <div class="product-tour">
+          <article class="product-tour__step">
+            <figure class="product-tour__media product-tour__media--portrait">
+              <img src="./product-rail.png" width="258" height="470" loading="lazy" decoding="async" alt="전체 활동, Inbox, 프로젝트와 작업 위치가 표시된 왼쪽 탐색 영역" />
+              <figcaption>실제 제품 화면 · 왼쪽 탐색</figcaption>
+            </figure>
+            <div class="product-tour__copy">
+              <h3>왼쪽에서 볼 기록의 범위를 정합니다.</h3>
+              <p class="product-tour__role">탐색 · 프로젝트 · 작업 위치</p>
+              <p>전체 기록과 아직 분류하지 않은 Inbox를 오가고, 프로젝트별 활동 수와 실제 수집 위치를 확인합니다. 기간 필터가 바뀌면 이 숫자도 같은 조건으로 함께 갱신됩니다.</p>
+              <dl>
+                <div><dt>All activity</dt><dd>현재 조건에 맞는 모든 수집 기록</dd></div>
+                <div><dt>Inbox</dt><dd>프로젝트를 아직 확정하지 않은 기록</dd></div>
+                <div><dt>Work locations</dt><dd>프롬프트가 제출된 저장소와 라우팅 상태</dd></div>
+              </dl>
+            </div>
+          </article>
+
+          <article class="product-tour__step product-tour__step--curation">
+            <figure class="product-tour__media product-tour__media--wide product-tour__media--curation">
+              <img src="./product-curation.png" width="1022" height="332" loading="lazy" decoding="async" alt="기간과 상태를 고르고 로그를 선택하는 로그 정리 화면" />
+              <figcaption>실제 제품 화면 · 로그 선택과 작업 승격</figcaption>
+            </figure>
+            <div class="product-tour__copy">
+              <h3>필요한 로그만 작업 후보로 정리합니다.</h3>
+              <p class="product-tour__role">로그 정리 · 사용자 확인</p>
+              <p>한 세션 전체를 자동으로 묶지 않습니다. 사용자가 검토할 로그를 고르면 AI는 제한된 요약만으로 기존 작업 편입과 신규 작업을 제안하고, 실제 반영은 사용자가 확정합니다.</p>
+              <dl>
+                <div><dt>선택</dt><dd>기간과 상태를 좁히고 필요한 로그만 지정</dd></div>
+                <div><dt>제안</dt><dd>요청 요약과 3줄 결과 요약으로 작업 후보 구성</dd></div>
+                <div><dt>확정</dt><dd>원본 보존 여부와 작업 이름을 검토한 뒤 반영</dd></div>
+              </dl>
+            </div>
+          </article>
+
+          <article class="product-tour__step">
+            <figure class="product-tour__media product-tour__media--wide">
+              <img src="./product-workspace.png" width="652" height="560" loading="lazy" decoding="async" alt="두 개의 근거 로그로 구성된 배포 페이지 공개 작업 노드가 놓인 중앙 작업 지도" />
+              <figcaption>실제 제품 화면 · 사용자가 확인한 작업 지도</figcaption>
+            </figure>
+            <div class="product-tour__copy">
+              <h3>중앙에는 확인된 작업만 남깁니다.</h3>
+              <p class="product-tour__role">작업 지도 · 사용자 연결</p>
+              <p>수집 로그 하나가 곧 노드 하나가 되는 구조가 아닙니다. 여러 프롬프트·응답 로그가 한 작업의 근거가 되고, 작업 사이 연결선은 최근 대화 순서가 아니라 사용자가 표현한 관계입니다.</p>
+              <dl>
+                <div><dt>작업 노드</dt><dd>하나 이상의 근거 로그와 확인된 작업 이름</dd></div>
+                <div><dt>연결선</dt><dd>사용자가 직접 만든 작업 간 관계</dd></div>
+                <div><dt>확인 상태</dt><dd>근거 로그 수와 사용자 확인 여부를 노드에 표시</dd></div>
+              </dl>
+            </div>
+          </article>
+
+          <article class="product-tour__step">
+            <figure class="product-tour__media product-tour__media--portrait product-tour__media--detail">
+              <img src="./product-detail.png" width="370" height="656" loading="lazy" decoding="async" alt="작업 이름, 두 개의 근거 로그와 각 결과 요약이 표시된 오른쪽 작업 상세" />
+              <figcaption>실제 제품 화면 · 작업의 근거 로그</figcaption>
+            </figure>
+            <div class="product-tour__copy">
+              <h3>오른쪽에서 언제든 원래 근거로 돌아갑니다.</h3>
+              <p class="product-tour__role">작업 상세 · 근거 로그</p>
+              <p>작업 노드를 선택하면 어떤 요청과 결과가 이 작업을 만들었는지 확인할 수 있습니다. 요약만으로 부족할 때는 수집된 원문을 펼치고, 잘못 들어간 로그는 작업에서 분리할 수 있습니다.</p>
+              <dl>
+                <div><dt>근거 로그</dt><dd>작업에 포함된 프롬프트·응답 묶음</dd></div>
+                <div><dt>결과 요약</dt><dd>각 응답의 핵심을 최대 180자, 3줄로 표시</dd></div>
+                <div><dt>원문 확인</dt><dd>필요한 순간에만 요청 원문을 펼쳐 검증</dd></div>
+              </dl>
+            </div>
+          </article>
+        </div>
+      </section>
       <section id="portable" class="portable section-shell" aria-labelledby="portable-title">
-        <div class="portable-visual" aria-hidden="true"><div class="folder-tab">AKRA HOOKERS</div><div class="folder-body"><span>Akra Hookers.exe</span><div class="folder-tree"><b>Akra Hookers Data</b><i>runtime / SQLite / spool / settings</i></div></div></div>
-        <div class="portable-copy"><h2 id="portable-title">앱을 옮기면,<br />데이터도 함께.</h2><p>설치 프로그램 없이 ZIP을 풀어 실행합니다. 활동 기록과 설정은 실행 파일 옆 <code>Akra Hookers Data</code> 폴더에 저장됩니다.</p><ul><li>기본 연결은 127.0.0.1 내부에서만 동작</li><li>로그인과 별도 클라우드 계정 불필요</li><li>SHA-256 파일로 다운로드 무결성 확인</li></ul></div>
+        <div class="portable-visual" aria-hidden="true"><div class="folder-tab">AKRA HOOKERS</div><div class="folder-body"><span>Akra Hookers.exe</span><div class="folder-tree"><b>%LOCALAPPDATA%\akra-hookers</b><i>SQLite / spool / settings / bin</i></div></div></div>
+        <div class="portable-copy"><h2 id="portable-title">앱은 포터블,<br />데이터는 한곳에.</h2><p>설치 프로그램 없이 ZIP을 풀어 실행합니다. 실행 위치와 무관하게 활동 기록과 설정은 Windows 표준 사용자 경로 <code>%LOCALAPPDATA%\akra-hookers</code>에 유지됩니다.</p><ul><li>CLI와 portable이 같은 활동 기록 사용</li><li>ZIP을 옮기거나 교체해도 기록 경로 유지</li><li>기본 연결은 127.0.0.1 내부에서만 동작</li></ul></div>
       </section>
       <section id="download-section" class="download-section" aria-labelledby="download-title">
         <p class="download-version" id="release-version">최신 릴리스 확인 중…</p>

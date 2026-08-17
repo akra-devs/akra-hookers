@@ -1,0 +1,228 @@
+.walkthrough {
+  padding: 70px 0 170px;
+}
+
+.product-tour {
+  margin-top: 88px;
+  border-top: 1px solid var(--line);
+}
+
+.product-tour__step {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr);
+  align-items: center;
+  gap: clamp(44px, 7vw, 100px);
+  padding: 82px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.product-tour__step:nth-child(even) .product-tour__media {
+  order: 2;
+}
+
+.product-tour__step:nth-child(even) .product-tour__copy {
+  order: 1;
+  justify-self: end;
+}
+
+.product-tour__step--curation {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 44px;
+}
+
+.product-tour__step.product-tour__step--curation .product-tour__media {
+  order: initial;
+  width: min(1022px, 100%);
+  margin-inline: auto;
+}
+
+.product-tour__step.product-tour__step--curation .product-tour__copy {
+  order: initial;
+  justify-self: start;
+  max-width: 48rem;
+}
+
+.product-tour__media {
+  position: relative;
+  min-width: 0;
+  margin: 0;
+}
+
+.product-tour__media img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 36px 90px rgba(0, 0, 0, .52), 0 0 70px rgba(75, 129, 255, .1);
+}
+
+.product-tour__media figcaption {
+  margin-top: 12px;
+  color: var(--muted);
+  font: 700 9px/1.5 ui-monospace, monospace;
+  letter-spacing: .08em;
+  text-align: right;
+}
+
+.product-tour__media--portrait {
+  display: grid;
+  min-height: 560px;
+  place-items: center;
+  background: radial-gradient(circle at 50% 48%, rgba(62, 130, 255, .16), transparent 57%);
+}
+
+.product-tour__media--portrait img {
+  width: min(258px, 64%);
+  border-radius: 8px;
+}
+
+.product-tour__media--portrait figcaption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+}
+
+.product-tour__media--detail img {
+  width: min(370px, 74%);
+}
+
+.product-tour__media--wide img {
+  background: var(--bg);
+}
+
+.product-tour__copy {
+  max-width: 34rem;
+}
+
+.product-tour__copy h3 {
+  margin: 0;
+  color: var(--ink);
+  font-family: "Noto Serif KR", serif;
+  font-size: clamp(2.1rem, 3.5vw, 4rem);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -.035em;
+  word-break: keep-all;
+}
+
+.product-tour__role {
+  margin: 18px 0 0;
+  color: var(--cyan);
+  font: 800 10px/1.4 ui-monospace, monospace;
+  letter-spacing: .13em;
+}
+
+.product-tour__copy > p:not(.product-tour__role) {
+  margin: 24px 0 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.85;
+  word-break: keep-all;
+}
+
+.product-tour__copy dl {
+  margin: 31px 0 0;
+  border-top: 1px solid rgba(255, 255, 255, .12);
+}
+
+.product-tour__copy dl > div {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 18px;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+
+.product-tour__copy dt {
+  color: var(--lichen);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.product-tour__copy dd {
+  margin: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.6;
+  word-break: keep-all;
+}
+
+@media (max-width: 980px) {
+  .walkthrough {
+    padding-top: 40px;
+  }
+
+  .product-tour__step {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 44px;
+  }
+
+  .product-tour__step:nth-child(even) .product-tour__media,
+  .product-tour__step:nth-child(even) .product-tour__copy {
+    order: initial;
+    justify-self: initial;
+  }
+
+  .product-tour__media {
+    width: min(820px, 100%);
+    margin-inline: auto;
+  }
+
+  .product-tour__copy {
+    max-width: 42rem;
+  }
+}
+
+@media (max-width: 680px) {
+  .walkthrough {
+    padding: 28px 0 100px;
+  }
+
+  .product-tour {
+    margin-top: 54px;
+  }
+
+  .product-tour__step {
+    gap: 34px;
+    padding: 54px 0;
+  }
+
+  .product-tour__media img {
+    border-radius: 8px;
+  }
+
+  .product-tour__media--portrait {
+    min-height: 0;
+    gap: 12px;
+    padding: 24px 0;
+  }
+
+  .product-tour__media--portrait img {
+    width: min(238px, 78%);
+  }
+
+  .product-tour__media--detail img {
+    width: min(320px, 88%);
+  }
+
+  .product-tour__media--portrait figcaption {
+    position: static;
+    justify-self: end;
+    margin-top: 0;
+  }
+
+  .product-tour__media--curation {
+    overflow: hidden;
+  }
+
+  .product-tour__media--curation img {
+    width: 145%;
+    max-width: none;
+  }
+
+  .product-tour__copy dl > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+}

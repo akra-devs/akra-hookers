@@ -5,15 +5,23 @@ import { createReadStream } from "node:fs";
 import { access, chmod, copyFile, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isSafeExternalUrl, parseRuntimeReady, startStaticServer } from "./runtime.mjs";
+import {
+  isSafeExternalUrl,
+  parseRuntimeReady,
+  resolveAkraDataDirectory,
+  startStaticServer,
+} from "./runtime.mjs";
 
 const DESKTOP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SIDECAR_NAME = process.platform === "win32" ? "akra-hookers.exe" : "akra-hookers";
 const STARTUP_TIMEOUT_MS = 30_000;
-const PORTABLE_ROOT = app.isPackaged
-  ? path.join(path.dirname(process.execPath), "Akra Hookers Data")
-  : app.getPath("userData");
-if (app.isPackaged) app.setPath("userData", path.join(PORTABLE_ROOT, "electron"));
+const APP_DATA_ROOT = resolveAkraDataDirectory({
+  platform: process.platform,
+  environment: process.env,
+  homeDirectory: app.getPath("home"),
+  fallbackDataDirectory: app.getPath("appData"),
+});
+app.setPath("userData", path.join(APP_DATA_ROOT, "electron"));
 let mainWindow = null;
 let runtimeProcess = null;
 let runtimeCredentials = null;
@@ -37,7 +45,7 @@ async function digest(file) {
 async function installStableSidecar() {
   const source = bundledSidecarPath();
   await access(source);
-  const binDir = path.join(PORTABLE_ROOT, "bin");
+  const binDir = path.join(APP_DATA_ROOT, "bin");
   const destination = path.join(binDir, SIDECAR_NAME);
   await mkdir(binDir, { recursive: true });
   try {
@@ -70,7 +78,7 @@ async function installStableSidecar() {
 
 async function startRuntime() {
   const executable = await installStableSidecar();
-  const dataDir = path.join(PORTABLE_ROOT, "runtime");
+  const dataDir = APP_DATA_ROOT;
   await mkdir(dataDir, { recursive: true });
   const child = spawn(executable, ["serve", "--bind", "127.0.0.1", "--port", "0", "--data-dir", dataDir], {
     windowsHide: true,

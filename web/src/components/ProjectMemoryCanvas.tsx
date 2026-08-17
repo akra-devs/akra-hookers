@@ -199,7 +199,7 @@ export function ProjectMemoryCanvas({
               {Math.round(zoom * 100)}%
             </span>
           </Controls>
-          <Panel className="canvas-interaction-hint" position="bottom-right">
+          <Panel className="canvas-interaction-hint" position="bottom-left">
             선을 더블클릭해 제거 <span aria-hidden="true">·</span> 노드를 연결해 관계 표현
           </Panel>
         </ReactFlow>
