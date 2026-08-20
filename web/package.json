@@ -7,7 +7,10 @@
     "build": "vite build",
     "dev": "vite --host 127.0.0.1 --port 42131 --strictPort",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "showcase:record": "playwright test --config showcase/playwright.config.ts && node showcase/finalize.mjs",
+    "showcase:youtube": "node showcase/mix-youtube.mjs",
+    "showcase:record:youtube": "npm run showcase:record && npm run showcase:youtube"
   },
   "dependencies": {
     "@xyflow/react": "^12.10.0",
