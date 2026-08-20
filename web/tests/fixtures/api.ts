@@ -622,8 +622,11 @@ export class FixtureApi {
 
 }
 
-export async function installFixtureApi(page: Page): Promise<FixtureApi> {
-  const api = new FixtureApi();
+export async function installFixtureApi(
+  page: Page,
+  state?: FixtureState,
+): Promise<FixtureApi> {
+  const api = new FixtureApi(state);
   await page.route("**/v1/**", (route) => fulfill(route, api));
   return api;
 }
