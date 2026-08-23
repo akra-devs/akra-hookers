@@ -1,14 +1,10 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    io::Read,
+    fs::{self, File},
+    io::{self, ErrorKind, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{
-        Arc, LazyLock,
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
     time::Duration,
 };
 
@@ -18,15 +14,11 @@ use thiserror::Error;
 use wait_timeout::ChildExt;
 
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_millis(100);
-const CAPTURE_IDENTITY_TIMEOUT: Duration = Duration::from_millis(250);
 const WSL_GIT_COMMAND_TIMEOUT: Duration = Duration::from_millis(750);
-const WSL_CAPTURE_IDENTITY_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_WSL_DISTRO_BYTES: usize = 128;
 const MAX_WSL_PATH_BYTES: usize = 4096;
 const MAX_WSL_ORIGIN_OUTPUT_BYTES: usize = 16 * 1024;
-const MAX_IDENTITY_WORKERS: usize = 4;
-static IDENTITY_WORKERS: LazyLock<WorkerPool> =
-    LazyLock::new(|| WorkerPool::new(MAX_IDENTITY_WORKERS));
+const MAX_GIT_POINTER_BYTES: u64 = 4 * 1024;
 
 const WSL_ORIGIN_SCRIPT: &str = r#"cwd=$1
 [ -d "$cwd" ] || exit 3
@@ -78,7 +70,7 @@ impl ProjectIdentity {
     }
 
     pub fn capture_snapshot_from_cwd(cwd: &Path) -> Result<ProjectCaptureSnapshot, IdentityError> {
-        capture_snapshot_bounded(cwd, PathBuf::from("git"), CAPTURE_IDENTITY_TIMEOUT)
+        Ok(capture_snapshot_or_unresolved(cwd, Path::new("git")))
     }
 
     /// Captures project identity in the originating WSL distribution. The Linux
@@ -94,12 +86,7 @@ impl ProjectIdentity {
         let Some(wsl_executable) = windows_wsl_executable() else {
             return Ok(fallback);
         };
-        capture_wsl_snapshot_bounded_with_pool(
-            context,
-            wsl_executable,
-            WSL_CAPTURE_IDENTITY_TIMEOUT,
-            &IDENTITY_WORKERS,
-        )
+        Ok(capture_wsl_snapshot_or_unresolved(context, &wsl_executable))
     }
 
     pub fn key(&self) -> &str {
@@ -148,66 +135,16 @@ impl WslCaptureContext {
     }
 }
 
-fn capture_snapshot_bounded(
-    cwd: &Path,
-    git_program: PathBuf,
-    timeout: Duration,
-) -> Result<ProjectCaptureSnapshot, IdentityError> {
-    capture_snapshot_bounded_with_pool(cwd, git_program, timeout, &IDENTITY_WORKERS)
+fn capture_snapshot_or_unresolved(cwd: &Path, git_program: &Path) -> ProjectCaptureSnapshot {
+    capture_snapshot(cwd, git_program).unwrap_or_else(|_| unresolved_snapshot(cwd))
 }
 
-fn capture_snapshot_bounded_with_pool(
-    cwd: &Path,
-    git_program: PathBuf,
-    timeout: Duration,
-    workers: &WorkerPool,
-) -> Result<ProjectCaptureSnapshot, IdentityError> {
-    let submitted_cwd = cwd.to_path_buf();
-    let fallback = unresolved_snapshot(&submitted_cwd);
-    let Some(permit) = workers.try_acquire() else {
-        return Ok(fallback);
-    };
-    let worker_cwd = submitted_cwd.clone();
-    let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::Builder::new()
-        .name("akra-identity".to_owned())
-        .spawn(move || {
-            let _permit = permit;
-            let result = capture_snapshot(&worker_cwd, &git_program);
-            let _ = sender.send(result);
-        })
-        .map_err(IdentityError::WorkerSpawn)?;
-    match receiver.recv_timeout(timeout) {
-        Ok(Ok(snapshot)) => Ok(snapshot),
-        Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(fallback),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(IdentityError::WorkerDisconnected),
-    }
-}
-
-fn capture_wsl_snapshot_bounded_with_pool(
+fn capture_wsl_snapshot_or_unresolved(
     context: WslCaptureContext,
-    wsl_executable: PathBuf,
-    timeout: Duration,
-    workers: &WorkerPool,
-) -> Result<ProjectCaptureSnapshot, IdentityError> {
+    wsl_executable: &Path,
+) -> ProjectCaptureSnapshot {
     let fallback = context.unresolved_snapshot();
-    let Some(permit) = workers.try_acquire() else {
-        return Ok(fallback);
-    };
-    let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::Builder::new()
-        .name("akra-wsl-identity".to_owned())
-        .spawn(move || {
-            let _permit = permit;
-            let result = capture_wsl_snapshot(&context, &wsl_executable);
-            let _ = sender.send(result);
-        })
-        .map_err(IdentityError::WorkerSpawn)?;
-    match receiver.recv_timeout(timeout) {
-        Ok(Ok(snapshot)) => Ok(snapshot),
-        Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Timeout) => Ok(fallback),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(IdentityError::WorkerDisconnected),
-    }
+    capture_wsl_snapshot(&context, wsl_executable).unwrap_or(fallback)
 }
 
 fn capture_wsl_snapshot(
@@ -334,48 +271,6 @@ fn windows_wsl_executable() -> Option<PathBuf> {
     .then_some(executable)
 }
 
-struct WorkerPool {
-    inner: Arc<WorkerPoolInner>,
-}
-
-struct WorkerPoolInner {
-    active: AtomicUsize,
-    limit: usize,
-}
-
-impl WorkerPool {
-    fn new(limit: usize) -> Self {
-        Self {
-            inner: Arc::new(WorkerPoolInner {
-                active: AtomicUsize::new(0),
-                limit,
-            }),
-        }
-    }
-
-    fn try_acquire(&self) -> Option<WorkerPermit> {
-        self.inner
-            .active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                (active < self.inner.limit).then_some(active + 1)
-            })
-            .ok()?;
-        Some(WorkerPermit {
-            inner: Arc::clone(&self.inner),
-        })
-    }
-}
-
-struct WorkerPermit {
-    inner: Arc<WorkerPoolInner>,
-}
-
-impl Drop for WorkerPermit {
-    fn drop(&mut self) {
-        self.inner.active.fetch_sub(1, Ordering::Release);
-    }
-}
-
 fn capture_snapshot(
     cwd: &Path,
     git_program: &Path,
@@ -411,7 +306,15 @@ fn canonical_project_paths(
     git_program: &Path,
 ) -> Result<(ProjectOriginKind, PathBuf, PathBuf, PathBuf), IdentityError> {
     let worktree_path = cwd.canonicalize().map_err(IdentityError::Canonicalize)?;
-    match git_project_paths(&worktree_path, git_program)? {
+    let git_paths = if git_environment_requires_process() {
+        git_project_paths(&worktree_path, git_program)?
+    } else {
+        match filesystem_git_project_paths(&worktree_path) {
+            Ok(paths) => paths,
+            Err(_) => git_project_paths(&worktree_path, git_program)?,
+        }
+    };
+    match git_paths {
         Some((common_dir, display_path)) => Ok((
             ProjectOriginKind::Git,
             common_dir,
@@ -425,6 +328,146 @@ fn canonical_project_paths(
             worktree_path,
         )),
     }
+}
+
+fn git_environment_requires_process() -> bool {
+    [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    ]
+    .into_iter()
+    .any(|name| std::env::var_os(name).is_some())
+}
+
+fn filesystem_git_project_paths(cwd: &Path) -> io::Result<Option<(PathBuf, PathBuf)>> {
+    for root in cwd.ancestors() {
+        let marker = root.join(".git");
+        let metadata = match fs::symlink_metadata(&marker) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                if root.join("HEAD").is_file()
+                    && root.join("objects").is_dir()
+                    && root.join("refs").is_dir()
+                {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        "bare repository requires Git discovery",
+                    ));
+                }
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let git_dir = if metadata.file_type().is_dir() {
+            marker.canonicalize()?
+        } else if metadata.file_type().is_file() {
+            resolve_git_pointer(root, &marker)?
+        } else {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "unsupported .git marker",
+            ));
+        };
+        let common_dir = resolve_common_dir(&git_dir)?;
+        if !git_dir.join("HEAD").is_file()
+            || !common_dir.join("objects").is_dir()
+            || !common_dir.join("refs").is_dir()
+        {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "incomplete Git directory",
+            ));
+        }
+        return Ok(Some((common_dir, root.to_path_buf())));
+    }
+    Ok(None)
+}
+
+fn resolve_git_pointer(worktree_root: &Path, marker: &Path) -> io::Result<PathBuf> {
+    let pointer = read_bounded_git_text(marker)?;
+    let mut lines = pointer.lines();
+    let line = lines
+        .next()
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "empty .git pointer"))?;
+    if lines.next().is_some() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "multiline .git pointer",
+        ));
+    }
+    let value = line
+        .strip_prefix("gitdir:")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "invalid .git pointer"))?;
+    let path = PathBuf::from(value);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        worktree_root.join(path)
+    };
+    let path = path.canonicalize()?;
+    if !path.is_dir() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            ".git pointer is not a directory",
+        ));
+    }
+    Ok(path)
+}
+
+fn resolve_common_dir(git_dir: &Path) -> io::Result<PathBuf> {
+    let marker = git_dir.join("commondir");
+    let value = match read_bounded_git_text(&marker) {
+        Ok(value) => value,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(git_dir.to_path_buf()),
+        Err(error) => return Err(error),
+    };
+    let value = value.trim();
+    if value.is_empty() || value.lines().count() != 1 {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "invalid Git commondir",
+        ));
+    }
+    let path = PathBuf::from(value);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        git_dir.join(path)
+    };
+    let path = path.canonicalize()?;
+    if !path.is_dir() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Git commondir is not a directory",
+        ));
+    }
+    Ok(path)
+}
+
+fn read_bounded_git_text(path: &Path) -> io::Result<String> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() || metadata.len() > MAX_GIT_POINTER_BYTES {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Git pointer is not a bounded regular file",
+        ));
+    }
+    let mut value = String::new();
+    File::open(path)?
+        .take(MAX_GIT_POINTER_BYTES + 1)
+        .read_to_string(&mut value)?;
+    if value.len() as u64 > MAX_GIT_POINTER_BYTES {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Git pointer exceeds size limit",
+        ));
+    }
+    Ok(value)
 }
 
 fn project_key(path: &Path) -> String {
@@ -572,10 +615,6 @@ pub enum IdentityError {
     InvalidWslOutput,
     #[error("WSL Git identity command returned {0} bytes, exceeding the output limit")]
     OversizedWslOutput(usize),
-    #[error("capture identity worker disconnected")]
-    WorkerDisconnected,
-    #[error("failed to start capture identity worker: {0}")]
-    WorkerSpawn(#[source] std::io::Error),
 }
 
 #[cfg(test)]
@@ -584,18 +623,37 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn git_launch_failure_is_preserved_as_unresolved_capture_provenance() {
+    fn directory_capture_does_not_require_a_git_process() {
         let directory = TempDir::new().expect("working directory");
-        let snapshot = capture_snapshot_bounded(
-            directory.path(),
-            directory.path().join("missing-git"),
-            Duration::from_millis(50),
-        )
-        .expect("capture fallback");
+        let root = directory
+            .path()
+            .ancestors()
+            .last()
+            .expect("filesystem root");
+        let snapshot = capture_snapshot_or_unresolved(root, &directory.path().join("missing-git"));
 
-        assert_eq!(snapshot.origin.kind, ProjectOriginKind::Unresolved);
+        assert_eq!(snapshot.origin.kind, ProjectOriginKind::Directory);
+        assert_eq!(snapshot.origin.display_path, root);
+    }
+
+    #[test]
+    fn standard_git_capture_does_not_require_a_git_process() {
+        let directory = TempDir::new().expect("working directory");
+        let git_dir = directory.path().join(".git");
+        fs::create_dir(&git_dir).expect("Git directory");
+        fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+        fs::create_dir(git_dir.join("objects")).expect("objects");
+        fs::create_dir(git_dir.join("refs")).expect("refs");
+
+        let snapshot =
+            capture_snapshot_or_unresolved(directory.path(), &directory.path().join("missing-git"));
+
+        assert_eq!(snapshot.origin.kind, ProjectOriginKind::Git);
         assert_eq!(snapshot.origin.display_path, directory.path());
-        assert!(snapshot.origin.identity.starts_with("unresolved:"));
+        assert_eq!(
+            snapshot.origin.identity,
+            project_key(&directory.path().join(".git").canonicalize().expect(".git"))
+        );
     }
 
     #[test]
@@ -617,28 +675,6 @@ mod tests {
             run_command_bounded(command, Duration::from_millis(20)),
             Err(IdentityError::GitTimeout(_))
         ));
-    }
-
-    #[test]
-    fn saturated_identity_pool_returns_unresolved_without_spawning() {
-        let workers = WorkerPool::new(2);
-        let first = workers.try_acquire().expect("first permit");
-        let second = workers.try_acquire().expect("second permit");
-        let directory = TempDir::new().expect("working directory");
-
-        let snapshot = capture_snapshot_bounded_with_pool(
-            directory.path(),
-            PathBuf::from("git"),
-            Duration::from_secs(1),
-            &workers,
-        )
-        .expect("saturated fallback");
-
-        assert_eq!(snapshot.origin.kind, ProjectOriginKind::Unresolved);
-        assert_eq!(workers.inner.active.load(Ordering::Acquire), 2);
-        drop(first);
-        assert!(workers.try_acquire().is_some());
-        drop(second);
     }
 
     #[test]
@@ -729,15 +765,8 @@ mod tests {
     fn unavailable_wsl_launcher_falls_back_without_losing_namespace() {
         let directory = TempDir::new().expect("working directory");
         let context = WslCaptureContext::new("Ubuntu", "/home/alex/project").expect("context");
-        let workers = WorkerPool::new(1);
-
-        let snapshot = capture_wsl_snapshot_bounded_with_pool(
-            context,
-            directory.path().join("missing-wsl"),
-            Duration::from_millis(100),
-            &workers,
-        )
-        .expect("capture fallback");
+        let snapshot =
+            capture_wsl_snapshot_or_unresolved(context, &directory.path().join("missing-wsl"));
 
         assert_eq!(snapshot.origin.kind, ProjectOriginKind::Unresolved);
         assert_eq!(

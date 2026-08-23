@@ -125,10 +125,24 @@ fn hook_command(
     }
 }
 
-#[tokio::main]
-async fn main() {
-    let cli = Cli::parse();
-    match cli.command {
+fn main() {
+    match Cli::parse().command {
+        Command::Capture {
+            data_dir,
+            capture_target,
+            wsl_distro,
+            codex_home,
+        } => run_capture(data_dir, capture_target, wsl_distro, codex_home),
+        command => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Tokio runtime")
+            .block_on(run(command)),
+    }
+}
+
+async fn run(command: Command) {
+    match command {
         Command::Setup { home, data_dir } => {
             let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
             let executable = std::env::current_exe().expect("current executable");
@@ -184,128 +198,7 @@ async fn main() {
             capture_target,
             wsl_distro,
             codex_home,
-        } => {
-            if std::env::var_os(akra_app::summarization::SUMMARY_CHILD_ENV).is_some() {
-                println!("{{}}");
-                return;
-            }
-            let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
-            match akra_app::capture_gate::CaptureGate::new(&data_dir).is_enabled() {
-                Ok(true) => {}
-                Ok(false) => return,
-                Err(error) => {
-                    eprintln!("unable to read capture gate: {error}");
-                    std::process::exit(1);
-                }
-            }
-            let mut input = Vec::new();
-            std::io::stdin()
-                .take((akra_app::spool::MAX_CAPTURE_INPUT_BYTES + 1) as u64)
-                .read_to_end(&mut input)
-                .unwrap_or_else(|error| {
-                    eprintln!("unable to read Codex hook payload: {error}");
-                    std::process::exit(1);
-                });
-            if input.len() > akra_app::spool::MAX_CAPTURE_INPUT_BYTES {
-                eprintln!(
-                    "capture input exceeds the {}-byte limit",
-                    akra_app::spool::MAX_CAPTURE_INPUT_BYTES
-                );
-                std::process::exit(1);
-            }
-            let input = std::str::from_utf8(&input).unwrap_or_else(|error| {
-                eprintln!("invalid Codex payload UTF-8: {error}");
-                std::process::exit(1);
-            });
-            let payload: serde_json::Value = serde_json::from_str(input).unwrap_or_else(|error| {
-                eprintln!("invalid Codex payload JSON: {error}");
-                std::process::exit(1);
-            });
-            let capture = akra_adapters::codex::CodexAdapter::normalize_capture(input)
-                .unwrap_or_else(|error| {
-                    eprintln!("invalid Codex hook payload: {error}");
-                    std::process::exit(1);
-                });
-            let is_result = matches!(&capture, akra_adapters::codex::CodexCapture::Result(_));
-            let elapsed = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_else(|error| {
-                    eprintln!("system clock is before the Unix epoch: {error}");
-                    std::process::exit(1);
-                });
-            let captured_at_us = i64::try_from(elapsed.as_micros()).unwrap_or_else(|error| {
-                eprintln!("capture timestamp is out of range: {error}");
-                std::process::exit(1);
-            });
-            let (provider, cwd) = match &capture {
-                akra_adapters::codex::CodexCapture::Activity(event) => {
-                    (event.provider().as_str(), event.cwd())
-                }
-                akra_adapters::codex::CodexCapture::Result(event) => {
-                    (event.provider().as_str(), event.cwd())
-                }
-            };
-            let origin = capture_origin(cwd, wsl_distro.as_deref()).unwrap_or_else(|error| {
-                eprintln!("unable to capture project origin: {error}");
-                std::process::exit(1);
-            });
-            let capture_context = match capture_target.as_ref() {
-                Some(_) => akra_app::capture_source::codex_managed_capture_context(
-                    &payload,
-                    wsl_distro.as_deref(),
-                    codex_home.as_deref(),
-                ),
-                None => {
-                    akra_app::capture_source::codex_capture_context(&payload, wsl_distro.as_deref())
-                }
-            };
-            let result_capture_target = if is_result {
-                wsl_distro.as_deref().map(|distro| format!("wsl:{distro}"))
-            } else {
-                None
-            };
-            let envelope_target = result_capture_target
-                .as_deref()
-                .or(capture_target.as_deref());
-            let envelope = match envelope_target {
-                Some(target) => akra_app::spool::CaptureEnvelope::new_with_source_and_activity(
-                    provider,
-                    captured_at_us,
-                    origin,
-                    payload,
-                    target,
-                    capture_context.client,
-                    capture_context.activity_kind,
-                    capture_context.agent_id,
-                    capture_context.agent_type,
-                ),
-                None => akra_app::spool::CaptureEnvelope::new_with_activity(
-                    provider,
-                    captured_at_us,
-                    origin,
-                    payload,
-                    capture_context.activity_kind,
-                    capture_context.agent_id,
-                    capture_context.agent_type,
-                ),
-            }
-            .unwrap_or_else(|error| {
-                eprintln!("unable to construct capture envelope: {error}");
-                std::process::exit(1);
-            });
-            let collector =
-                akra_app::collector::CollectorManager::open(&data_dir).unwrap_or_else(|error| {
-                    eprintln!("unable to open capture destination: {error}");
-                    std::process::exit(1);
-                });
-            collector.capture(&envelope).unwrap_or_else(|error| {
-                eprintln!("unable to spool capture: {error}");
-                std::process::exit(1);
-            });
-            if is_result {
-                println!("{{}}");
-            }
-        }
+        } => run_capture(data_dir, capture_target, wsl_distro, codex_home),
         Command::Serve {
             port,
             bind,
@@ -410,6 +303,127 @@ async fn main() {
                 std::process::exit(1);
             }
         },
+    }
+}
+
+fn run_capture(
+    data_dir: Option<std::path::PathBuf>,
+    capture_target: Option<String>,
+    wsl_distro: Option<String>,
+    codex_home: Option<String>,
+) {
+    if std::env::var_os(akra_app::summarization::SUMMARY_CHILD_ENV).is_some() {
+        println!("{{}}");
+        return;
+    }
+    let data_dir = data_dir.unwrap_or_else(akra_app::paths::default_data_dir);
+    match akra_app::capture_gate::CaptureGate::new(&data_dir).is_enabled() {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            eprintln!("unable to read capture gate: {error}");
+            std::process::exit(1);
+        }
+    }
+    let mut input = Vec::new();
+    std::io::stdin()
+        .take((akra_app::spool::MAX_CAPTURE_INPUT_BYTES + 1) as u64)
+        .read_to_end(&mut input)
+        .unwrap_or_else(|error| {
+            eprintln!("unable to read Codex hook payload: {error}");
+            std::process::exit(1);
+        });
+    if input.len() > akra_app::spool::MAX_CAPTURE_INPUT_BYTES {
+        eprintln!(
+            "capture input exceeds the {}-byte limit",
+            akra_app::spool::MAX_CAPTURE_INPUT_BYTES
+        );
+        std::process::exit(1);
+    }
+    let input = std::str::from_utf8(&input).unwrap_or_else(|error| {
+        eprintln!("invalid Codex payload UTF-8: {error}");
+        std::process::exit(1);
+    });
+    let payload: serde_json::Value = serde_json::from_str(input).unwrap_or_else(|error| {
+        eprintln!("invalid Codex payload JSON: {error}");
+        std::process::exit(1);
+    });
+    let capture =
+        akra_adapters::codex::CodexAdapter::normalize_capture(input).unwrap_or_else(|error| {
+            eprintln!("invalid Codex hook payload: {error}");
+            std::process::exit(1);
+        });
+    let is_result = matches!(&capture, akra_adapters::codex::CodexCapture::Result(_));
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|error| {
+            eprintln!("system clock is before the Unix epoch: {error}");
+            std::process::exit(1);
+        });
+    let captured_at_us = i64::try_from(elapsed.as_micros()).unwrap_or_else(|error| {
+        eprintln!("capture timestamp is out of range: {error}");
+        std::process::exit(1);
+    });
+    let (provider, cwd) = match &capture {
+        akra_adapters::codex::CodexCapture::Activity(event) => {
+            (event.provider().as_str(), event.cwd())
+        }
+        akra_adapters::codex::CodexCapture::Result(event) => {
+            (event.provider().as_str(), event.cwd())
+        }
+    };
+    let origin = capture_origin(cwd, wsl_distro.as_deref()).unwrap_or_else(|error| {
+        eprintln!("unable to capture project origin: {error}");
+        std::process::exit(1);
+    });
+    let capture_context = match capture_target.as_ref() {
+        Some(_) => akra_app::capture_source::codex_managed_capture_context(
+            &payload,
+            wsl_distro.as_deref(),
+            codex_home.as_deref(),
+        ),
+        None => akra_app::capture_source::codex_capture_context(&payload, wsl_distro.as_deref()),
+    };
+    let result_capture_target = if is_result {
+        wsl_distro.as_deref().map(|distro| format!("wsl:{distro}"))
+    } else {
+        None
+    };
+    let envelope_target = result_capture_target
+        .as_deref()
+        .or(capture_target.as_deref());
+    let envelope = match envelope_target {
+        Some(target) => akra_app::spool::CaptureEnvelope::new_with_source_and_activity(
+            provider,
+            captured_at_us,
+            origin,
+            payload,
+            target,
+            capture_context.client,
+            capture_context.activity_kind,
+            capture_context.agent_id,
+            capture_context.agent_type,
+        ),
+        None => akra_app::spool::CaptureEnvelope::new_with_activity(
+            provider,
+            captured_at_us,
+            origin,
+            payload,
+            capture_context.activity_kind,
+            capture_context.agent_id,
+            capture_context.agent_type,
+        ),
+    }
+    .unwrap_or_else(|error| {
+        eprintln!("unable to construct capture envelope: {error}");
+        std::process::exit(1);
+    });
+    akra_app::collector::capture_once(&data_dir, &envelope).unwrap_or_else(|error| {
+        eprintln!("unable to spool capture: {error}");
+        std::process::exit(1);
+    });
+    if is_result {
+        println!("{{}}");
     }
 }
 

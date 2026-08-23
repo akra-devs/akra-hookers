@@ -133,6 +133,14 @@ fn capture_spools_without_opening_sqlite_or_printing_the_prompt() {
         !data_dir.path().join("akra-hookers.sqlite").exists(),
         "fast capture must not open SQLite or execute migrations"
     );
+    for path in [
+        data_dir.path().join("collector-ingest.token"),
+        data_dir.path().join("remote-outbox"),
+        data_dir.path().join("remote-outbox-retry"),
+        data_dir.path().join("collector-receipts"),
+    ] {
+        assert!(!path.exists(), "fast local capture created {path:?}");
+    }
     assert_eq!(
         fs::read_dir(data_dir.path().join("spool"))
             .expect("spool directory")
@@ -242,6 +250,7 @@ fn capture_spools_unresolved_provenance_when_git_cannot_launch() {
     let data_dir = TempDir::new().expect("data directory");
     let cwd = TempDir::new().expect("working directory");
     let empty_path = TempDir::new().expect("empty executable path");
+    fs::write(cwd.path().join(".git"), "invalid Git pointer").expect("ambiguous Git marker");
     fs::write(data_dir.path().join("capture-enabled"), "true").expect("capture gate");
     let payload = serde_json::json!({
         "hook_event_name": "UserPromptSubmit",
