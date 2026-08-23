@@ -692,7 +692,7 @@ impl CollectorManager {
         let now = now_us()?;
         let expired_results = self
             .outbox
-            .expire_result_items(now, REMOTE_RESULT_RETENTION_US)?;
+            .expire_result_items_if_due(now, REMOTE_RESULT_RETENTION_US)?;
         self.clear_orphaned_retry_records()?;
         let config = self.store.load()?;
         let mut report = RelayReport {
@@ -802,6 +802,15 @@ impl CollectorManager {
             if capture.validate().is_err() {
                 self.outbox.defer(&item)?;
                 *last_error = Some("A queued collector capture is invalid.".to_owned());
+                continue;
+            }
+            if capture.is_result()
+                && capture.envelope.captured_at_us()
+                    <= now.saturating_sub(REMOTE_RESULT_RETENTION_US)
+            {
+                self.clear_retry(&item)?;
+                self.outbox.acknowledge(item)?;
+                report.expired_results += 1;
                 continue;
             }
             if capture.destination_id != config.destination_id {
@@ -1489,6 +1498,60 @@ mod tests {
         assert_eq!(report.blocked_destination, RELAY_BATCH_SIZE);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].1.destination_id, config.destination_id);
+    }
+
+    #[test]
+    fn expired_result_is_removed_before_remote_delivery_between_sweeps() {
+        let directory = TempDir::new().expect("state");
+        let manager = CollectorManager::open(directory.path()).expect("manager");
+        manager
+            .configure(CollectorConfigInput {
+                endpoint: "https://collector.example".to_owned(),
+                token: Some("token".to_owned()),
+            })
+            .expect("remote config");
+        let now = REMOTE_RESULT_RETENTION_US + 1;
+        manager
+            .outbox
+            .expire_result_items_if_due(now, REMOTE_RESULT_RETENTION_US)
+            .expect("prime retention schedule");
+        let result = CaptureEnvelope::new_with_source(
+            "codex",
+            0,
+            ProjectOriginSnapshot {
+                identity: "source-project".to_owned(),
+                kind: ProjectOriginKind::Git,
+                display_path: PathBuf::from("C:/source/project"),
+            },
+            json!({
+                "hook_event_name": "Stop",
+                "session_id": "session",
+                "turn_id": "turn",
+                "cwd": "C:/source/project",
+                "last_assistant_message": "expired raw result",
+            }),
+            "windows-native",
+            "app",
+        )
+        .expect("result envelope");
+        manager.capture(&result).expect("queued result");
+        let config = manager.store.load().expect("config");
+        let mut report = RelayReport::default();
+        let mut last_error = None;
+
+        let candidates = manager
+            .relay_candidates(
+                manager.outbox.pending().expect("pending result"),
+                &config,
+                now,
+                &mut report,
+                &mut last_error,
+            )
+            .expect("relay candidates");
+
+        assert!(candidates.is_empty());
+        assert_eq!(report.expired_results, 1);
+        assert!(manager.outbox.pending().expect("pending").is_empty());
     }
 
     #[test]
