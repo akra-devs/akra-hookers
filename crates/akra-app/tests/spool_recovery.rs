@@ -97,8 +97,11 @@ fn envelope_v1_round_trips_optional_capture_source() {
     .expect("valid envelope");
     let bytes = serde_json::to_vec(&envelope).expect("envelope JSON");
     let decoded = CaptureEnvelope::decode(&bytes).expect("decoded envelope");
+    let value = serde_json::from_slice(&bytes).expect("envelope value");
+    let decoded_value = CaptureEnvelope::from_value(value).expect("decoded envelope value");
 
     assert_eq!(decoded.capture_source(), Some(("windows-native", "app")));
+    assert_eq!(decoded, decoded_value);
 }
 
 #[tokio::test]
