@@ -19,6 +19,8 @@ use uuid::Uuid;
 
 #[path = "spool/queue.rs"]
 mod queue;
+#[path = "spool/usage.rs"]
+mod usage;
 
 pub const CAPTURE_ENVELOPE_SCHEMA_VERSION: u8 = 1;
 pub const MAX_CAPTURE_INPUT_BYTES: usize = 256 * 1024;
@@ -27,6 +29,7 @@ pub const MAX_PENDING_ITEMS: usize = 1024;
 pub const MAX_PENDING_BYTES: u64 = 64 * 1024 * 1024;
 pub const RECOVERY_BATCH_SIZE: usize = 32;
 pub const RESULT_RETENTION_SWEEP_INTERVAL_US: i64 = 5 * 60 * 1_000_000;
+const MAX_DIRECTORY_SCAN_ENTRIES: usize = MAX_PENDING_ITEMS * 4;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -329,11 +332,11 @@ impl Spool {
             return Err(SpoolError::Oversized(payload.len() as u64));
         }
         let _admission = self.lock_admission()?;
-        self.ensure_capacity(payload.len() as u64)?;
         let key = Uuid::new_v4();
         let kind = if result_capture { ".result" } else { "" };
         let pending = self.directory.join(format!("{key}{kind}.pending"));
         let temporary = self.directory.join(format!("{key}{kind}.tmp"));
+        self.reserve_enqueue_locked(&pending, &temporary, payload.len() as u64)?;
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -395,6 +398,10 @@ pub enum SpoolError {
     QueueFull { items: usize, bytes: u64 },
     #[error("spool admission stopped after inspecting {entries} directory entries")]
     QueueInspectionLimit { entries: usize },
+    #[error("spool queue usage state exceeded its supported range")]
+    QueueStateOverflow,
+    #[error("spool queue usage state is invalid")]
+    InvalidQueueState,
     #[error("spool queue state is unavailable")]
     StatePoisoned,
 }

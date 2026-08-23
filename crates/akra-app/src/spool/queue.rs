@@ -9,11 +9,9 @@ use std::{
 use fs2::FileExt;
 
 use super::{
-    MAX_PENDING_BYTES, MAX_PENDING_ITEM_BYTES, MAX_PENDING_ITEMS, RECOVERY_BATCH_SIZE, Spool,
-    SpoolError, SpoolItem,
+    MAX_DIRECTORY_SCAN_ENTRIES, MAX_PENDING_ITEM_BYTES, MAX_PENDING_ITEMS, RECOVERY_BATCH_SIZE,
+    Spool, SpoolError, SpoolItem,
 };
-
-const MAX_DIRECTORY_SCAN_ENTRIES: usize = MAX_PENDING_ITEMS * 4;
 
 impl Spool {
     pub(super) fn lock_admission(&self) -> Result<File, SpoolError> {
@@ -25,37 +23,6 @@ impl Spool {
             .open(self.directory.join(".admission.lock"))?;
         lock.lock_exclusive()?;
         Ok(lock)
-    }
-
-    pub(super) fn ensure_capacity(&self, incoming_bytes: u64) -> Result<(), SpoolError> {
-        let mut entries = 0;
-        let mut items = 0;
-        let mut bytes = 0_u64;
-
-        for entry in fs::read_dir(&self.directory)? {
-            entries += 1;
-            if entries > MAX_DIRECTORY_SCAN_ENTRIES {
-                return Err(SpoolError::QueueInspectionLimit { entries });
-            }
-            let Ok(entry) = entry else {
-                continue;
-            };
-            let path = entry.path();
-            if !is_pending(&path) {
-                continue;
-            }
-            items += 1;
-            let metadata = fs::symlink_metadata(path)?;
-            if metadata.file_type().is_file() {
-                bytes = bytes.saturating_add(metadata.len());
-            }
-            if items >= MAX_PENDING_ITEMS
-                || bytes.saturating_add(incoming_bytes) > MAX_PENDING_BYTES
-            {
-                return Err(SpoolError::QueueFull { items, bytes });
-            }
-        }
-        Ok(())
     }
 
     pub fn drain(&self) -> Result<Vec<Vec<u8>>, SpoolError> {
@@ -166,21 +133,14 @@ impl Spool {
         if expired.is_empty() {
             return Ok(0);
         }
+        let removed = self.remove_paths_locked(&expired)?;
         let mut deferred = self
             .deferred
             .lock()
             .map_err(|_| SpoolError::StatePoisoned)?;
-        let mut removed = 0;
-        for path in expired {
-            deferred.remove(&path);
-            match fs::remove_file(&path) {
-                Ok(()) => removed += 1,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            }
+        for path in &expired {
+            deferred.remove(path);
         }
-        drop(deferred);
-        super::sync_directory(&self.directory)?;
         Ok(removed)
     }
 
@@ -251,13 +211,25 @@ impl Spool {
     }
 
     pub fn acknowledge(&self, item: SpoolItem) -> Result<(), SpoolError> {
-        self.deferred
-            .lock()
-            .map_err(|_| SpoolError::StatePoisoned)?
-            .remove(&item.path);
-        fs::remove_file(item.path)?;
-        super::sync_directory(&self.directory)?;
+        self.acknowledge_batch(vec![item])?;
         Ok(())
+    }
+
+    pub(crate) fn acknowledge_batch(&self, items: Vec<SpoolItem>) -> Result<usize, SpoolError> {
+        if items.is_empty() {
+            return Ok(0);
+        }
+        let _admission = self.lock_admission()?;
+        let paths = items.into_iter().map(|item| item.path).collect::<Vec<_>>();
+        let removed = self.remove_paths_locked(&paths)?;
+        let mut deferred = self
+            .deferred
+            .lock()
+            .map_err(|_| SpoolError::StatePoisoned)?;
+        for path in paths {
+            deferred.remove(&path);
+        }
+        Ok(removed)
     }
 }
 
@@ -331,5 +303,17 @@ mod tests {
             1
         );
         assert!(spool.pending().expect("pending").is_empty());
+    }
+
+    #[test]
+    fn batch_acknowledgement_removes_multiple_items_together() {
+        let directory = TempDir::new().expect("spool directory");
+        let spool = Spool::open(directory.path()).expect("spool");
+        spool.enqueue(b"first").expect("first payload");
+        spool.enqueue(b"second").expect("second payload");
+
+        let items = spool.pending().expect("pending items");
+        assert_eq!(spool.acknowledge_batch(items).expect("batch removal"), 2);
+        assert!(spool.pending().expect("pending after removal").is_empty());
     }
 }

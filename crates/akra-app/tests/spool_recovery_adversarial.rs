@@ -283,6 +283,28 @@ fn recovery_rejects_an_unbounded_directory_scan() {
     ));
 }
 
+#[test]
+fn enqueue_uses_persisted_usage_instead_of_rescanning_the_directory() {
+    let directory = TempDir::new().expect("spool directory");
+    Spool::open(directory.path())
+        .expect("spool")
+        .enqueue(b"first")
+        .expect("initial enqueue creates usage state");
+    for index in 0..4097 {
+        fs::write(
+            directory.path().join(format!("unrelated-{index:04}.tmp")),
+            b"stale",
+        )
+        .expect("unrelated entry");
+    }
+
+    Spool::open(directory.path())
+        .expect("reopened spool")
+        .enqueue(b"second")
+        .expect("persisted usage avoids a full directory scan");
+    assert_eq!(pending_file_count(directory.path()), 2);
+}
+
 fn pending_file_count(path: &Path) -> usize {
     fs::read_dir(path)
         .expect("spool directory")

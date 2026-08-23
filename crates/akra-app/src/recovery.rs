@@ -24,7 +24,8 @@ pub async fn drain(spool: &Spool, store: &ActivityStore) -> usize {
             return 0;
         }
     };
-    let mut drained = 0;
+    let mut acknowledged = Vec::new();
+    let mut stored_count = 0;
 
     for item in items {
         let payload = match spool.read(&item) {
@@ -58,24 +59,28 @@ pub async fn drain(spool: &Spool, store: &ActivityStore) -> usize {
                 captured_at_us,
             } => {
                 if now_us.is_some_and(|now_us| result_is_expired(captured_at_us, now_us)) {
-                    if let Err(error) = spool.acknowledge(item) {
-                        eprintln!("unable to remove expired result payload: {error}");
-                    }
+                    acknowledged.push(item);
                     continue;
                 }
                 store.capture_result(command).await.map(|_| ())
             }
         };
         match stored {
-            Ok(_) => match spool.acknowledge(item) {
-                Ok(()) => drained += 1,
-                Err(error) => eprintln!("unable to acknowledge spool payload: {error}"),
-            },
+            Ok(_) => {
+                acknowledged.push(item);
+                stored_count += 1;
+            }
             Err(error) => eprintln!("retaining spool payload after store error: {error}"),
         }
     }
 
-    drained
+    match spool.acknowledge_batch(acknowledged) {
+        Ok(_) => stored_count,
+        Err(error) => {
+            eprintln!("unable to acknowledge stored spool payloads: {error}");
+            0
+        }
+    }
 }
 
 enum RecoveredCapture {
