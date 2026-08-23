@@ -734,13 +734,16 @@ impl CollectorManager {
             .ok_or(CollectorError::RemoteTokenRequired)?;
         let ingest_url = config.endpoint.route("v1/collector/ingest")?;
         let mut last_error = self.last_error()?;
+        let mut expired_items = Vec::new();
         let candidates = self.relay_candidates(
             self.outbox.pending()?,
             &config,
             now,
             &mut report,
             &mut last_error,
+            &mut expired_items,
         )?;
+        let mut delivered_items = Vec::new();
         for (item, capture) in candidates {
             report.attempted += 1;
             match self
@@ -753,8 +756,7 @@ impl CollectorManager {
             {
                 Ok(response) if response.status().is_success() => {
                     self.clear_retry(&item)?;
-                    self.outbox.acknowledge(item)?;
-                    report.delivered += 1;
+                    delivered_items.push(item);
                     last_error = None;
                 }
                 Ok(response) => {
@@ -785,6 +787,10 @@ impl CollectorManager {
                 }
             }
         }
+        report.delivered = delivered_items.len();
+        report.expired_results += expired_items.len();
+        delivered_items.extend(expired_items);
+        self.outbox.acknowledge_batch(delivered_items)?;
         if report.blocked_destination > 0 && last_error.is_none() {
             last_error =
                 Some("Queued captures belong to a previous collector destination.".to_owned());
@@ -805,6 +811,7 @@ impl CollectorManager {
         now: i64,
         report: &mut RelayReport,
         last_error: &mut Option<String>,
+        expired_items: &mut Vec<SpoolItem>,
     ) -> Result<Vec<(SpoolItem, RemoteCapture)>, CollectorError> {
         let mut candidates = Vec::with_capacity(RELAY_BATCH_SIZE);
         for item in items {
@@ -833,8 +840,7 @@ impl CollectorManager {
                     <= now.saturating_sub(REMOTE_RESULT_RETENTION_US)
             {
                 self.clear_retry(&item)?;
-                self.outbox.acknowledge(item)?;
-                report.expired_results += 1;
+                expired_items.push(item);
                 continue;
             }
             if capture.destination_id != config.destination_id {
@@ -1515,9 +1521,17 @@ mod tests {
         let config = manager.store.load().expect("config");
         let mut report = RelayReport::default();
         let mut last_error = None;
+        let mut expired_items = Vec::new();
 
         let candidates = manager
-            .relay_candidates(items, &config, now, &mut report, &mut last_error)
+            .relay_candidates(
+                items,
+                &config,
+                now,
+                &mut report,
+                &mut last_error,
+                &mut expired_items,
+            )
             .expect("relay candidates");
 
         assert_eq!(candidates.len(), 1);
@@ -1568,6 +1582,7 @@ mod tests {
         blocked.extend(current);
         let mut report = RelayReport::default();
         let mut last_error = None;
+        let mut expired_items = Vec::new();
 
         let candidates = manager
             .relay_candidates(
@@ -1576,6 +1591,7 @@ mod tests {
                 now_us().expect("clock"),
                 &mut report,
                 &mut last_error,
+                &mut expired_items,
             )
             .expect("relay candidates");
 
@@ -1622,6 +1638,7 @@ mod tests {
         let config = manager.store.load().expect("config");
         let mut report = RelayReport::default();
         let mut last_error = None;
+        let mut expired_items = Vec::new();
 
         let candidates = manager
             .relay_candidates(
@@ -1630,11 +1647,16 @@ mod tests {
                 now,
                 &mut report,
                 &mut last_error,
+                &mut expired_items,
             )
             .expect("relay candidates");
 
         assert!(candidates.is_empty());
-        assert_eq!(report.expired_results, 1);
+        assert_eq!(expired_items.len(), 1);
+        manager
+            .outbox
+            .acknowledge_batch(expired_items)
+            .expect("expired result acknowledgement");
         assert!(manager.outbox.pending().expect("pending").is_empty());
     }
 
