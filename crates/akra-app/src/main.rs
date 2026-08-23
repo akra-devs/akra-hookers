@@ -298,24 +298,10 @@ async fn main() {
                     eprintln!("unable to open capture destination: {error}");
                     std::process::exit(1);
                 });
-            let route = collector.capture(&envelope).unwrap_or_else(|error| {
+            collector.capture(&envelope).unwrap_or_else(|error| {
                 eprintln!("unable to spool capture: {error}");
                 std::process::exit(1);
             });
-            if matches!(
-                route,
-                akra_app::collector::CaptureRoute::RemoteQueued { .. }
-            ) {
-                match tokio::time::timeout(Duration::from_millis(850), collector.relay_once()).await
-                {
-                    Ok(Ok(report)) if report.delivered > 0 => {}
-                    Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
-                        // The durable outbox is authoritative. A remote outage must not turn
-                        // a Codex hook into a failed or continuing turn.
-                        eprintln!("remote collector delivery is queued for retry");
-                    }
-                }
-            }
             if is_result {
                 println!("{{}}");
             }

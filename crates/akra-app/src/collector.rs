@@ -709,30 +709,15 @@ impl CollectorManager {
             .as_ref()
             .ok_or(CollectorError::RemoteTokenRequired)?;
         let ingest_url = config.endpoint.route("v1/collector/ingest")?;
-        let items = self.outbox.pending()?;
         let mut last_error = self.last_error()?;
-        for item in items.into_iter().take(RELAY_BATCH_SIZE) {
-            if !self.retry_is_due(&item, now)? {
-                continue;
-            }
-            let payload = self.outbox.read(&item)?;
-            let capture: RemoteCapture = match serde_json::from_slice(&payload) {
-                Ok(capture) => capture,
-                Err(_) => {
-                    self.outbox.defer(&item)?;
-                    last_error = Some("A queued collector capture is invalid.".to_owned());
-                    continue;
-                }
-            };
-            if capture.validate().is_err() {
-                self.outbox.defer(&item)?;
-                last_error = Some("A queued collector capture is invalid.".to_owned());
-                continue;
-            }
-            if capture.destination_id != config.destination_id {
-                report.blocked_destination += 1;
-                continue;
-            }
+        let candidates = self.relay_candidates(
+            self.outbox.pending()?,
+            &config,
+            now,
+            &mut report,
+            &mut last_error,
+        )?;
+        for (item, capture) in candidates {
             report.attempted += 1;
             match self
                 .client
@@ -787,6 +772,45 @@ impl CollectorManager {
         report.pending = self.outbox.pending()?.len();
         report.last_error = last_error;
         Ok(report)
+    }
+
+    fn relay_candidates(
+        &self,
+        items: Vec<SpoolItem>,
+        config: &CollectorConfig,
+        now: i64,
+        report: &mut RelayReport,
+        last_error: &mut Option<String>,
+    ) -> Result<Vec<(SpoolItem, RemoteCapture)>, CollectorError> {
+        let mut candidates = Vec::with_capacity(RELAY_BATCH_SIZE);
+        for item in items {
+            if candidates.len() == RELAY_BATCH_SIZE {
+                break;
+            }
+            if !self.retry_is_due(&item, now)? {
+                continue;
+            }
+            let payload = self.outbox.read(&item)?;
+            let capture: RemoteCapture = match serde_json::from_slice(&payload) {
+                Ok(capture) => capture,
+                Err(_) => {
+                    self.outbox.defer(&item)?;
+                    *last_error = Some("A queued collector capture is invalid.".to_owned());
+                    continue;
+                }
+            };
+            if capture.validate().is_err() {
+                self.outbox.defer(&item)?;
+                *last_error = Some("A queued collector capture is invalid.".to_owned());
+                continue;
+            }
+            if capture.destination_id != config.destination_id {
+                report.blocked_destination += 1;
+                continue;
+            }
+            candidates.push((item, capture));
+        }
+        Ok(candidates)
     }
 
     pub async fn verify(&self) -> Result<VerifyReport, CollectorError> {
@@ -1363,6 +1387,108 @@ mod tests {
             status.last_error.as_deref(),
             Some("Queued captures belong to a previous collector destination.")
         );
+    }
+
+    #[test]
+    fn retry_delayed_items_do_not_consume_the_relay_batch() {
+        let directory = TempDir::new().expect("state");
+        let manager = CollectorManager::open(directory.path()).expect("manager");
+        manager
+            .configure(CollectorConfigInput {
+                endpoint: "https://collector.example".to_owned(),
+                token: Some("token".to_owned()),
+            })
+            .expect("remote config");
+        for index in 0..=RELAY_BATCH_SIZE {
+            manager
+                .capture(&envelope(&format!("queued-{index}")))
+                .expect("queued capture");
+        }
+
+        let items = manager.outbox.pending().expect("pending captures");
+        let now = now_us().expect("clock");
+        for item in &items[..RELAY_BATCH_SIZE] {
+            manager
+                .schedule_retry(item, now, MAX_RETRY_DELAY)
+                .expect("retry schedule");
+        }
+        let expected = serde_json::from_slice::<RemoteCapture>(
+            &manager
+                .outbox
+                .read(items.last().expect("due capture"))
+                .expect("due payload"),
+        )
+        .expect("due capture");
+        let config = manager.store.load().expect("config");
+        let mut report = RelayReport::default();
+        let mut last_error = None;
+
+        let candidates = manager
+            .relay_candidates(items, &config, now, &mut report, &mut last_error)
+            .expect("relay candidates");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].1.capture_id, expected.capture_id);
+    }
+
+    #[test]
+    fn previous_destination_items_do_not_consume_the_relay_batch() {
+        let directory = TempDir::new().expect("state");
+        let manager = CollectorManager::open(directory.path()).expect("manager");
+        manager
+            .configure(CollectorConfigInput {
+                endpoint: "https://first.example".to_owned(),
+                token: Some("first-token".to_owned()),
+            })
+            .expect("first destination");
+        for index in 0..RELAY_BATCH_SIZE {
+            manager
+                .capture(&envelope(&format!("old-{index}")))
+                .expect("old capture");
+        }
+        manager
+            .configure(CollectorConfigInput {
+                endpoint: "https://second.example".to_owned(),
+                token: Some("second-token".to_owned()),
+            })
+            .expect("second destination");
+        manager
+            .capture(&envelope("current"))
+            .expect("current capture");
+
+        let config = manager.store.load().expect("config");
+        let mut blocked = Vec::new();
+        let mut current = Vec::new();
+        for item in manager.outbox.pending().expect("pending captures") {
+            let capture = serde_json::from_slice::<RemoteCapture>(
+                &manager.outbox.read(&item).expect("queued payload"),
+            )
+            .expect("queued capture");
+            if capture.destination_id == config.destination_id {
+                current.push(item);
+            } else {
+                blocked.push(item);
+            }
+        }
+        assert_eq!(blocked.len(), RELAY_BATCH_SIZE);
+        assert_eq!(current.len(), 1);
+        blocked.extend(current);
+        let mut report = RelayReport::default();
+        let mut last_error = None;
+
+        let candidates = manager
+            .relay_candidates(
+                blocked,
+                &config,
+                now_us().expect("clock"),
+                &mut report,
+                &mut last_error,
+            )
+            .expect("relay candidates");
+
+        assert_eq!(report.blocked_destination, RELAY_BATCH_SIZE);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].1.destination_id, config.destination_id);
     }
 
     #[test]
