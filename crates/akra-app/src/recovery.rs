@@ -6,9 +6,12 @@ use thiserror::Error;
 use crate::spool::{CaptureEnvelope, Spool};
 
 pub async fn drain(spool: &Spool, store: &ActivityStore) -> usize {
-    match recovery_now_us() {
+    let now_us = recovery_now_us();
+    match now_us {
         Some(now_us) => {
-            if let Err(error) = spool.expire_result_items(now_us, MAX_RESULT_SOURCE_RETENTION_US) {
+            if let Err(error) =
+                spool.expire_result_items_if_due(now_us, MAX_RESULT_SOURCE_RETENTION_US)
+            {
                 eprintln!("unable to expire retained result payloads: {error}");
             }
         }
@@ -50,7 +53,18 @@ pub async fn drain(spool: &Spool, store: &ActivityStore) -> usize {
 
         let stored = match command {
             RecoveredCapture::Activity(command) => store.record(command).await.map(|_| ()),
-            RecoveredCapture::Result(command) => store.capture_result(command).await.map(|_| ()),
+            RecoveredCapture::Result {
+                command,
+                captured_at_us,
+            } => {
+                if now_us.is_some_and(|now_us| result_is_expired(captured_at_us, now_us)) {
+                    if let Err(error) = spool.acknowledge(item) {
+                        eprintln!("unable to remove expired result payload: {error}");
+                    }
+                    continue;
+                }
+                store.capture_result(command).await.map(|_| ())
+            }
         };
         match stored {
             Ok(_) => match spool.acknowledge(item) {
@@ -66,7 +80,10 @@ pub async fn drain(spool: &Spool, store: &ActivityStore) -> usize {
 
 enum RecoveredCapture {
     Activity(RecordActivity),
-    Result(RecordResult),
+    Result {
+        command: RecordResult,
+        captured_at_us: i64,
+    },
 }
 
 fn decode(payload: &[u8]) -> Result<RecoveredCapture, RecoveryError> {
@@ -113,15 +130,17 @@ fn decode(payload: &[u8]) -> Result<RecoveredCapture, RecoveryError> {
                 }))
             }
             CodexCapture::Result(event) => {
-                Ok(RecoveredCapture::Result(match envelope.capture_source() {
-                    Some((target, client)) => RecordResult::captured_from(
-                        event,
-                        envelope.captured_at_us(),
-                        target,
-                        client,
-                    ),
-                    None => RecordResult::captured(event, envelope.captured_at_us()),
-                }))
+                let captured_at_us = envelope.captured_at_us();
+                let command = match envelope.capture_source() {
+                    Some((target, client)) => {
+                        RecordResult::captured_from(event, captured_at_us, target, client)
+                    }
+                    None => RecordResult::captured(event, captured_at_us),
+                };
+                Ok(RecoveredCapture::Result {
+                    command,
+                    captured_at_us,
+                })
             }
         }
     } else {
@@ -137,6 +156,10 @@ fn decode(payload: &[u8]) -> Result<RecoveredCapture, RecoveryError> {
             event, origin,
         )))
     }
+}
+
+fn result_is_expired(captured_at_us: i64, now_us: i64) -> bool {
+    captured_at_us <= now_us.saturating_sub(MAX_RESULT_SOURCE_RETENTION_US)
 }
 
 fn recovery_now_us() -> Option<i64> {

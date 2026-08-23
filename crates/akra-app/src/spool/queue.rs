@@ -99,6 +99,38 @@ impl Spool {
     /// Remove raw assistant-result payloads after their bounded retention window.
     /// New result items carry a filename marker so even malformed envelopes can
     /// be scrubbed using their filesystem timestamp on the next recovery pass.
+    pub fn expire_result_items_if_due(
+        &self,
+        now_us: i64,
+        retention_us: i64,
+    ) -> Result<usize, SpoolError> {
+        loop {
+            let scheduled_at_us = self.next_result_sweep_at_us.load(Ordering::Acquire);
+            if now_us < scheduled_at_us {
+                return Ok(0);
+            }
+            let next_at_us = now_us.saturating_add(super::RESULT_RETENTION_SWEEP_INTERVAL_US);
+            if self
+                .next_result_sweep_at_us
+                .compare_exchange(
+                    scheduled_at_us,
+                    next_at_us,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                return match self.expire_result_items(now_us, retention_us) {
+                    Ok(expired) => Ok(expired),
+                    Err(error) => {
+                        self.next_result_sweep_at_us.store(0, Ordering::Release);
+                        Err(error)
+                    }
+                };
+            }
+        }
+    }
+
     pub fn expire_result_items(&self, now_us: i64, retention_us: i64) -> Result<usize, SpoolError> {
         let cutoff_us = now_us.saturating_sub(retention_us);
         let _admission = self.lock_admission()?;
@@ -248,4 +280,56 @@ fn modified_at_us(path: &Path) -> Option<i64> {
         .duration_since(UNIX_EPOCH)
         .ok()?;
     i64::try_from(elapsed.as_micros()).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn result_retention_full_sweep_runs_at_most_once_per_interval() {
+        let directory = TempDir::new().expect("spool directory");
+        let spool = Spool::open(directory.path()).expect("spool");
+        spool
+            .enqueue_marked(b"invalid result payload", true)
+            .expect("first result");
+        let now_us = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_micros(),
+        )
+        .expect("timestamp");
+
+        assert_eq!(
+            spool
+                .expire_result_items_if_due(now_us, 0)
+                .expect("initial sweep"),
+            1
+        );
+        spool
+            .enqueue_marked(b"another invalid result payload", true)
+            .expect("second result");
+        assert_eq!(
+            spool
+                .expire_result_items_if_due(
+                    now_us + super::super::RESULT_RETENTION_SWEEP_INTERVAL_US - 1,
+                    0,
+                )
+                .expect("gated sweep"),
+            0
+        );
+        assert_eq!(spool.pending().expect("pending").len(), 1);
+        assert_eq!(
+            spool
+                .expire_result_items_if_due(
+                    now_us + super::super::RESULT_RETENTION_SWEEP_INTERVAL_US,
+                    0,
+                )
+                .expect("due sweep"),
+            1
+        );
+        assert!(spool.pending().expect("pending").is_empty());
+    }
 }

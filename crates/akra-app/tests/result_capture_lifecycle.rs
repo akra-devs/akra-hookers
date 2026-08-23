@@ -7,7 +7,10 @@ use akra_app::{
 };
 use akra_core::ingress::ActivityKind;
 use akra_git::ProjectIdentity;
-use akra_store::{ActivityScope, ActivityStore, ResultSummaryState, ResultSummaryStatus};
+use akra_store::{
+    ActivityScope, ActivityStore, MAX_RESULT_SOURCE_RETENTION_US, ResultSummaryState,
+    ResultSummaryStatus,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -221,6 +224,9 @@ async fn expired_raw_result_is_scrubbed_from_spool_before_database_recovery() {
     let data = TempDir::new().expect("data directory");
     let cwd = TempDir::new().expect("work directory");
     let spool = Spool::open(&data.path().join("spool")).expect("spool");
+    spool
+        .expire_result_items_if_due(now_us(), MAX_RESULT_SOURCE_RETENTION_US)
+        .expect("prime retention schedule");
     let origin = ProjectIdentity::capture_snapshot_from_cwd(cwd.path())
         .expect("origin")
         .origin;

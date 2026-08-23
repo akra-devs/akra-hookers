@@ -5,7 +5,10 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::{Mutex, atomic::AtomicUsize},
+    sync::{
+        Mutex,
+        atomic::{AtomicI64, AtomicUsize},
+    },
 };
 
 use akra_core::ingress::ActivityKind;
@@ -23,6 +26,7 @@ pub const MAX_PENDING_ITEM_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_PENDING_ITEMS: usize = 1024;
 pub const MAX_PENDING_BYTES: u64 = 64 * 1024 * 1024;
 pub const RECOVERY_BATCH_SIZE: usize = 32;
+pub const RESULT_RETENTION_SWEEP_INTERVAL_US: i64 = 5 * 60 * 1_000_000;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -283,6 +287,7 @@ pub struct Spool {
     directory: PathBuf,
     deferred: Mutex<HashSet<PathBuf>>,
     recovery_offset: AtomicUsize,
+    next_result_sweep_at_us: AtomicI64,
 }
 
 #[derive(Debug)]
@@ -305,6 +310,7 @@ impl Spool {
             directory: directory.to_path_buf(),
             deferred: Mutex::new(HashSet::new()),
             recovery_offset: AtomicUsize::new(0),
+            next_result_sweep_at_us: AtomicI64::new(0),
         })
     }
 
