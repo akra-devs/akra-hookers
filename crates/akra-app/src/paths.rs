@@ -129,6 +129,24 @@ fn hook_command_with_target(
     capture_target: Option<&str>,
     codex_home: Option<&str>,
 ) -> Result<String, HookCommandError> {
+    let executable_text = path_text(executable)?;
+    let data_dir_text = path_text(data_dir)?;
+    if windows_direct_path_argument(executable_text)
+        && windows_direct_path_argument(data_dir_text)
+        && capture_target.is_none_or(windows_direct_text_argument)
+        && codex_home.is_none_or(windows_direct_path_argument)
+    {
+        let mut command = format!("{executable_text} capture --data-dir {data_dir_text}");
+        if let Some(capture_target) = capture_target {
+            command.push_str(" --capture-target ");
+            command.push_str(capture_target);
+        }
+        if let Some(codex_home) = codex_home {
+            command.push_str(" --codex-home ");
+            command.push_str(codex_home);
+        }
+        return Ok(command);
+    }
     let powershell = windows_powershell()?;
     let encoded = encoded_capture_script(executable, data_dir, None, capture_target, codex_home)?;
     Ok(format!(
@@ -137,6 +155,25 @@ fn hook_command_with_target(
         windows_executable_argument(&powershell)?,
         encoded
     ))
+}
+
+#[cfg(windows)]
+fn windows_direct_path_argument(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
+        && windows_direct_text_argument(value)
+}
+
+#[cfg(windows)]
+fn windows_direct_text_argument(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, ':' | '\\' | '/' | '.' | '_' | '-')
+        })
 }
 
 #[cfg(windows)]
@@ -626,16 +663,11 @@ mod tests {
             "windows-native",
         )
         .expect("command");
-        let encoded = command.split_whitespace().last().expect("encoded command");
-        let bytes = STANDARD.decode(encoded).expect("base64");
-        let utf16 = bytes
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect::<Vec<_>>();
         assert_eq!(
-            String::from_utf16(&utf16).expect("PowerShell"),
-            r"& 'C:\tools\akra-hookers.exe' capture --data-dir 'C:\state' --capture-target 'windows-native'"
+            command,
+            r"C:\tools\akra-hookers.exe capture --data-dir C:\state --capture-target windows-native"
         );
+        assert!(!command.to_ascii_lowercase().contains("powershell"));
         assert!(matches!(
             hook_command_for_target(
                 Path::new(r"C:\tools\akra-hookers.exe"),

@@ -578,6 +578,30 @@ pub struct VerifyReport {
     pub status: Option<u16>,
 }
 
+/// Route one hook capture without initializing the long-lived collector runtime.
+pub fn capture_once(
+    data_dir: &Path,
+    envelope: &CaptureEnvelope,
+) -> Result<CaptureRoute, CollectorError> {
+    let config = CollectorStore::new(data_dir).load()?;
+    match config.endpoint.mode() {
+        CollectorMode::Local => {
+            Spool::open(&data_dir.join("spool"))?.enqueue_envelope(envelope)?;
+            Ok(CaptureRoute::LocalQueued)
+        }
+        CollectorMode::Remote => {
+            let capture = RemoteCapture::new(&config, envelope.clone());
+            let payload = serde_json::to_vec(&capture)?;
+            Spool::open(&data_dir.join(OUTBOX_DIRECTORY))?
+                .enqueue_marked(&payload, capture.is_result())?;
+            Ok(CaptureRoute::RemoteQueued {
+                capture_id: capture.capture_id,
+                destination_id: capture.destination_id,
+            })
+        }
+    }
+}
+
 pub struct CollectorManager {
     store: CollectorStore,
     local_spool: Spool,
@@ -1359,6 +1383,66 @@ mod tests {
         let second = store.load_or_create_ingest_token().expect("same token");
         assert_eq!(first, second);
         assert!(!format!("{first:?}").contains(first.expose_secret()));
+    }
+
+    #[test]
+    fn local_one_shot_capture_initializes_only_the_selected_spool() {
+        let directory = TempDir::new().expect("state");
+
+        assert_eq!(
+            capture_once(directory.path(), &envelope("local")).expect("capture"),
+            CaptureRoute::LocalQueued
+        );
+
+        assert_eq!(
+            Spool::open(&directory.path().join("spool"))
+                .expect("local spool")
+                .pending()
+                .expect("pending")
+                .len(),
+            1
+        );
+        for path in [
+            directory.path().join(INGEST_TOKEN_FILE),
+            directory.path().join(OUTBOX_DIRECTORY),
+            directory.path().join(RETRY_DIRECTORY),
+            directory.path().join(RECEIPT_DIRECTORY),
+        ] {
+            assert!(!path.exists(), "unexpected one-shot artifact: {path:?}");
+        }
+    }
+
+    #[test]
+    fn remote_one_shot_capture_initializes_only_the_outbox() {
+        let directory = TempDir::new().expect("state");
+        CollectorStore::new(directory.path())
+            .update(CollectorConfigInput {
+                endpoint: "https://collector.example".to_owned(),
+                token: Some("token".to_owned()),
+            })
+            .expect("remote config");
+
+        assert!(matches!(
+            capture_once(directory.path(), &envelope("remote")).expect("capture"),
+            CaptureRoute::RemoteQueued { .. }
+        ));
+
+        assert_eq!(
+            Spool::open(&directory.path().join(OUTBOX_DIRECTORY))
+                .expect("outbox")
+                .pending()
+                .expect("pending")
+                .len(),
+            1
+        );
+        for path in [
+            directory.path().join(INGEST_TOKEN_FILE),
+            directory.path().join("spool"),
+            directory.path().join(RETRY_DIRECTORY),
+            directory.path().join(RECEIPT_DIRECTORY),
+        ] {
+            assert!(!path.exists(), "unexpected one-shot artifact: {path:?}");
+        }
     }
 
     #[tokio::test]
