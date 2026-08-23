@@ -188,6 +188,56 @@ fn capture_spools_without_opening_sqlite_or_printing_the_prompt() {
 }
 
 #[test]
+fn remote_capture_stops_after_durable_outbox_enqueue() {
+    let data_dir = TempDir::new().expect("data directory");
+    let manager = akra_app::collector::CollectorManager::open(data_dir.path()).expect("collector");
+    manager
+        .configure(akra_app::collector::CollectorConfigInput {
+            endpoint: "https://collector.invalid".to_owned(),
+            token: Some("test-token".to_owned()),
+        })
+        .expect("remote destination");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_akra-hookers"))
+        .args(["capture", "--data-dir"])
+        .arg(data_dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("capture starts");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(
+            br#"{"hook_event_name":"UserPromptSubmit","session_id":"remote-session","turn_id":"remote-turn","cwd":"project","prompt":"queue without relay","model":"test"}"#,
+        )
+        .expect("payload writes");
+
+    let output = child.wait_with_output().expect("capture exits");
+    assert!(output.status.success(), "capture failed: {output:?}");
+    assert!(
+        output.stdout.is_empty(),
+        "prompt hook output must stay empty"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "capture must not attempt or report remote delivery: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let outbox = Spool::open(&data_dir.path().join("remote-outbox")).expect("outbox");
+    assert_eq!(outbox.pending().expect("pending outbox").len(), 1);
+    assert!(
+        fs::read_dir(data_dir.path().join("remote-outbox-retry"))
+            .expect("retry directory")
+            .next()
+            .is_none(),
+        "hook capture must not create relay retry state"
+    );
+}
+
+#[test]
 fn capture_spools_unresolved_provenance_when_git_cannot_launch() {
     let data_dir = TempDir::new().expect("data directory");
     let cwd = TempDir::new().expect("working directory");
