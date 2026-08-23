@@ -348,8 +348,8 @@ fn run_capture(
         eprintln!("invalid Codex payload JSON: {error}");
         std::process::exit(1);
     });
-    let capture =
-        akra_adapters::codex::CodexAdapter::normalize_capture(input).unwrap_or_else(|error| {
+    let capture = akra_adapters::codex::CodexAdapter::normalize_capture_value(&payload)
+        .unwrap_or_else(|error| {
             eprintln!("invalid Codex hook payload: {error}");
             std::process::exit(1);
         });

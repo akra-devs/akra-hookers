@@ -1,5 +1,6 @@
 use akra_adapters::codex::{CodexAdapter, CodexCapture};
 use akra_core::ingress::ActivityKind;
+use serde_json::Value;
 
 #[test]
 fn normalizes_the_documented_user_prompt_submit_fixture() {
@@ -130,5 +131,21 @@ fn rejects_payloads_without_required_technical_ids() {
         let error = CodexAdapter::normalize(payload)
             .expect_err("missing technical ID must reject the capture payload");
         assert!(error.to_string().contains(field), "{error}");
+    }
+}
+
+#[test]
+fn parsed_value_capture_matches_the_string_api_for_every_supported_hook() {
+    for payload in [
+        r#"{"hook_event_name":"UserPromptSubmit","session_id":"s","turn_id":"t","cwd":"C:\\x","prompt":"p","model":"test"}"#,
+        r#"{"hook_event_name":"SubagentStart","session_id":"s","turn_id":"t","cwd":"C:\\x","agent_id":"a","agent_type":"reviewer"}"#,
+        r#"{"hook_event_name":"Stop","session_id":"s","turn_id":"t","cwd":"C:\\x","last_assistant_message":"done"}"#,
+    ] {
+        let value: Value = serde_json::from_str(payload).expect("hook JSON");
+
+        assert_eq!(
+            CodexAdapter::normalize_capture_value(&value).expect("value capture"),
+            CodexAdapter::normalize_capture(payload).expect("string capture")
+        );
     }
 }

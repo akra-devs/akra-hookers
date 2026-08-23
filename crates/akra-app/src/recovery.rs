@@ -94,14 +94,13 @@ enum RecoveredCapture {
 fn decode(payload: &[u8]) -> Result<RecoveredCapture, RecoveryError> {
     let value: Value = serde_json::from_slice(payload)?;
     if value.get("schema_version").is_some() {
-        let envelope = CaptureEnvelope::decode(payload)?;
+        let envelope = CaptureEnvelope::from_value(value)?;
         if envelope.provider() != "codex" {
             return Err(RecoveryError::UnsupportedProvider(
                 envelope.provider().to_owned(),
             ));
         }
-        let provider_payload = serde_json::to_string(envelope.payload())?;
-        match CodexAdapter::normalize_capture(&provider_payload)? {
+        match CodexAdapter::normalize_capture_value(envelope.payload())? {
             CodexCapture::Activity(event) => {
                 let (activity_kind, agent_id, agent_type) = envelope.activity_context();
                 let event = if activity_kind == akra_core::ingress::ActivityKind::User {
@@ -149,8 +148,7 @@ fn decode(payload: &[u8]) -> Result<RecoveredCapture, RecoveryError> {
             }
         }
     } else {
-        let input = std::str::from_utf8(payload)?;
-        let CodexCapture::Activity(event) = CodexAdapter::normalize_capture(input)? else {
+        let CodexCapture::Activity(event) = CodexAdapter::normalize_capture_value(&value)? else {
             return Err(RecoveryError::LegacyResult);
         };
         let origin = akra_git::ProjectIdentity::capture_snapshot_from_cwd(std::path::Path::new(
@@ -178,8 +176,6 @@ fn recovery_now_us() -> Option<i64> {
 enum RecoveryError {
     #[error("invalid spool JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("invalid spool UTF-8: {0}")]
-    Utf8(#[from] std::str::Utf8Error),
     #[error("invalid capture envelope: {0}")]
     Envelope(#[from] crate::spool::CaptureEnvelopeError),
     #[error("unsupported capture provider: {0}")]

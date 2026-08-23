@@ -46,14 +46,17 @@ impl CodexAdapter {
     /// Normalizes every hook consumed by the capture pipeline.
     pub fn normalize_capture(input: &str) -> Result<CodexCapture, CodexAdapterError> {
         let value: Value = serde_json::from_str(input)?;
-        match hook_event_name(&value)? {
-            "UserPromptSubmit" => {
-                normalize_user_prompt(serde_json::from_value(value)?).map(CodexCapture::Activity)
-            }
-            "SubagentStart" => {
-                normalize_subagent_start(serde_json::from_value(value)?).map(CodexCapture::Activity)
-            }
-            "Stop" => normalize_stop(serde_json::from_value(value)?).map(CodexCapture::Result),
+        Self::normalize_capture_value(&value)
+    }
+
+    /// Normalizes an already parsed hook without decoding the same JSON text again.
+    pub fn normalize_capture_value(value: &Value) -> Result<CodexCapture, CodexAdapterError> {
+        match hook_event_name(value)? {
+            "UserPromptSubmit" => normalize_user_prompt(UserPromptSubmit::deserialize(value)?)
+                .map(CodexCapture::Activity),
+            "SubagentStart" => normalize_subagent_start(SubagentStart::deserialize(value)?)
+                .map(CodexCapture::Activity),
+            "Stop" => normalize_stop(Stop::deserialize(value)?).map(CodexCapture::Result),
             other => Err(CodexAdapterError::UnexpectedHook(other.to_owned())),
         }
     }

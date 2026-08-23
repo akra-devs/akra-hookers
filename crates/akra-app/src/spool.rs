@@ -171,7 +171,11 @@ impl CaptureEnvelope {
     }
 
     pub fn decode(payload: &[u8]) -> Result<Self, CaptureEnvelopeError> {
-        let envelope: Self = serde_json::from_slice(payload)?;
+        Self::from_value(serde_json::from_slice(payload)?)
+    }
+
+    pub fn from_value(value: serde_json::Value) -> Result<Self, CaptureEnvelopeError> {
+        let envelope: Self = serde_json::from_value(value)?;
         if envelope.schema_version != CAPTURE_ENVELOPE_SCHEMA_VERSION {
             return Err(CaptureEnvelopeError::UnsupportedSchemaVersion(
                 envelope.schema_version,
