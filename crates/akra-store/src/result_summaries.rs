@@ -1,6 +1,6 @@
 use std::fmt;
 
-use akra_core::ingress::ResultEvent;
+use akra_core::ingress::{ActivityKind, ResultEvent};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{Row, Sqlite, Transaction};
@@ -324,7 +324,7 @@ impl ActivityStore {
             .map(|(activity_event_id, _)| *activity_event_id);
         let eligible = linked_activity
             .as_ref()
-            .is_none_or(|(_, activity_kind)| activity_kind == "user");
+            .is_none_or(|(_, activity_kind)| *activity_kind == ActivityKind::User);
         let existing = sqlx::query(
             "SELECT source_digest, generation, captured_at_us
              FROM activity_result_summaries
@@ -339,10 +339,11 @@ impl ActivityStore {
         if let Some(existing) = existing.as_ref()
             && existing.try_get::<String, _>("source_digest")? == source_digest
         {
-            if let Some((activity_event_id, _)) = linked_activity.as_ref() {
+            if let Some((activity_event_id, activity_kind)) = linked_activity.as_ref() {
                 link_activity(
                     &mut transaction,
                     *activity_event_id,
+                    *activity_kind,
                     event.provider().as_str(),
                     event.session_id(),
                     event.turn_id(),
@@ -356,10 +357,11 @@ impl ActivityStore {
         if let Some(existing) = existing.as_ref()
             && command.captured_at_us <= existing.try_get::<i64, _>("captured_at_us")?
         {
-            if let Some((activity_event_id, _)) = linked_activity.as_ref() {
+            if let Some((activity_event_id, activity_kind)) = linked_activity.as_ref() {
                 link_activity(
                     &mut transaction,
                     *activity_event_id,
+                    *activity_kind,
                     event.provider().as_str(),
                     event.session_id(),
                     event.turn_id(),
@@ -808,16 +810,12 @@ impl ActivityStore {
 pub(crate) async fn link_activity(
     transaction: &mut Transaction<'_, Sqlite>,
     activity_event_id: i64,
+    activity_kind: ActivityKind,
     provider: &str,
     provider_session_id: &str,
     provider_turn_id: &str,
 ) -> Result<(), StoreError> {
-    let activity_kind: String =
-        sqlx::query_scalar("SELECT activity_kind FROM activity_events WHERE id = ?")
-            .bind(activity_event_id)
-            .fetch_one(&mut **transaction)
-            .await?;
-    if activity_kind == "user" {
+    if activity_kind == ActivityKind::User {
         sqlx::query(
             "UPDATE activity_result_summaries
              SET activity_event_id = ?
@@ -853,7 +851,7 @@ async fn linked_activity(
     provider: &str,
     provider_session_id: &str,
     provider_turn_id: &str,
-) -> Result<Option<(i64, String)>, StoreError> {
+) -> Result<Option<(i64, ActivityKind)>, StoreError> {
     let row = sqlx::query(
         "SELECT activities.id, activities.activity_kind
          FROM ingest_dedupes AS dedupes
@@ -866,8 +864,13 @@ async fn linked_activity(
     .bind(provider_turn_id)
     .fetch_optional(&mut **transaction)
     .await?;
-    row.map(|row| Ok((row.try_get("id")?, row.try_get("activity_kind")?)))
-        .transpose()
+    row.map(|row| {
+        let value: String = row.try_get("activity_kind")?;
+        let activity_kind = ActivityKind::from_storage(&value)
+            .ok_or_else(|| StoreError::Invariant(format!("invalid activity kind: {value}")))?;
+        Ok((row.try_get("id")?, activity_kind))
+    })
+    .transpose()
 }
 
 fn sanitize_error(error: &str) -> String {

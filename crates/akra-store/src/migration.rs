@@ -38,6 +38,7 @@ impl ActivityStore {
             crate::migration_v11::apply(&mut transaction).await?;
             crate::migration_v12::apply(&mut transaction).await?;
             crate::migration_v13::apply(&mut transaction).await?;
+            crate::migration_v14::apply(&mut transaction).await?;
             transaction.commit().await?;
             return Ok(());
         }
@@ -219,6 +220,7 @@ impl ActivityStore {
         crate::migration_v11::apply(&mut transaction).await?;
         crate::migration_v12::apply(&mut transaction).await?;
         crate::migration_v13::apply(&mut transaction).await?;
+        crate::migration_v14::apply(&mut transaction).await?;
         transaction.commit().await?;
         Ok(())
     }

@@ -456,7 +456,8 @@ impl ActivityStore {
         .await?;
 
         let candidate = sqlx::query(
-            "SELECT summaries.activity_event_id, summaries.projected_prompt,
+            "SELECT summaries.activity_event_id,
+                    COALESCE(summaries.projected_prompt, activities.prompt) AS projected_prompt,
                     summaries.used_previous_result, summaries.context_result_generation,
                     summaries.generation, summaries.attempt_count, summaries.summary_model,
                     summaries.last_error_code,
@@ -618,11 +619,15 @@ impl ActivityStore {
         activity_event_id: i64,
     ) -> Result<Option<PromptSummary>, StoreError> {
         let row = sqlx::query(
-            "SELECT state, projection_kind, projected_prompt, summary_text,
-                    used_previous_result, context_activity_event_id,
-                    context_result_generation, source_digest, generation,
-                    attempt_count, summary_model, updated_at_us
-             FROM activity_prompt_summaries WHERE activity_event_id = ?",
+            "SELECT summaries.state, summaries.projection_kind,
+                    COALESCE(summaries.projected_prompt, activities.prompt) AS projected_prompt,
+                    summaries.summary_text, summaries.used_previous_result,
+                    summaries.context_activity_event_id, summaries.context_result_generation,
+                    summaries.source_digest, summaries.generation, summaries.attempt_count,
+                    summaries.summary_model, summaries.updated_at_us
+             FROM activity_prompt_summaries AS summaries
+             JOIN activity_events AS activities ON activities.id = summaries.activity_event_id
+             WHERE summaries.activity_event_id = ?",
         )
         .bind(activity_event_id)
         .fetch_optional(&self.pool)
@@ -641,12 +646,40 @@ pub(crate) async fn initialize_prompt_summary_in_transaction(
         return Ok(());
     }
     let activity = activity_input(transaction, activity_event_id).await?;
+    initialize_prompt_summary_for_activity(transaction, &activity, projection, now_us).await
+}
+
+pub(crate) async fn initialize_new_prompt_summary_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    activity_event_id: i64,
+    provider: &str,
+    prompt: &str,
+    activity_kind: ActivityKind,
+    projection: &PromptProjection,
+    now_us: i64,
+) -> Result<(), StoreError> {
+    let activity = ActivityInput {
+        id: activity_event_id,
+        provider: provider.to_owned(),
+        prompt: prompt.to_owned(),
+        activity_kind: activity_kind.as_str().to_owned(),
+    };
+    initialize_prompt_summary_for_activity(transaction, &activity, projection, now_us).await
+}
+
+async fn initialize_prompt_summary_for_activity(
+    transaction: &mut Transaction<'_, Sqlite>,
+    activity: &ActivityInput,
+    projection: &PromptProjection,
+    now_us: i64,
+) -> Result<(), StoreError> {
     let policy = prompt_summary_policy_in_transaction(transaction, &activity.provider).await?;
-    let desired = derive_desired_summary(transaction, &activity, projection, policy).await?;
+    let desired = derive_desired_summary(transaction, activity, projection, policy).await?;
     insert_prompt_summary(
         transaction,
-        activity_event_id,
+        activity.id,
         projection,
+        &activity.prompt,
         policy,
         &desired,
         now_us,
@@ -1024,6 +1057,7 @@ async fn insert_prompt_summary(
     transaction: &mut Transaction<'_, Sqlite>,
     activity_event_id: i64,
     projection: &PromptProjection,
+    raw_prompt: &str,
     policy: PromptSummaryPolicy,
     desired: &DesiredSummary,
     now_us: i64,
@@ -1049,7 +1083,10 @@ async fn insert_prompt_summary(
     .bind(activity_event_id)
     .bind(state.as_str())
     .bind(projection_kind_storage(projection.kind()))
-    .bind(projection.text())
+    .bind(
+        (projection.kind() != PromptProjectionKind::Raw || projection.text() != raw_prompt)
+            .then_some(projection.text()),
+    )
     .bind(projection.version())
     .bind(policy.as_str())
     .bind(text)
@@ -1083,10 +1120,15 @@ async fn existing_summary(
     activity_event_id: i64,
 ) -> Result<Option<ExistingSummary>, StoreError> {
     let row = sqlx::query(
-        "SELECT state, projection_kind, projected_prompt, projection_version,
-                policy_at_capture, summary_text, used_previous_result, context_activity_event_id,
-                context_result_generation, source_digest
-         FROM activity_prompt_summaries WHERE activity_event_id = ?",
+        "SELECT summaries.state, summaries.projection_kind,
+                COALESCE(summaries.projected_prompt, activities.prompt) AS projected_prompt,
+                summaries.projection_version, summaries.policy_at_capture,
+                summaries.summary_text, summaries.used_previous_result,
+                summaries.context_activity_event_id, summaries.context_result_generation,
+                summaries.source_digest
+         FROM activity_prompt_summaries AS summaries
+         JOIN activity_events AS activities ON activities.id = summaries.activity_event_id
+         WHERE summaries.activity_event_id = ?",
     )
     .bind(activity_event_id)
     .fetch_optional(&mut **transaction)
@@ -1326,12 +1368,15 @@ fn is_contextual_prompt(prompt: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use akra_core::prompt_projection::PromptProjection;
+    use akra_core::{ingress::IngressEvent, prompt_projection::PromptProjection};
+    use akra_git::ProjectIdentity;
 
     use super::{
-        MAX_PROMPT_SUMMARY_CHARS, PromptSummaryMode, PromptSummaryStatus, PromptSummaryText,
-        PromptSummaryValidationError, activity_prompt_summary_from_parts, summary_gate,
+        MAX_PROMPT_SUMMARY_CHARS, PromptSummaryMode, PromptSummaryPolicy, PromptSummaryStatus,
+        PromptSummaryText, PromptSummaryValidationError, activity_prompt_summary_from_parts,
+        summary_gate,
     };
+    use crate::{ActivityOrder, ActivityScope, ActivityStore, RecordActivity};
 
     #[test]
     fn validator_uses_unicode_scalars_and_rejects_display_breakers() {
@@ -1386,5 +1431,190 @@ mod tests {
         assert_eq!(summary.status, PromptSummaryStatus::Failed);
         assert_eq!(summary.mode, PromptSummaryMode::Fallback);
         assert_eq!(summary.text.as_deref(), Some("검증 작업을 진행"));
+    }
+
+    #[tokio::test]
+    async fn raw_projection_is_stored_once_and_restored_by_every_prompt_reader() {
+        let store = ActivityStore::in_memory().await.expect("store");
+        store.migrate().await.expect("migrations");
+        store
+            .set_prompt_summary_policy("codex", PromptSummaryPolicy::Smart)
+            .await
+            .expect("smart policy");
+        let cwd = std::env::current_dir().expect("cwd");
+        let prompt = "가".repeat(300);
+        let event = IngressEvent::try_new(
+            "codex",
+            "projection-storage",
+            "raw",
+            cwd.to_string_lossy(),
+            &prompt,
+            None,
+        )
+        .expect("event");
+        let origin = ProjectIdentity::capture_snapshot_from_cwd(&cwd)
+            .expect("origin")
+            .origin;
+        let activity_id = store
+            .record(
+                RecordActivity::captured(event, origin, 1)
+                    .with_prompt_projection(PromptProjection::raw(&prompt)),
+            )
+            .await
+            .expect("record");
+
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT projected_prompt FROM activity_prompt_summaries
+             WHERE activity_event_id = ?",
+        )
+        .bind(activity_id)
+        .fetch_one(&store.pool)
+        .await
+        .expect("stored projection");
+        assert_eq!(stored, None);
+        assert_eq!(
+            store
+                .prompt_summary(activity_id)
+                .await
+                .expect("prompt summary")
+                .expect("summary row")
+                .projected_prompt,
+            prompt
+        );
+        assert_eq!(
+            store
+                .claim_prompt_summary(1, 10)
+                .await
+                .expect("claim")
+                .expect("pending claim")
+                .projected_prompt(),
+            prompt
+        );
+        for summaries in [
+            store
+                .activity_summaries_ordered_page(
+                    ActivityScope::All,
+                    None,
+                    10,
+                    ActivityOrder::Oldest,
+                )
+                .await
+                .expect("ordered summaries"),
+            store
+                .activity_summaries_indexed_page(
+                    ActivityScope::All,
+                    None,
+                    10,
+                    ActivityOrder::Oldest,
+                )
+                .await
+                .expect("indexed summaries"),
+        ] {
+            assert_eq!(
+                summaries[0].prompt_summary.text.as_deref(),
+                Some(prompt.as_str())
+            );
+        }
+        assert_eq!(
+            store
+                .activity_detail(activity_id)
+                .await
+                .expect("activity detail")
+                .prompt_summary
+                .text
+                .as_deref(),
+            Some(prompt.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_raw_projection_that_differs_from_the_activity_remains_materialized() {
+        let store = ActivityStore::in_memory().await.expect("store");
+        store.migrate().await.expect("migrations");
+        let cwd = std::env::current_dir().expect("cwd");
+        let event = IngressEvent::try_new(
+            "codex",
+            "projection-storage",
+            "alternate",
+            cwd.to_string_lossy(),
+            "captured prompt",
+            None,
+        )
+        .expect("event");
+        let origin = ProjectIdentity::capture_snapshot_from_cwd(&cwd)
+            .expect("origin")
+            .origin;
+        let activity_id = store
+            .record(RecordActivity::captured(event, origin, 1))
+            .await
+            .expect("record");
+        sqlx::query("DELETE FROM activity_prompt_summaries WHERE activity_event_id = ?")
+            .bind(activity_id)
+            .execute(&store.pool)
+            .await
+            .expect("simulate historic activity");
+
+        store
+            .initialize_prompt_summary(
+                activity_id,
+                &PromptProjection::raw("alternate raw prompt"),
+                2,
+            )
+            .await
+            .expect("initialize projection");
+
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT projected_prompt FROM activity_prompt_summaries
+             WHERE activity_event_id = ?",
+        )
+        .bind(activity_id)
+        .fetch_one(&store.pool)
+        .await
+        .expect("stored projection");
+        assert_eq!(stored.as_deref(), Some("alternate raw prompt"));
+    }
+
+    #[tokio::test]
+    async fn a_derived_projection_remains_materialized() {
+        let store = ActivityStore::in_memory().await.expect("store");
+        store.migrate().await.expect("migrations");
+        let cwd = std::env::current_dir().expect("cwd");
+        let event = IngressEvent::try_new(
+            "codex",
+            "projection-storage",
+            "derived",
+            cwd.to_string_lossy(),
+            "wrapped captured prompt",
+            None,
+        )
+        .expect("event");
+        let origin = ProjectIdentity::capture_snapshot_from_cwd(&cwd)
+            .expect("origin")
+            .origin;
+        let projection = PromptProjection::codex_wrapper_removed("derived prompt", 8)
+            .expect("derived projection");
+        let activity_id = store
+            .record(RecordActivity::captured(event, origin, 1).with_prompt_projection(projection))
+            .await
+            .expect("record");
+
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT projected_prompt FROM activity_prompt_summaries
+             WHERE activity_event_id = ?",
+        )
+        .bind(activity_id)
+        .fetch_one(&store.pool)
+        .await
+        .expect("stored projection");
+        assert_eq!(stored.as_deref(), Some("derived prompt"));
+        assert_eq!(
+            store
+                .prompt_summary(activity_id)
+                .await
+                .expect("prompt summary")
+                .expect("summary row")
+                .projected_prompt,
+            "derived prompt"
+        );
     }
 }

@@ -1,5 +1,9 @@
-use akra_core::{ingress::IngressEvent, prompt_projection::PromptProjection};
+use akra_core::{
+    ingress::{ActivityKind, IngressEvent},
+    prompt_projection::PromptProjection,
+};
 use akra_git::ProjectOriginSnapshot;
+use sqlx::Row;
 
 use crate::{ActivityStore, StoreError, routing};
 
@@ -120,9 +124,12 @@ impl ActivityStore {
     pub async fn record(&self, command: RecordActivity) -> Result<i64, StoreError> {
         let event = command.event();
         let mut transaction = self.pool.begin().await?;
-        if let Some(id) = sqlx::query_scalar::<_, i64>(
-            "SELECT activity_event_id FROM ingest_dedupes
-             WHERE provider = ? AND provider_session_id = ? AND provider_turn_id = ?",
+        if let Some(existing) = sqlx::query(
+            "SELECT dedupes.activity_event_id, activities.activity_kind
+             FROM ingest_dedupes AS dedupes
+             JOIN activity_events AS activities ON activities.id = dedupes.activity_event_id
+             WHERE dedupes.provider = ? AND dedupes.provider_session_id = ?
+               AND dedupes.provider_turn_id = ?",
         )
         .bind(event.provider().as_str())
         .bind(event.session_id())
@@ -130,9 +137,12 @@ impl ActivityStore {
         .fetch_optional(&mut *transaction)
         .await?
         {
+            let id: i64 = existing.try_get("activity_event_id")?;
+            let activity_kind = stored_activity_kind(existing.try_get("activity_kind")?)?;
             crate::result_summaries::link_activity(
                 &mut transaction,
                 id,
+                activity_kind,
                 event.provider().as_str(),
                 event.session_id(),
                 event.turn_id(),
@@ -153,10 +163,6 @@ impl ActivityStore {
             event.session_id(),
         )
         .await?;
-        let global_sequence: i64 =
-            sqlx::query_scalar("SELECT COALESCE(MAX(global_sequence), 0) + 1 FROM activity_events")
-                .fetch_one(&mut *transaction)
-                .await?;
         let captured_at_us = command.captured_at_us();
         let (capture_target, capture_client) = command
             .capture_source()
@@ -178,7 +184,8 @@ impl ActivityStore {
              ) VALUES (
                  ?, ?, ?, ?, ?, ?, ?, ?, ?,
                  CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER),
-                 ?, ?, ?, ?, ?, ?, ?
+                 ?, (SELECT COALESCE(MAX(global_sequence), 0) + 1 FROM activity_events),
+                 ?, ?, ?, ?, ?
              )
              RETURNING id",
         )
@@ -192,7 +199,6 @@ impl ActivityStore {
         .bind(captured_at_us)
         .bind(captured_provenance)
         .bind(first_recorded_provenance)
-        .bind(global_sequence)
         .bind(capture_target)
         .bind(capture_client)
         .bind(event.activity_kind().as_str())
@@ -200,51 +206,63 @@ impl ActivityStore {
         .bind(event.agent_type())
         .fetch_one(&mut *transaction)
         .await?;
-        sqlx::query(
-            "INSERT OR IGNORE INTO ingest_dedupes (
+        let inserted_mapping = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO ingest_dedupes (
                  provider, provider_session_id, provider_turn_id, activity_event_id
-             ) VALUES (?, ?, ?, ?)",
+             ) VALUES (?, ?, ?, ?)
+             ON CONFLICT(provider, provider_session_id, provider_turn_id) DO NOTHING
+             RETURNING activity_event_id",
         )
         .bind(event.provider().as_str())
         .bind(event.session_id())
         .bind(event.turn_id())
         .bind(id)
-        .execute(&mut *transaction)
+        .fetch_optional(&mut *transaction)
         .await?;
-        let mapped_id: i64 = sqlx::query_scalar(
-            "SELECT activity_event_id FROM ingest_dedupes
-             WHERE provider = ? AND provider_session_id = ? AND provider_turn_id = ?",
-        )
-        .bind(event.provider().as_str())
-        .bind(event.session_id())
-        .bind(event.turn_id())
-        .fetch_one(&mut *transaction)
-        .await?;
+        let mapped_id = match inserted_mapping {
+            Some(mapped_id) => mapped_id,
+            None => {
+                sqlx::query_scalar(
+                    "SELECT activity_event_id FROM ingest_dedupes
+                     WHERE provider = ? AND provider_session_id = ? AND provider_turn_id = ?",
+                )
+                .bind(event.provider().as_str())
+                .bind(event.session_id())
+                .bind(event.turn_id())
+                .fetch_one(&mut *transaction)
+                .await?
+            }
+        };
         if mapped_id != id {
             return Err(StoreError::Invariant(format!(
                 "dedupe key mapped to activity {mapped_id} instead of newly inserted activity {id}"
             )));
         }
+        let summary_now_us = captured_at_us.unwrap_or_else(recorded_now_us);
         crate::result_summaries::link_activity(
             &mut transaction,
             id,
+            event.activity_kind(),
             event.provider().as_str(),
             event.session_id(),
             event.turn_id(),
         )
         .await?;
-        crate::prompt_summaries::initialize_prompt_summary_in_transaction(
+        crate::prompt_summaries::initialize_new_prompt_summary_in_transaction(
             &mut transaction,
             id,
+            event.provider().as_str(),
+            event.prompt(),
+            event.activity_kind(),
             command.prompt_projection(),
-            captured_at_us.unwrap_or_else(recorded_now_us),
+            summary_now_us,
         )
         .await?;
         if event.activity_kind() == akra_core::ingress::ActivityKind::User {
             crate::prompt_summaries::reconcile_successor_after_activity(
                 &mut transaction,
                 id,
-                captured_at_us.unwrap_or_else(recorded_now_us),
+                summary_now_us,
             )
             .await?;
         }
@@ -269,6 +287,11 @@ impl ActivityStore {
         transaction.commit().await?;
         Ok(id)
     }
+}
+
+fn stored_activity_kind(value: String) -> Result<ActivityKind, StoreError> {
+    ActivityKind::from_storage(&value)
+        .ok_or_else(|| StoreError::Invariant(format!("invalid activity kind: {value}")))
 }
 
 fn recorded_now_us() -> i64 {
