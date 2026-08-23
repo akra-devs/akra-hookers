@@ -249,7 +249,10 @@ impl ActivityStore {
                     result_summary.summary_line_3,
                     result_summary.source_text IS NOT NULL AS result_summary_source_retained,
                     prompt_summary.state AS prompt_summary_state,
-                    prompt_summary.projected_prompt,
+                    CASE
+                        WHEN prompt_summary.activity_event_id IS NULL THEN NULL
+                        ELSE COALESCE(prompt_summary.projected_prompt, selected.prompt)
+                    END AS projected_prompt,
                     prompt_summary.summary_text AS prompt_summary_text,
                     prompt_summary.used_previous_result AS prompt_summary_used_previous_result
              FROM selected
@@ -365,7 +368,13 @@ impl ActivityStore {
                         result_summary.summary_line_3,
                         result_summary.source_text IS NOT NULL AS result_summary_source_retained,
                         prompt_summary.state AS prompt_summary_state,
-                        prompt_summary.projected_prompt,
+                        CASE
+                            WHEN prompt_summary.activity_event_id IS NULL THEN NULL
+                            ELSE COALESCE(
+                                prompt_summary.projected_prompt,
+                                activity_events.prompt
+                            )
+                        END AS projected_prompt,
                         prompt_summary.summary_text AS prompt_summary_text,
                         prompt_summary.used_previous_result AS prompt_summary_used_previous_result,
                         CASE

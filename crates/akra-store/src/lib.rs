@@ -20,6 +20,7 @@ mod migration_v10;
 mod migration_v11;
 mod migration_v12;
 mod migration_v13;
+mod migration_v14;
 mod migration_v2;
 mod migration_v3;
 mod migration_v4;

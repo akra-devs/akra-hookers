@@ -992,7 +992,10 @@ const LOG_SELECT: &str = "WITH effective AS (
             activity_events.prompt, activity_events.captured_at_us,
             activity_events.first_recorded_at_us,
             prompt_summary.state AS prompt_summary_state,
-            prompt_summary.projected_prompt,
+            CASE
+                WHEN prompt_summary.activity_event_id IS NULL THEN NULL
+                ELSE COALESCE(prompt_summary.projected_prompt, activity_events.prompt)
+            END AS projected_prompt,
             prompt_summary.summary_text AS prompt_summary_text,
             prompt_summary.used_previous_result AS prompt_summary_used_previous_result,
             prompt_summary.source_digest AS prompt_summary_source_digest,

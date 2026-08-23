@@ -213,7 +213,10 @@ impl ActivityStore {
                         'unavailable'
                     ) AS result_summary_state,
                     prompt_summary.state AS prompt_summary_state,
-                    prompt_summary.projected_prompt,
+                    CASE
+                        WHEN prompt_summary.activity_event_id IS NULL THEN NULL
+                        ELSE COALESCE(prompt_summary.projected_prompt, numbered.prompt)
+                    END AS projected_prompt,
                     prompt_summary.summary_text,
                     prompt_summary.used_previous_result
              FROM numbered
@@ -368,7 +371,7 @@ impl ActivityStore {
                  SELECT activity_events.id, activity_events.provider,
                         activity_events.activity_kind,
                         activity_events.provider_session_id,
-                        substr(activity_events.prompt, 1, 281) AS prompt,
+                        activity_events.prompt,
                         activity_events.captured_at_us,
                         activity_events.first_recorded_at_us,
                         activity_events.global_sequence,
@@ -535,7 +538,10 @@ impl ActivityStore {
                         'unavailable'
                     ) AS result_summary_state,
                     prompt_summary.state AS prompt_summary_state,
-                    prompt_summary.projected_prompt,
+                    CASE
+                        WHEN prompt_summary.activity_event_id IS NULL THEN NULL
+                        ELSE COALESCE(prompt_summary.projected_prompt, page.prompt)
+                    END AS projected_prompt,
                     prompt_summary.summary_text,
                     prompt_summary.used_previous_result
              FROM page
