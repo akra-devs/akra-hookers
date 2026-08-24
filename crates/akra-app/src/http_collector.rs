@@ -82,6 +82,7 @@ pub(crate) async fn ingest(
     let (status, receipt_status) = match outcome {
         ReceiveOutcome::Accepted => (StatusCode::ACCEPTED, "accepted"),
         ReceiveOutcome::Duplicate => (StatusCode::OK, "duplicate"),
+        ReceiveOutcome::Ignored => (StatusCode::ACCEPTED, "ignored"),
     };
     Ok((
         status,

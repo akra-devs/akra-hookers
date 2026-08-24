@@ -19,7 +19,6 @@ pub(crate) struct ActivityQuery {
     limit: Option<i64>,
     after_id: Option<i64>,
     order: Option<String>,
-    include_subagent: Option<bool>,
     include_internal: Option<bool>,
     period: Option<String>,
     start_at_us: Option<i64>,
@@ -30,7 +29,6 @@ pub(crate) struct ActivityDetailQuery {
     conversation_limit: Option<i64>,
     conversation_after_id: Option<i64>,
     conversation_offset: Option<i64>,
-    include_subagent: Option<bool>,
     include_internal: Option<bool>,
 }
 
@@ -41,7 +39,7 @@ pub(crate) async fn activities(
     let scope = activity_scope(&query)?;
     let limit = page_limit(query.limit)?;
     let order = activity_order(query.order.as_deref())?;
-    let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
+    let activity_filter = activity_kind_filter(query.include_internal);
     let time_range = activity_time_range(query.period.as_deref(), query.start_at_us)?;
     validate_cursor(query.after_id)?;
     state
@@ -69,7 +67,7 @@ pub(crate) async fn activity_count(
     Query(query): Query<ActivityQuery>,
 ) -> Result<Json<ActivityCountResponse>, ApiError> {
     let scope = activity_scope(&query)?;
-    let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
+    let activity_filter = activity_kind_filter(query.include_internal);
     let time_range = activity_time_range(query.period.as_deref(), query.start_at_us)?;
     state
         .store
@@ -85,7 +83,7 @@ pub(crate) async fn activity_detail(
     Query(query): Query<ActivityDetailQuery>,
 ) -> Result<Json<akra_store::ActivityDetail>, ApiError> {
     let limit = page_limit(query.conversation_limit)?;
-    let activity_filter = activity_kind_filter(query.include_subagent, query.include_internal);
+    let activity_filter = activity_kind_filter(query.include_internal);
     validate_cursor(query.conversation_after_id)?;
     let detail = match query.conversation_offset {
         Some(offset) => {
@@ -173,13 +171,9 @@ fn activity_order(order: Option<&str>) -> Result<akra_store::ActivityOrder, ApiE
 }
 
 pub(crate) fn activity_kind_filter(
-    include_subagent: Option<bool>,
     include_internal: Option<bool>,
 ) -> akra_store::ActivityKindFilter {
-    akra_store::ActivityKindFilter::new(
-        include_subagent.unwrap_or(true),
-        include_internal.unwrap_or(true),
-    )
+    akra_store::ActivityKindFilter::new(false, include_internal.unwrap_or(true))
 }
 
 pub(crate) fn activity_time_range(

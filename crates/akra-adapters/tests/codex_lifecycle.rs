@@ -140,9 +140,11 @@ fn enable_creates_missing_hooks_configuration() {
             .is_none(),
         "akra capture must be synchronous because Codex skips async hooks"
     );
-    assert_eq!(
-        hooks["hooks"]["SubagentStart"][0]["hooks"][0]["command"],
-        "C:\\tools\\akra-hookers.exe capture --data-dir C:\\data"
+    assert!(
+        hooks["hooks"]["SubagentStart"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "subagent collection must not install a hook"
     );
     assert_eq!(
         hooks["hooks"]["Stop"][0]["hooks"][0]["command"],
@@ -152,7 +154,7 @@ fn enable_creates_missing_hooks_configuration() {
     let config =
         fs::read_to_string(home.path().join(".codex").join("config.toml")).expect("trusted config");
     assert!(config.contains("enabled = true"));
-    assert!(config.contains("subagent_start:0:0"));
+    assert!(!config.contains("subagent_start"));
     assert!(config.contains("stop:0:0"));
     assert!(
         config.contains("sha256:e94def78b62a7838e51bc8b77e885b5e85c89162fc063bc9a3c4cfd4c8237f36")
@@ -516,8 +518,9 @@ fn assert_shifted_third_party_hooks(codex_home: &Path, managed_command: Option<&
         assert_eq!(groups[0]["matcher"], "third-party-a");
         assert_eq!(groups[1]["hooks"][0]["command"], "third-party-b");
         assert_eq!(groups[1]["matcher"], "mixed-group");
-        assert_eq!(groups.len(), if managed_command.is_some() { 3 } else { 2 });
-        if let Some(managed_command) = managed_command {
+        let installs_managed = managed_command.is_some() && manifest_event != "SubagentStart";
+        assert_eq!(groups.len(), if installs_managed { 3 } else { 2 });
+        if let Some(managed_command) = managed_command.filter(|_| installs_managed) {
             assert_eq!(groups[2]["hooks"][0]["command"], managed_command);
         }
 
@@ -539,7 +542,7 @@ fn assert_shifted_third_party_hooks(codex_home: &Path, managed_command: Option<&
                 .is_none(),
             "old third-party trust source must be removed"
         );
-        if managed_command.is_none() {
+        if !installs_managed {
             assert!(
                 state
                     .get(&format!("{manifest_path}:{trust_event}:2:0"))

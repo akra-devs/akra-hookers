@@ -278,25 +278,10 @@ export function ProjectRail({
         <header className="rail-section__heading">
           <div>
             <h2 id="activity-visibility-heading">Canvas visibility</h2>
-            <p>Choose which Codex activity appears as nodes.</p>
+            <p>Show or hide Codex internal activity nodes.</p>
           </div>
         </header>
         <div className="activity-visibility__options">
-          <label>
-            <span>
-              <strong>Subagent activity</strong>
-              <small id="subagent-visibility-description">
-                Delegated agent starts with a stable agent ID
-              </small>
-            </span>
-            <input
-              type="checkbox"
-              checked={activityVisibility.subagent}
-              aria-describedby="subagent-visibility-description"
-              onChange={(event) =>
-                onActivityVisibilityChange("subagent", event.target.checked)}
-            />
-          </label>
           <label>
             <span>
               <strong>Codex internal activity</strong>

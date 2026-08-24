@@ -241,15 +241,15 @@ describe("createApiClient", () => {
     );
     await client.activityCount(
       { scope: "inbox" },
-      { period: "month", includeSubagent: false, includeInternal: false },
+      { period: "month", includeInternal: false },
     );
-    await client.projects({ period: "quarter", includeSubagent: false });
+    await client.projects({ period: "quarter" });
     await client.origins({ period: "day", includeInternal: false });
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       `${base}/v1/activities?scope=all&limit=20&order=newest&period=week`,
-      `${base}/v1/activities/count?scope=inbox&include_subagent=false&include_internal=false&period=month`,
-      `${base}/v1/projects?include_subagent=false&period=quarter`,
+      `${base}/v1/activities/count?scope=inbox&include_internal=false&period=month`,
+      `${base}/v1/projects?period=quarter`,
       `${base}/v1/origins?include_internal=false&period=day`,
     ]);
   });

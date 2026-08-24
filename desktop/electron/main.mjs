@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -133,6 +133,7 @@ async function createWindow() {
     minWidth: 900,
     minHeight: 640,
     show: false,
+    autoHideMenuBar: true,
     backgroundColor: "#081012",
     title: "Akra Hookers",
     webPreferences: {
@@ -143,6 +144,7 @@ async function createWindow() {
       webSecurity: true,
     },
   });
+  mainWindow.setMenu(null);
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
     return { action: "deny" };
@@ -156,6 +158,7 @@ async function createWindow() {
   mainWindow.on("closed", () => { mainWindow = null; });
   await mainWindow.loadURL(rendererServer.origin);
   if (process.argv.includes("--smoke-test")) {
+    if (mainWindow.isMenuBarVisible()) throw new Error("Desktop menu bar must remain hidden.");
     const heading = await mainWindow.webContents.executeJavaScript("document.querySelector('h1')?.textContent ?? ''");
     if (heading.trim() !== "Prompt canvas") throw new Error(`Unexpected dashboard heading: ${heading}`);
     console.log("desktop smoke test passed");
@@ -187,6 +190,7 @@ else {
   });
   app.whenReady().then(async () => {
     try {
+      Menu.setApplicationMenu(null);
       runtimeCredentials = await startRuntime();
       rendererServer = await startStaticServer(path.join(DESKTOP_ROOT, "renderer"));
       await createWindow();

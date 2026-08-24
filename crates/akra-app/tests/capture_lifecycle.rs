@@ -196,6 +196,34 @@ fn capture_spools_without_opening_sqlite_or_printing_the_prompt() {
 }
 
 #[test]
+fn subagent_start_is_ignored_without_creating_a_spool() {
+    let data_dir = TempDir::new().expect("data directory");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_akra-hookers"))
+        .args(["capture", "--data-dir"])
+        .arg(data_dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("capture starts");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(
+            br#"{"hook_event_name":"SubagentStart","session_id":"session","turn_id":"turn","cwd":"project","agent_id":"agent-7","agent_type":"reviewer"}"#,
+        )
+        .expect("payload writes");
+
+    let output = child.wait_with_output().expect("capture exits");
+    assert!(output.status.success(), "capture failed: {output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(
+        !data_dir.path().join("spool").exists(),
+        "ignored subagent activity must not initialize durable storage"
+    );
+}
+
+#[test]
 fn remote_capture_stops_after_durable_outbox_enqueue() {
     let data_dir = TempDir::new().expect("data directory");
     let manager = akra_app::collector::CollectorManager::open(data_dir.path()).expect("collector");

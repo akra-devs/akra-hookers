@@ -67,7 +67,7 @@ mod tests {
     use akra_core::ingress::{ActivityKind, IngressEvent};
     use akra_git::ProjectIdentity;
 
-    use crate::{ActivityScope, ActivityStore, RecordActivity};
+    use crate::{ActivityScope, ActivityStore, RecordActivity, StoreError};
 
     #[tokio::test]
     async fn backfill_uses_codex_installation_path_without_prompt_matching() {
@@ -105,7 +105,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subagent_identity_round_trips_through_summary_and_detail() {
+    async fn subagent_identity_is_rejected_at_the_store_boundary() {
         let store = ActivityStore::in_memory().await.expect("store");
         store.migrate().await.expect("migrations");
         let cwd = std::env::current_dir().expect("current directory");
@@ -127,21 +127,17 @@ mod tests {
         let origin = ProjectIdentity::capture_snapshot_from_cwd(&cwd)
             .expect("origin")
             .origin;
-        let id = store
+        let error = store
             .record(RecordActivity::captured(event, origin, 2))
             .await
-            .expect("record");
-
-        let summary = store
-            .activity_summaries(ActivityScope::All)
-            .await
-            .expect("summaries")
-            .pop()
-            .expect("summary");
-        assert_eq!(summary.activity_kind, ActivityKind::Subagent);
-        let detail = store.activity_detail(id).await.expect("detail");
-        assert_eq!(detail.activity_kind, ActivityKind::Subagent);
-        assert_eq!(detail.technical.agent_id.as_deref(), Some("agent-7"));
-        assert_eq!(detail.technical.agent_type.as_deref(), Some("reviewer"));
+            .expect_err("subagent activity must not be stored");
+        assert!(matches!(error, StoreError::SubagentActivityDisabled));
+        assert!(
+            store
+                .activity_summaries(ActivityScope::All)
+                .await
+                .expect("summaries")
+                .is_empty()
+        );
     }
 }

@@ -83,7 +83,6 @@ export class ApiError extends Error {
 }
 
 export type ActivityVisibilityQuery = {
-  includeSubagent?: boolean;
   includeInternal?: boolean;
 };
 
@@ -394,9 +393,6 @@ function appendActivityFilterParameters(
   parameters: URLSearchParams,
   filters: ActivityFilterQuery,
 ) {
-  if (filters.includeSubagent !== undefined) {
-    parameters.set("include_subagent", String(filters.includeSubagent));
-  }
   if (filters.includeInternal !== undefined) {
     parameters.set("include_internal", String(filters.includeInternal));
   }

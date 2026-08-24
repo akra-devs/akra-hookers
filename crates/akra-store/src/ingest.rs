@@ -123,6 +123,9 @@ impl RecordActivity {
 impl ActivityStore {
     pub async fn record(&self, command: RecordActivity) -> Result<i64, StoreError> {
         let event = command.event();
+        if event.activity_kind() == ActivityKind::Subagent {
+            return Err(StoreError::SubagentActivityDisabled);
+        }
         let mut transaction = self.pool.begin().await?;
         if let Some(existing) = sqlx::query(
             "SELECT dedupes.activity_event_id, activities.activity_kind

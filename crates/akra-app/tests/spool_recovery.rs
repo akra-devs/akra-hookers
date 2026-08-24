@@ -105,7 +105,7 @@ fn envelope_v1_round_trips_optional_capture_source() {
 }
 
 #[tokio::test]
-async fn subagent_start_context_survives_spool_recovery() {
+async fn historical_subagent_envelope_is_acknowledged_without_storage() {
     let directory = TempDir::new().expect("test directory");
     let cwd = directory.path().join("subagent-cwd");
     fs::create_dir(&cwd).expect("working directory");
@@ -137,17 +137,9 @@ async fn subagent_start_context_survives_spool_recovery() {
     let store = akra_store::ActivityStore::in_memory().await.expect("store");
     store.migrate().await.expect("migrations");
 
-    assert_eq!(drain(&spool, &store).await, 1);
-    let summary = store
-        .activities()
-        .await
-        .expect("activities")
-        .pop()
-        .expect("activity");
-    assert_eq!(summary.activity_kind, ActivityKind::Subagent);
-    let detail = store.activity_detail(summary.id).await.expect("detail");
-    assert_eq!(detail.technical.agent_id.as_deref(), Some("agent-7"));
-    assert_eq!(detail.technical.agent_type.as_deref(), Some("reviewer"));
+    assert_eq!(drain(&spool, &store).await, 0);
+    assert!(spool.pending().expect("pending items").is_empty());
+    assert!(store.activities().await.expect("activities").is_empty());
 }
 
 #[tokio::test]

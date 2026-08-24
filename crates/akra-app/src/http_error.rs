@@ -82,6 +82,10 @@ impl ApiError {
             akra_store::StoreError::InvalidCuration(message) => {
                 Self::unprocessable("invalid_curation", message)
             }
+            akra_store::StoreError::SubagentActivityDisabled => Self::unprocessable(
+                "subagent_activity_disabled",
+                "Subagent activity is not collected.",
+            ),
             akra_store::StoreError::SameProjectMerge => {
                 Self::unprocessable("same_project_merge", error.to_string())
             }

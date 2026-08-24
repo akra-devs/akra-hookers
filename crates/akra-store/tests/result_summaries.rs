@@ -441,26 +441,6 @@ async fn an_expired_lease_is_reclaimed_and_the_old_worker_becomes_stale() {
 #[tokio::test]
 async fn non_user_activity_is_skipped_and_never_retains_raw_result() {
     let store = migrated_store().await;
-    store
-        .capture_result(result("subagent", "internal result", 10))
-        .await
-        .expect("result first");
-    let activity_id = record(&store, "subagent", ActivityKind::Subagent).await;
-    let summary = store
-        .result_summary(activity_id)
-        .await
-        .expect("summary")
-        .expect("skipped state");
-    assert_eq!(summary.state, ResultSummaryState::Skipped);
-    assert!(!summary.source_retained);
-    assert!(
-        store
-            .claim_result_summary(10, 50)
-            .await
-            .expect("claim")
-            .is_none()
-    );
-
     let internal_id = record(&store, "internal", ActivityKind::Internal).await;
     store
         .capture_result(result("internal", "another internal result", 20))
@@ -473,6 +453,13 @@ async fn non_user_activity_is_skipped_and_never_retains_raw_result() {
         .expect("skipped state");
     assert_eq!(internal.state, ResultSummaryState::Skipped);
     assert!(!internal.source_retained);
+    assert!(
+        store
+            .claim_result_summary(20, 50)
+            .await
+            .expect("claim")
+            .is_none()
+    );
 }
 
 async fn migrated_store() -> ActivityStore {
@@ -492,11 +479,7 @@ async fn record(store: &ActivityStore, turn: &str, activity_kind: ActivityKind) 
         None,
     )
     .expect("event")
-    .with_activity_context(
-        activity_kind,
-        (activity_kind == ActivityKind::Subagent).then(|| "agent-1".to_owned()),
-        (activity_kind == ActivityKind::Subagent).then(|| "reviewer".to_owned()),
-    )
+    .with_activity_context(activity_kind, None, None)
     .expect("activity context");
     let origin = ProjectIdentity::capture_snapshot_from_cwd(&cwd)
         .expect("origin")

@@ -31,7 +31,7 @@ test("fixture setup rejects unauthenticated mutation and accepts authenticated s
   });
 });
 
-test("canvas visibility independently filters subagent and Codex internal nodes", async ({
+test("subagent activity is always absent while Codex internal nodes remain configurable", async ({
   page,
   api,
 }) => {
@@ -85,18 +85,14 @@ test("canvas visibility independently filters subagent and Codex internal nodes"
 
   await page.goto("/");
 
-  const subagentToggle = page.getByRole("checkbox", { name: /Subagent activity/ });
   const internalToggle = page.getByRole("checkbox", { name: /Codex internal activity/ });
-  await expect(subagentToggle).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /Subagent activity/ })).toHaveCount(0);
   await expect(internalToggle).not.toBeChecked();
-  await expect(page.getByTestId("activity-node-3")).toBeVisible();
+  await expect(page.getByTestId("activity-node-3")).toHaveCount(0);
   await expect(page.getByTestId("activity-node-4")).toHaveCount(0);
   const firstProjectCount = page.locator(".rail-projects li").first().locator("small");
-  await expect(firstProjectCount).toHaveText("2");
-
-  await subagentToggle.uncheck();
-  await expect(page.getByTestId("activity-node-3")).toHaveCount(0);
   await expect(firstProjectCount).toHaveText("1");
+
   await page.getByTestId("activity-node-1").click();
   const detailPanel = page.getByTestId("activity-detail-panel");
   await expect(detailPanel.locator(".activity-detail__turn")).toHaveCount(2);
@@ -108,7 +104,7 @@ test("canvas visibility independently filters subagent and Codex internal nodes"
   expect(api.state.activities.map(({ id }) => id)).toEqual([1, 2, 3, 4]);
 
   await page.reload();
-  await expect(page.getByRole("checkbox", { name: /Subagent activity/ })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /Subagent activity/ })).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: /Codex internal activity/ })).toBeChecked();
   await expect(page.getByTestId("activity-node-3")).toHaveCount(0);
   await expect(page.getByTestId("activity-node-4")).toBeVisible();

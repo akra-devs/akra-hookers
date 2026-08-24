@@ -563,7 +563,7 @@ export class FixtureApi {
 
   private activityKindVisible(activityKind: string, url: URL) {
     if (activityKind === "subagent") {
-      return url.searchParams.get("include_subagent") !== "false";
+      return false;
     }
     if (activityKind === "internal") {
       return url.searchParams.get("include_internal") !== "false";

@@ -1439,6 +1439,7 @@ mod tests {
             std::fs::read_to_string(selected_home.join("hooks.json")).expect("selected manifest");
         assert!(manifest.contains("selected current command"));
         assert!(manifest.contains("Stop"));
+        assert!(!manifest.contains("SubagentStart"));
     }
 
     #[test]
