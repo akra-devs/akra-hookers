@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::http::AppState;
+use crate::{http::AppState, http_error::ApiError};
 
 #[derive(Deserialize)]
 pub(crate) struct CanvasPosition {
@@ -107,13 +107,13 @@ pub(crate) async fn delete_canvas_edge(
 pub(crate) async fn delete_canvas_node(
     State(state): State<AppState>,
     Path(node_id): Path<i64>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, ApiError> {
     state
         .store
         .delete_canvas_node(node_id)
         .await
         .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(ApiError::from_store)
 }
 
 pub(crate) async fn update_canvas_position(

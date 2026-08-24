@@ -68,6 +68,7 @@ impl ApiError {
             error @ (akra_store::StoreError::ProjectNotFound(_)
             | akra_store::StoreError::OriginNotFound(_)
             | akra_store::StoreError::ActivityNotFound(_)
+            | akra_store::StoreError::CanvasNodeNotFound(_)
             | akra_store::StoreError::WorkNotFound(_)
             | akra_store::StoreError::WorkEdgeNotFound(_)
             | akra_store::StoreError::CurationProposalNotFound(_)) => {

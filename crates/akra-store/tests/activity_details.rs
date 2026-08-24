@@ -44,17 +44,6 @@ async fn detail_keeps_full_metadata_and_complete_cross_project_timeline() {
             .await
             .expect("assignment");
     }
-    let selected_node: i64 =
-        sqlx::query_scalar("SELECT id FROM canvas_nodes WHERE activity_event_id = ?")
-            .bind(selected)
-            .fetch_one(&pool)
-            .await
-            .expect("selected node");
-    store
-        .delete_canvas_node(selected_node)
-        .await
-        .expect("delete canvas node");
-
     let detail = store.activity_detail(selected).await.expect("detail");
     assert_eq!(detail.id, selected);
     assert_eq!(detail.provider, "codex");
@@ -73,7 +62,7 @@ async fn detail_keeps_full_metadata_and_complete_cross_project_timeline() {
     assert_eq!(detail.technical.turn_id, "two");
     assert!(detail.captured_at.value.is_some());
     assert!(detail.first_recorded_at.value.is_some());
-    assert!(!detail.on_canvas);
+    assert!(detail.on_canvas);
     assert_eq!(
         detail
             .conversation
@@ -96,7 +85,7 @@ async fn detail_keeps_full_metadata_and_complete_cross_project_timeline() {
             .iter()
             .map(|turn| (turn.on_canvas, turn.selected))
             .collect::<Vec<_>>(),
-        vec![(true, false), (false, true), (true, false)]
+        vec![(true, false), (true, true), (true, false)]
     );
     assert_eq!(effective_project(&pool, first).await, Some(project_a));
     assert_eq!(assignment_count(&pool, origin_id).await, 2);

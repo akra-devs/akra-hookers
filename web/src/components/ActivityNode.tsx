@@ -64,8 +64,8 @@ export function ActivityNode({
         <button
           className="activity-node__remove nodrag nopan"
           type="button"
-          aria-label="캔버스에서 제거"
-          title="캔버스에서 제거"
+          aria-label="활동 기록 삭제"
+          title="활동 기록 삭제"
           onPointerDown={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}
           onClick={(event) => {

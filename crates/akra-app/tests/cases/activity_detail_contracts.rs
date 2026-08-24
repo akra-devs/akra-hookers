@@ -56,20 +56,6 @@ async fn detail_returns_full_selected_metadata_and_complete_mixed_timeline() {
             .activity_count,
         1
     );
-    let node = harness
-        .store
-        .canvas_nodes()
-        .await
-        .expect("nodes")
-        .into_iter()
-        .find(|node| node.activity_event_id == selected)
-        .expect("selected node");
-    harness
-        .store
-        .delete_canvas_node(node.id)
-        .await
-        .expect("delete selected node");
-
     let (status, detail) = get(&harness.app, &format!("/v1/activities/{selected}"), true).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(detail["id"], selected);
@@ -90,7 +76,7 @@ async fn detail_returns_full_selected_metadata_and_complete_mixed_timeline() {
     assert_eq!(detail["selected_turn"]["selected"], true);
     assert!(detail["captured_at"]["value"].is_string());
     assert!(detail["first_recorded_at"]["value"].is_string());
-    assert_eq!(detail["on_canvas"], false);
+    assert_eq!(detail["on_canvas"], true);
     let conversation = detail["conversation"].as_array().expect("conversation");
     assert_eq!(ids(conversation), vec![first, selected, third]);
     assert_eq!(detail["conversation_total"], 3);
@@ -110,7 +96,7 @@ async fn detail_returns_full_selected_metadata_and_complete_mixed_timeline() {
             .collect::<Vec<_>>(),
         vec![
             (Some(true), Some(false)),
-            (Some(false), Some(true)),
+            (Some(true), Some(true)),
             (Some(true), Some(false))
         ]
     );

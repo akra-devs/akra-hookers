@@ -117,6 +117,8 @@ pub enum StoreError {
     OriginNotFound(i64),
     #[error("activity not found: {0}")]
     ActivityNotFound(i64),
+    #[error("canvas node not found: {0}")]
+    CanvasNodeNotFound(i64),
     #[error("subagent activity is not collected")]
     SubagentActivityDisabled,
     #[error("work not found: {0}")]

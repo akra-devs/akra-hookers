@@ -172,7 +172,7 @@ async fn lists_persisted_canvas_nodes_with_bearer_capability() {
 }
 
 #[tokio::test]
-async fn deletes_canvas_node_without_deleting_activity() {
+async fn deletes_canvas_node_and_tombstones_activity() {
     let store = Arc::new(akra_store::ActivityStore::in_memory().await.expect("store"));
     store.migrate().await.expect("migration");
     let activity_id = record(&store, "codex", "s", "t", "C:\\x", "keep")
@@ -192,5 +192,16 @@ async fn deletes_canvas_node_without_deleting_activity() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert_eq!(store.activity_count().await.expect("activity remains"), 1);
+    assert_eq!(store.activity_count().await.expect("activity deleted"), 0);
+    let detail = app("fixture-token", Arc::clone(&store))
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/activities/{activity_id}"))
+                .header("authorization", "Bearer fixture-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(detail.status(), StatusCode::NOT_FOUND);
 }

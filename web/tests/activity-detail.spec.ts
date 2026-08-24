@@ -727,7 +727,7 @@ test("the oldest-first timeline retains its selected ID and scroll anchor across
   await expect(detailPanel).toContainText("이름이 바뀐 프로젝트");
 });
 
-test("the pane closes only when its selected node becomes invisible while deleted history stays immutable", async ({ page, api }) => {
+test("deleting a canvas node closes its detail and removes the activity from history", async ({ page, api }) => {
   const origin = api.state.origins[0]!;
   origin.routing_mode = "shared";
   origin.default_project_id = null;
@@ -751,7 +751,8 @@ test("the pane closes only when its selected node becomes invisible while delete
   await expect(panel(page)).toHaveCount(0);
   await expect(page.getByTestId("activity-node-2")).toHaveCount(0);
   detailPanel = await open(page, 1);
-  await expect(detailPanel.getByRole("list", { name: "대화 기록" }).locator('[data-activity-id="2"]')).toContainText("캔버스에 없음");
+  await expect(detailPanel.getByRole("list", { name: "대화 기록" }).locator('[data-activity-id="2"]')).toHaveCount(0);
+  expect(api.state.activities.map((activity) => activity.id)).toEqual([1]);
   expect(api.state.canvasNodes.map((node) => node.activity_event_id)).toEqual([1]);
   await page.getByLabel("프로젝트 필터").selectOption("inbox");
   await expect(panel(page)).toHaveCount(0);

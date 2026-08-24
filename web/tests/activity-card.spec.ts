@@ -123,7 +123,7 @@ test("selecting a custom card creates no edge", async ({ page, api }) => {
   await expect(page.locator(".react-flow__edge")).toHaveCount(0);
 });
 
-test("the card remove control hides a node before persistence finishes", async ({ page, api }) => {
+test("the card delete control hides a node before activity deletion finishes", async ({ page, api }) => {
   let releaseDelete!: () => void;
   let markRequested!: () => void;
   const requested = new Promise<void>((resolve) => { markRequested = resolve; });
@@ -140,7 +140,7 @@ test("the card remove control hides a node before persistence finishes", async (
   await page.goto("/");
 
   const card = page.getByTestId("activity-node-1");
-  await card.getByRole("button", { name: "캔버스에서 제거" }).click();
+  await card.getByRole("button", { name: "활동 기록 삭제" }).click();
   await requested;
 
   await expect(card).toHaveCount(0);
@@ -149,7 +149,7 @@ test("the card remove control hides a node before persistence finishes", async (
   await expect.poll(() => api.state.canvasNodes.some(
     (node) => node.activity_event_id === 1,
   )).toBe(false);
-  expect(api.state.activities.some((activity) => activity.id === 1)).toBe(true);
+  expect(api.state.activities.some((activity) => activity.id === 1)).toBe(false);
 });
 
 test("a failed card removal restores the node and explains the failure", async ({ page }) => {
@@ -174,7 +174,7 @@ test("a failed card removal restores the node and explains the failure", async (
   const failed = page.waitForResponse((response) =>
     response.request().method() === "DELETE"
     && new URL(response.url()).pathname === "/v1/canvas/11");
-  await card.getByRole("button", { name: "캔버스에서 제거" }).click();
+  await card.getByRole("button", { name: "활동 기록 삭제" }).click();
   await failed;
 
   await expect(card).toBeVisible();
@@ -311,7 +311,7 @@ test("keyboard delete removes only the selected canvas edge", async ({ page, api
   expect(api.state.activities).toHaveLength(2);
 });
 
-test("keyboard delete removes only the custom canvas node", async ({ page, api }) => {
+test("keyboard delete removes the selected activity and its canvas node", async ({ page, api }) => {
   await page.goto("/");
   const card = page.getByTestId("activity-node-1");
   await card.click();
@@ -331,7 +331,7 @@ test("keyboard delete removes only the custom canvas node", async ({ page, api }
   }).toEqual({
     deleteStatus: 204,
     canvasNodePresent: false,
-    activityPresent: true,
+    activityPresent: false,
   });
 
   await expect(card).toHaveCount(0);

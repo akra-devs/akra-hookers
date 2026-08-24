@@ -48,21 +48,6 @@ async fn activities_scopes_omit_detail_metadata_and_keep_global_numbering() {
         ))
         .await
         .expect("Inbox");
-    let second_node = harness
-        .store
-        .canvas_nodes()
-        .await
-        .expect("nodes")
-        .into_iter()
-        .find(|node| node.activity_event_id == second)
-        .expect("second node")
-        .id;
-    harness
-        .store
-        .delete_canvas_node(second_node)
-        .await
-        .expect("delete node");
-
     let all = get(&harness.app, "/v1/activities?scope=all").await;
     let project = get(
         &harness.app,

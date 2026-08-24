@@ -436,7 +436,14 @@ test("one fixture session preserves durable canvas semantics through polling, fi
   const deleted = responseFor(page, "DELETE", "/v1/canvas/11");
   await page.keyboard.press("Backspace");
   await deleted;
-  expect(api.state.activities).toEqual(activitiesBeforeDelete);
+  const activitiesAfterDelete = activitiesBeforeDelete
+    .filter(({ id }) => id !== 1)
+    .map((activity, index, remaining) => ({
+      ...activity,
+      conversation_index: index + 1,
+      conversation_total: remaining.length,
+    }));
+  expect(api.state.activities).toEqual(activitiesAfterDelete);
   const clearButton = page.getByRole("button", { name: "Clear canvas" });
   await clearButton.click();
   const clearDialog = page.getByRole("dialog", { name: "Canvas를 비울까요?" });
@@ -452,5 +459,5 @@ test("one fixture session preserves durable canvas semantics through polling, fi
   await expect(page.locator(".flow-stage")).toBeFocused();
   expect(api.state.canvasNodes).toEqual([]);
   expect(api.state.canvasEdges).toEqual([]);
-  expect(api.state.activities).toEqual(activitiesBeforeDelete);
+  expect(api.state.activities).toEqual(activitiesAfterDelete);
 });
