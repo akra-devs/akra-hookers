@@ -538,6 +538,7 @@ impl RemoteCapture {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "route", rename_all = "snake_case")]
 pub enum CaptureRoute {
+    Ignored,
     LocalQueued,
     RemoteQueued {
         capture_id: String,
@@ -550,6 +551,7 @@ pub enum CaptureRoute {
 pub enum ReceiveOutcome {
     Accepted,
     Duplicate,
+    Ignored,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -567,8 +569,16 @@ pub struct RelayReport {
     pub delivered: usize,
     pub blocked_destination: usize,
     pub expired_results: usize,
+    pub ignored_subagents: usize,
     pub pending: usize,
     pub last_error: Option<String>,
+}
+
+struct RelayCandidateState<'a> {
+    report: &'a mut RelayReport,
+    last_error: &'a mut Option<String>,
+    expired_items: &'a mut Vec<SpoolItem>,
+    ignored_items: &'a mut Vec<SpoolItem>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -583,6 +593,9 @@ pub fn capture_once(
     data_dir: &Path,
     envelope: &CaptureEnvelope,
 ) -> Result<CaptureRoute, CollectorError> {
+    if envelope.is_subagent() {
+        return Ok(CaptureRoute::Ignored);
+    }
     let config = CollectorStore::new(data_dir).load()?;
     match config.endpoint.mode() {
         CollectorMode::Local => {
@@ -673,6 +686,9 @@ impl CollectorManager {
     }
 
     pub fn capture(&self, envelope: &CaptureEnvelope) -> Result<CaptureRoute, CollectorError> {
+        if envelope.is_subagent() {
+            return Ok(CaptureRoute::Ignored);
+        }
         let config = self.store.load()?;
         match config.endpoint.mode() {
             CollectorMode::Local => {
@@ -735,13 +751,17 @@ impl CollectorManager {
         let ingest_url = config.endpoint.route("v1/collector/ingest")?;
         let mut last_error = self.last_error()?;
         let mut expired_items = Vec::new();
+        let mut ignored_items = Vec::new();
         let candidates = self.relay_candidates(
             self.outbox.pending()?,
             &config,
             now,
-            &mut report,
-            &mut last_error,
-            &mut expired_items,
+            RelayCandidateState {
+                report: &mut report,
+                last_error: &mut last_error,
+                expired_items: &mut expired_items,
+                ignored_items: &mut ignored_items,
+            },
         )?;
         let mut delivered_items = Vec::new();
         for (item, capture) in candidates {
@@ -789,7 +809,9 @@ impl CollectorManager {
         }
         report.delivered = delivered_items.len();
         report.expired_results += expired_items.len();
+        report.ignored_subagents = ignored_items.len();
         delivered_items.extend(expired_items);
+        delivered_items.extend(ignored_items);
         self.outbox.acknowledge_batch(delivered_items)?;
         if report.blocked_destination > 0 && last_error.is_none() {
             last_error =
@@ -809,9 +831,7 @@ impl CollectorManager {
         items: Vec<SpoolItem>,
         config: &CollectorConfig,
         now: i64,
-        report: &mut RelayReport,
-        last_error: &mut Option<String>,
-        expired_items: &mut Vec<SpoolItem>,
+        state: RelayCandidateState<'_>,
     ) -> Result<Vec<(SpoolItem, RemoteCapture)>, CollectorError> {
         let mut candidates = Vec::with_capacity(RELAY_BATCH_SIZE);
         for item in items {
@@ -826,13 +846,18 @@ impl CollectorManager {
                 Ok(capture) => capture,
                 Err(_) => {
                     self.outbox.defer(&item)?;
-                    *last_error = Some("A queued collector capture is invalid.".to_owned());
+                    *state.last_error = Some("A queued collector capture is invalid.".to_owned());
                     continue;
                 }
             };
             if capture.validate().is_err() {
                 self.outbox.defer(&item)?;
-                *last_error = Some("A queued collector capture is invalid.".to_owned());
+                *state.last_error = Some("A queued collector capture is invalid.".to_owned());
+                continue;
+            }
+            if capture.envelope.is_subagent() {
+                self.clear_retry(&item)?;
+                state.ignored_items.push(item);
                 continue;
             }
             if capture.is_result()
@@ -840,11 +865,11 @@ impl CollectorManager {
                     <= now.saturating_sub(REMOTE_RESULT_RETENTION_US)
             {
                 self.clear_retry(&item)?;
-                expired_items.push(item);
+                state.expired_items.push(item);
                 continue;
             }
             if capture.destination_id != config.destination_id {
-                report.blocked_destination += 1;
+                state.report.blocked_destination += 1;
                 continue;
             }
             candidates.push((item, capture));
@@ -916,6 +941,14 @@ impl CollectorManager {
             Ok(_) => return Err(CollectorError::CaptureConflict),
             Err(CollectorError::Io(error)) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(error),
+        }
+        if capture.envelope.is_subagent() {
+            persist_atomic(
+                &receipt_path,
+                &serde_json::to_vec(&Receipt { digest })?,
+                false,
+            )?;
+            return Ok(ReceiveOutcome::Ignored);
         }
         let is_result = capture.is_result();
         let envelope = capture
@@ -1276,6 +1309,32 @@ mod tests {
         .expect("envelope")
     }
 
+    fn subagent_envelope() -> CaptureEnvelope {
+        CaptureEnvelope::new_with_source_and_activity(
+            "codex",
+            42,
+            ProjectOriginSnapshot {
+                identity: "source-project".to_owned(),
+                kind: ProjectOriginKind::Git,
+                display_path: PathBuf::from("C:/source/project"),
+            },
+            json!({
+                "hook_event_name": "SubagentStart",
+                "session_id": "session",
+                "turn_id": "turn",
+                "cwd": "C:/source/project",
+                "agent_id": "agent-7",
+                "agent_type": "reviewer",
+            }),
+            "windows-native",
+            "app",
+            akra_core::ingress::ActivityKind::Subagent,
+            Some("agent-7".to_owned()),
+            Some("reviewer".to_owned()),
+        )
+        .expect("subagent envelope")
+    }
+
     #[test]
     fn endpoint_policy_accepts_exact_loopback_and_requires_remote_https() {
         for address in [
@@ -1452,6 +1511,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subagent_captures_and_historical_outbox_items_are_discarded() {
+        let one_shot = TempDir::new().expect("one-shot state");
+        assert_eq!(
+            capture_once(one_shot.path(), &subagent_envelope()).expect("ignored capture"),
+            CaptureRoute::Ignored
+        );
+        assert!(
+            std::fs::read_dir(one_shot.path())
+                .expect("one-shot directory")
+                .next()
+                .is_none()
+        );
+
+        let directory = TempDir::new().expect("collector state");
+        let manager = CollectorManager::open(directory.path()).expect("manager");
+        manager
+            .configure(CollectorConfigInput {
+                endpoint: "https://collector.example".to_owned(),
+                token: Some("token".to_owned()),
+            })
+            .expect("remote config");
+        assert_eq!(
+            manager
+                .capture(&subagent_envelope())
+                .expect("ignored capture"),
+            CaptureRoute::Ignored
+        );
+        let config = manager.store.load().expect("config");
+        let historical = RemoteCapture::new(&config, subagent_envelope());
+        manager
+            .outbox
+            .enqueue(&serde_json::to_vec(&historical).expect("historical capture"))
+            .expect("historical outbox item");
+
+        let report = manager.relay_once().await.expect("relay cleanup");
+        assert_eq!(report.ignored_subagents, 1);
+        assert_eq!(report.attempted, 0);
+        assert_eq!(report.pending, 0);
+    }
+
+    #[tokio::test]
     async fn outbox_items_are_bound_to_the_configured_destination() {
         let directory = TempDir::new().expect("state");
         let manager = CollectorManager::open(directory.path()).expect("manager");
@@ -1522,15 +1622,19 @@ mod tests {
         let mut report = RelayReport::default();
         let mut last_error = None;
         let mut expired_items = Vec::new();
+        let mut ignored_items = Vec::new();
 
         let candidates = manager
             .relay_candidates(
                 items,
                 &config,
                 now,
-                &mut report,
-                &mut last_error,
-                &mut expired_items,
+                RelayCandidateState {
+                    report: &mut report,
+                    last_error: &mut last_error,
+                    expired_items: &mut expired_items,
+                    ignored_items: &mut ignored_items,
+                },
             )
             .expect("relay candidates");
 
@@ -1583,15 +1687,19 @@ mod tests {
         let mut report = RelayReport::default();
         let mut last_error = None;
         let mut expired_items = Vec::new();
+        let mut ignored_items = Vec::new();
 
         let candidates = manager
             .relay_candidates(
                 blocked,
                 &config,
                 now_us().expect("clock"),
-                &mut report,
-                &mut last_error,
-                &mut expired_items,
+                RelayCandidateState {
+                    report: &mut report,
+                    last_error: &mut last_error,
+                    expired_items: &mut expired_items,
+                    ignored_items: &mut ignored_items,
+                },
             )
             .expect("relay candidates");
 
@@ -1639,15 +1747,19 @@ mod tests {
         let mut report = RelayReport::default();
         let mut last_error = None;
         let mut expired_items = Vec::new();
+        let mut ignored_items = Vec::new();
 
         let candidates = manager
             .relay_candidates(
                 manager.outbox.pending().expect("pending result"),
                 &config,
                 now,
-                &mut report,
-                &mut last_error,
-                &mut expired_items,
+                RelayCandidateState {
+                    report: &mut report,
+                    last_error: &mut last_error,
+                    expired_items: &mut expired_items,
+                    ignored_items: &mut ignored_items,
+                },
             )
             .expect("relay candidates");
 

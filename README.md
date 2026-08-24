@@ -1,12 +1,13 @@
 # akra-hookers
 
-## Codex activity kinds and canvas visibility
+## Codex activity and canvas visibility
 
-Akra installs and trusts `UserPromptSubmit`, `SubagentStart`, and `Stop` in each detected
-Codex home. `SubagentStart` records Codex's official `agent_id` and `agent_type`; it
-does not infer delegated work from prompt text. Existing Codex App/CLI prompt capture
-continues through the shared `UserPromptSubmit` hook. `Stop` captures the matching
-turn's final assistant result so the local runtime can attach a three-line summary.
+Akra installs and trusts only `UserPromptSubmit` and `Stop` in each detected Codex home.
+It does not install `SubagentStart`, and delegated-agent sessions discovered through
+Codex metadata are discarded before spooling, remote delivery, or SQLite storage.
+`Stop` captures a user turn's final assistant result so the local runtime can attach a
+three-line summary. Upgrading removes Akra's older managed `SubagentStart` hook and
+deletes historical subagent activity while preserving user and internal activity.
 
 **문맥 기반 프롬프트 요약**은 기본으로 꺼져 있습니다. Smart mode를 명시적으로
 켜면 새 user activity 중 문맥이 필요한 요청만 `gpt-5.3-codex-spark`로 한 문장,
@@ -15,14 +16,13 @@ projected prompt와 바로 이전 turn의 저장된 3줄 결과 요약뿐입니�
 이전 assistant 원문, transcript는 보내지 않습니다. 수집 원문은 활동 증거로 그대로
 보존하며 상세 화면의 `수집된 원문 보기`에서 확인할 수 있습니다.
 
-The canvas visibility controls are independent from capture and never delete stored
+The canvas visibility control is independent from capture and never deletes stored
 activity:
 
-- **Subagent activity** is visible by default and can be hidden independently.
 - **Codex internal activity** (ambient suggestions and background checks) is hidden
   by default and can be shown independently.
-- Visibility choices are kept in local browser storage. Turning capture off or hiding
-  a kind does not remove historical records.
+- The visibility choice is kept in local browser storage. Turning capture off or hiding
+  internal activity does not remove historical records.
 
 ## 로컬 및 원격 수집
 
@@ -143,7 +143,7 @@ the user's selected installation to another detected target.
 
 이 프로젝트는 개인 로컬 설치를 전제로 하며, `setup` 또는 대시보드의 Codex 캡처 활성화 시 다음 작업을 자동으로 수행합니다.
 
-1. Akra `UserPromptSubmit`, `SubagentStart`, `Stop` 명령을 해당 설치의 `hooks.json`에 기록합니다.
+1. Akra `UserPromptSubmit`, `Stop` 명령을 해당 설치의 `hooks.json`에 기록합니다. 기존 Akra 관리 `SubagentStart` 항목은 제거합니다.
 2. Codex와 같은 정규화 규칙으로 **그 Akra 명령만의 현재 신뢰 해시**를 계산합니다.
 3. 해당 설치의 `config.toml` 내 `[hooks.state]`에 `enabled = true`와 `trusted_hash`를 기록합니다.
 

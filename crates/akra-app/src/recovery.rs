@@ -53,6 +53,10 @@ pub async fn drain(spool: &Spool, store: &ActivityStore) -> usize {
         };
 
         let stored = match command {
+            RecoveredCapture::Ignored => {
+                acknowledged.push(item);
+                continue;
+            }
             RecoveredCapture::Activity(command) => store.record(command).await.map(|_| ()),
             RecoveredCapture::Result {
                 command,
@@ -84,6 +88,7 @@ pub async fn drain(spool: &Spool, store: &ActivityStore) -> usize {
 }
 
 enum RecoveredCapture {
+    Ignored,
     Activity(RecordActivity),
     Result {
         command: RecordResult,
@@ -100,8 +105,14 @@ fn decode(payload: &[u8]) -> Result<RecoveredCapture, RecoveryError> {
                 envelope.provider().to_owned(),
             ));
         }
+        if envelope.is_subagent() {
+            return Ok(RecoveredCapture::Ignored);
+        }
         match CodexAdapter::normalize_capture_value(envelope.payload())? {
             CodexCapture::Activity(event) => {
+                if event.activity_kind() == akra_core::ingress::ActivityKind::Subagent {
+                    return Ok(RecoveredCapture::Ignored);
+                }
                 let (activity_kind, agent_id, agent_type) = envelope.activity_context();
                 let event = if activity_kind == akra_core::ingress::ActivityKind::User {
                     event
@@ -151,6 +162,9 @@ fn decode(payload: &[u8]) -> Result<RecoveredCapture, RecoveryError> {
         let CodexCapture::Activity(event) = CodexAdapter::normalize_capture_value(&value)? else {
             return Err(RecoveryError::LegacyResult);
         };
+        if event.activity_kind() == akra_core::ingress::ActivityKind::Subagent {
+            return Ok(RecoveredCapture::Ignored);
+        }
         let origin = akra_git::ProjectIdentity::capture_snapshot_from_cwd(std::path::Path::new(
             event.cwd(),
         ))?

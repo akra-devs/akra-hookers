@@ -23,7 +23,6 @@ pub(crate) struct ProjectMergePayload {
 
 #[derive(Default, Deserialize)]
 pub(crate) struct ProjectQuery {
-    include_subagent: Option<bool>,
     include_internal: Option<bool>,
     period: Option<String>,
     start_at_us: Option<i64>,
@@ -36,7 +35,7 @@ pub(crate) async fn projects(
     state
         .store
         .projects_filtered_in_range(
-            activity_kind_filter(query.include_subagent, query.include_internal),
+            activity_kind_filter(query.include_internal),
             activity_time_range(query.period.as_deref(), query.start_at_us)?,
         )
         .await

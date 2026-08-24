@@ -261,7 +261,7 @@ test("record the Akra Hookers product showcase", async ({ page }) => {
     }
     window.localStorage.setItem(
       "akra.canvas.activity-visibility.v1",
-      JSON.stringify({ subagent: true, internal: false }),
+      JSON.stringify({ internal: false }),
     );
   });
   await installFixtureApi(page, createShowcaseState());
@@ -307,10 +307,6 @@ test("record the Akra Hookers product showcase", async ({ page }) => {
   await expect(page.locator(".rail-projects").getByText("Waxball", { exact: true })).toHaveCount(0);
   await selectTarget(page, period, "day", 1_000);
   await expect(page.locator(".rail-projects").getByText("Waxball", { exact: true })).toBeVisible();
-  const subagent = page.getByRole("checkbox", { name: /Subagent activity/ });
-  await clickTarget(page, subagent, 850);
-  await expect(subagent).not.toBeChecked();
-
   await showChapter(
     page,
     "03 · EVIDENCE",

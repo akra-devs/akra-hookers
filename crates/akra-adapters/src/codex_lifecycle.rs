@@ -107,18 +107,14 @@ impl CodexHookLifecycle {
 
     pub fn is_enabled(&self) -> Result<bool, CodexLifecycleError> {
         let hooks = self.read_hooks()?;
-        Ok([
-            &hooks.hooks.user_prompt_submit,
-            &hooks.hooks.subagent_start,
-            &hooks.hooks.stop,
-        ]
-        .into_iter()
-        .all(|groups| {
-            groups
-                .iter()
-                .flat_map(|group| &group.hooks)
-                .any(CodexHook::is_akra_hook)
-        }))
+        Ok([&hooks.hooks.user_prompt_submit, &hooks.hooks.stop]
+            .into_iter()
+            .all(|groups| {
+                groups
+                    .iter()
+                    .flat_map(|group| &group.hooks)
+                    .any(CodexHook::is_akra_hook)
+            }))
     }
 
     fn managed_command(&self) -> Result<Option<CodexHookCommand>, CodexLifecycleError> {
@@ -434,18 +430,9 @@ fn append_akra_hooks(hooks: &mut CodexHooksFile, command: &CodexHookCommand) -> 
         .hooks
         .user_prompt_submit
         .push(CodexMatcherGroup::akra_hook(command));
-    let subagent = HookLocation::new(
-        HookEvent::SubagentStart,
-        hooks.hooks.subagent_start.len(),
-        0,
-    );
-    hooks
-        .hooks
-        .subagent_start
-        .push(CodexMatcherGroup::akra_hook(command));
     let stop = HookLocation::new(HookEvent::Stop, hooks.hooks.stop.len(), 0);
     hooks.hooks.stop.push(CodexMatcherGroup::akra_hook(command));
-    vec![user_prompt, subagent, stop]
+    vec![user_prompt, stop]
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -462,7 +449,11 @@ struct CodexHooksFile {
 struct CodexHookEvents {
     #[serde(rename = "UserPromptSubmit", default)]
     user_prompt_submit: Vec<CodexMatcherGroup>,
-    #[serde(rename = "SubagentStart", default)]
+    #[serde(
+        rename = "SubagentStart",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     subagent_start: Vec<CodexMatcherGroup>,
     #[serde(rename = "Stop", default)]
     stop: Vec<CodexMatcherGroup>,

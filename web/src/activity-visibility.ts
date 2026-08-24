@@ -3,12 +3,10 @@ import type { ActivityKind } from "./api-contracts";
 const STORAGE_KEY = "akra.canvas.activity-visibility.v1";
 
 export type ActivityVisibility = {
-  subagent: boolean;
   internal: boolean;
 };
 
 export const DEFAULT_ACTIVITY_VISIBILITY: ActivityVisibility = {
-  subagent: true,
   internal: false,
 };
 
@@ -23,12 +21,10 @@ export function loadActivityVisibility(
     if (
       typeof stored === "object"
       && stored !== null
-      && "subagent" in stored
       && "internal" in stored
-      && typeof stored.subagent === "boolean"
       && typeof stored.internal === "boolean"
     ) {
-      return { subagent: stored.subagent, internal: stored.internal };
+      return { internal: stored.internal };
     }
   } catch {
     // Corrupt or unavailable local preferences fall back to the safe defaults.
@@ -52,7 +48,7 @@ export function isActivityKindVisible(
   kind: ActivityKind,
   visibility: ActivityVisibility,
 ) {
-  if (kind === "subagent") return visibility.subagent;
+  if (kind === "subagent") return false;
   if (kind === "internal") return visibility.internal;
   return true;
 }

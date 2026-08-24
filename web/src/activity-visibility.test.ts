@@ -17,21 +17,23 @@ function memoryStorage(initial: string | null = null) {
 }
 
 describe("activity visibility", () => {
-  it("shows user and subagent activity while hiding internal work by default", () => {
+  it("shows user activity while always hiding subagents and hiding internal work by default", () => {
     expect(isActivityKindVisible("user", DEFAULT_ACTIVITY_VISIBILITY)).toBe(true);
-    expect(isActivityKindVisible("subagent", DEFAULT_ACTIVITY_VISIBILITY)).toBe(true);
+    expect(isActivityKindVisible("subagent", DEFAULT_ACTIVITY_VISIBILITY)).toBe(false);
     expect(isActivityKindVisible("internal", DEFAULT_ACTIVITY_VISIBILITY)).toBe(false);
   });
 
-  it("persists valid independent choices and rejects corrupt preferences", () => {
+  it("persists the internal choice and drops the retired subagent preference", () => {
     const storage = memoryStorage();
-    saveActivityVisibility({ subagent: false, internal: true }, storage);
-    expect(loadActivityVisibility(storage)).toEqual({ subagent: false, internal: true });
+    saveActivityVisibility({ internal: true }, storage);
+    expect(loadActivityVisibility(storage)).toEqual({ internal: true });
+    expect(loadActivityVisibility(memoryStorage('{"subagent":true,"internal":true}')))
+      .toEqual({ internal: true });
 
     expect(loadActivityVisibility(memoryStorage("not-json"))).toEqual(
       DEFAULT_ACTIVITY_VISIBILITY,
     );
-    expect(loadActivityVisibility(memoryStorage('{"subagent":"yes"}'))).toEqual(
+    expect(loadActivityVisibility(memoryStorage('{"internal":"yes"}'))).toEqual(
       DEFAULT_ACTIVITY_VISIBILITY,
     );
   });

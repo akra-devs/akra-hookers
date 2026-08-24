@@ -216,7 +216,7 @@ async fn activities_scope_validation_and_authentication_are_explicit() {
 }
 
 #[tokio::test]
-async fn activity_kind_filters_apply_to_pages_details_counts_and_projects() {
+async fn activity_kind_policy_applies_to_pages_details_counts_and_projects() {
     let harness = harness().await;
     let cwd = Path::new(r"C:\kind-filter");
     let user = record_kind(
@@ -232,22 +232,13 @@ async fn activity_kind_filters_apply_to_pages_details_counts_and_projects() {
         &harness.store,
         cwd,
         "mixed-session",
-        "subagent-turn",
-        ActivityKind::Subagent,
+        "internal-turn",
+        ActivityKind::Internal,
         200,
     )
     .await;
-    record_kind(
-        &harness.store,
-        cwd,
-        "mixed-session",
-        "internal-turn",
-        ActivityKind::Internal,
-        300,
-    )
-    .await;
 
-    let visibility = "include_subagent=false&include_internal=false";
+    let visibility = "include_subagent=true&include_internal=false";
     let (_, activities) = get(
         &harness.app,
         &format!("/v1/activities?scope=all&{visibility}"),
@@ -502,11 +493,7 @@ async fn record_kind(
 ) -> i64 {
     let event = IngressEvent::try_new("codex", session, turn, cwd.to_string_lossy(), turn, None)
         .expect("event")
-        .with_activity_context(
-            kind,
-            (kind == ActivityKind::Subagent).then(|| format!("agent-{turn}")),
-            (kind == ActivityKind::Subagent).then(|| "reviewer".to_owned()),
-        )
+        .with_activity_context(kind, None, None)
         .expect("activity context");
     let origin = akra_git::ProjectIdentity::capture_snapshot_from_cwd(cwd)
         .expect("origin")

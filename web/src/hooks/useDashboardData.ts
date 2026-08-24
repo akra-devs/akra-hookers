@@ -71,14 +71,12 @@ export function useDashboardData(
     ? `project:${activityScope.projectId}`
     : activityScope.scope;
   const activityFilters = useMemo(() => ({
-    includeSubagent: activityVisibility.subagent,
     includeInternal: activityVisibility.internal,
     period: activityPeriod,
-  }), [activityPeriod, activityVisibility.internal, activityVisibility.subagent]);
+  }), [activityPeriod, activityVisibility.internal]);
   const visibilityQuery = useMemo(() => ({
-    includeSubagent: activityVisibility.subagent,
     includeInternal: activityVisibility.internal,
-  }), [activityVisibility.internal, activityVisibility.subagent]);
+  }), [activityVisibility.internal]);
 
   const activities = useQuery({
     queryKey: ["activities", activityScope, activityFilters],

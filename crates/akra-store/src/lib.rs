@@ -21,6 +21,7 @@ mod migration_v11;
 mod migration_v12;
 mod migration_v13;
 mod migration_v14;
+mod migration_v15;
 mod migration_v2;
 mod migration_v3;
 mod migration_v4;
@@ -116,6 +117,8 @@ pub enum StoreError {
     OriginNotFound(i64),
     #[error("activity not found: {0}")]
     ActivityNotFound(i64),
+    #[error("subagent activity is not collected")]
+    SubagentActivityDisabled,
     #[error("work not found: {0}")]
     WorkNotFound(i64),
     #[error("work edge not found: {0}")]

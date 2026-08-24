@@ -18,9 +18,9 @@ pub struct CodexCaptureContext {
     pub agent_type: Option<String>,
 }
 
-/// Best-effort runtime classification for capture provenance and canvas visibility.
-/// The hook event is authoritative for subagents; session metadata and the Codex
-/// application directory are conservative fallbacks for older prompt captures.
+/// Best-effort runtime classification for capture provenance and collection policy.
+/// The hook event is authoritative for excluded subagents; session metadata and
+/// the Codex application directory are conservative fallbacks for prompt and Stop hooks.
 pub fn codex_capture_context(payload: &Value, wsl_distro: Option<&str>) -> CodexCaptureContext {
     codex_capture_context_with_home(payload, wsl_distro, None)
 }

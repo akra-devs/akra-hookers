@@ -348,6 +348,24 @@ fn run_capture(
         eprintln!("invalid Codex payload JSON: {error}");
         std::process::exit(1);
     });
+    let is_result_hook = payload
+        .get("hook_event_name")
+        .and_then(serde_json::Value::as_str)
+        == Some("Stop");
+    let capture_context = match capture_target.as_ref() {
+        Some(_) => akra_app::capture_source::codex_managed_capture_context(
+            &payload,
+            wsl_distro.as_deref(),
+            codex_home.as_deref(),
+        ),
+        None => akra_app::capture_source::codex_capture_context(&payload, wsl_distro.as_deref()),
+    };
+    if capture_context.activity_kind == akra_core::ingress::ActivityKind::Subagent {
+        if is_result_hook {
+            println!("{{}}");
+        }
+        return;
+    }
     let capture = akra_adapters::codex::CodexAdapter::normalize_capture_value(&payload)
         .unwrap_or_else(|error| {
             eprintln!("invalid Codex hook payload: {error}");
@@ -376,14 +394,6 @@ fn run_capture(
         eprintln!("unable to capture project origin: {error}");
         std::process::exit(1);
     });
-    let capture_context = match capture_target.as_ref() {
-        Some(_) => akra_app::capture_source::codex_managed_capture_context(
-            &payload,
-            wsl_distro.as_deref(),
-            codex_home.as_deref(),
-        ),
-        None => akra_app::capture_source::codex_capture_context(&payload, wsl_distro.as_deref()),
-    };
     let result_capture_target = if is_result {
         wsl_distro.as_deref().map(|distro| format!("wsl:{distro}"))
     } else {

@@ -303,28 +303,24 @@ async fn off_and_non_user_activities_never_produce_claims() {
     let event = IngressEvent::try_new(
         "codex",
         "prompt-summary-session",
-        "subagent",
+        "internal",
         cwd.to_string_lossy(),
         "진행해",
         None,
     )
     .expect("event")
-    .with_activity_context(
-        ActivityKind::Subagent,
-        Some("agent-1".to_owned()),
-        Some("reviewer".to_owned()),
-    )
+    .with_activity_context(ActivityKind::Internal, None, None)
     .expect("context");
     let origin = ProjectIdentity::capture_snapshot_from_cwd(&cwd)
         .expect("origin")
         .origin;
-    let subagent = store
+    let internal = store
         .record(RecordActivity::captured(event, origin, 11))
         .await
-        .expect("subagent");
+        .expect("internal activity");
     assert_eq!(
         store
-            .prompt_summary(subagent)
+            .prompt_summary(internal)
             .await
             .expect("summary")
             .expect("row")

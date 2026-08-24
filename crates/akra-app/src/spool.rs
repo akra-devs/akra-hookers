@@ -211,6 +211,15 @@ impl CaptureEnvelope {
         )
     }
 
+    pub fn is_subagent(&self) -> bool {
+        self.activity.kind == ActivityKind::Subagent
+            || self
+                .payload
+                .get("hook_event_name")
+                .and_then(serde_json::Value::as_str)
+                == Some("SubagentStart")
+    }
+
     pub fn payload(&self) -> &serde_json::Value {
         &self.payload
     }

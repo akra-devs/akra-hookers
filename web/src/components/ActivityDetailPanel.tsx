@@ -304,7 +304,6 @@ function ConversationFlowDialog({
     queryFn: () => client.activity(activityId, {
       limit: CONVERSATION_PAGE_SIZE,
       offset: pageIndex * CONVERSATION_PAGE_SIZE,
-      includeSubagent: activityVisibility.subagent,
       includeInternal: activityVisibility.internal,
     }),
     retry: false,
@@ -552,7 +551,6 @@ export function ActivityDetailPanel({
   const detailQuery = useQuery({
     queryKey: ["activity", activityId, activityVisibility],
     queryFn: () => client.activity(activityId, {
-      includeSubagent: activityVisibility.subagent,
       includeInternal: activityVisibility.internal,
     }),
     retry: false,
@@ -584,7 +582,6 @@ export function ActivityDetailPanel({
   }, [
     activityId,
     activityVisibility.internal,
-    activityVisibility.subagent,
     detail?.conversation_total,
   ]);
   useEffect(() => {
@@ -619,7 +616,6 @@ export function ActivityDetailPanel({
       const page = await client.activity(activityId, {
         limit: 100,
         afterId: cursor,
-        includeSubagent: activityVisibility.subagent,
         includeInternal: activityVisibility.internal,
       });
       setAdditionalTurns((current) => [...current, ...page.conversation]);
@@ -645,7 +641,6 @@ export function ActivityDetailPanel({
           client.activity(activityId, {
             limit: 100,
             afterId,
-            includeSubagent: activityVisibility.subagent,
             includeInternal: activityVisibility.internal,
           })
         ));
@@ -674,7 +669,6 @@ export function ActivityDetailPanel({
   }, [
     activityId,
     activityVisibility.internal,
-    activityVisibility.subagent,
     additionalPageCursors,
     client,
   ]);
