@@ -141,6 +141,9 @@ test("the card delete control hides a node before activity deletion finishes", a
 
   const card = page.getByTestId("activity-node-1");
   await card.getByRole("button", { name: "활동 기록 삭제" }).click();
+  const confirmation = page.getByRole("alertdialog", { name: "활동 기록을 삭제할까요?" });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole("button", { name: "기록 삭제" }).click();
   await requested;
 
   await expect(card).toHaveCount(0);
@@ -150,6 +153,28 @@ test("the card delete control hides a node before activity deletion finishes", a
     (node) => node.activity_event_id === 1,
   )).toBe(false);
   expect(api.state.activities.some((activity) => activity.id === 1)).toBe(false);
+});
+
+test("canvas activity deletion is cancelled without an API request", async ({ page, api }) => {
+  let deleteRequests = 0;
+  page.on("request", (request) => {
+    if (request.method() === "DELETE" && new URL(request.url()).pathname === "/v1/canvas/11") {
+      deleteRequests += 1;
+    }
+  });
+  await page.goto("/");
+
+  const card = page.getByTestId("activity-node-1");
+  await card.getByRole("button", { name: "활동 기록 삭제" }).click();
+  const confirmation = page.getByRole("alertdialog", { name: "활동 기록을 삭제할까요?" });
+  await expect(confirmation).toBeVisible();
+  await expect(card).toBeVisible();
+  await confirmation.getByRole("button", { name: "취소" }).click();
+
+  await expect(confirmation).toHaveCount(0);
+  await expect(card).toBeVisible();
+  expect(deleteRequests).toBe(0);
+  expect(api.state.activities.some((activity) => activity.id === 1)).toBe(true);
 });
 
 test("a failed card removal restores the node and explains the failure", async ({ page }) => {
@@ -175,6 +200,8 @@ test("a failed card removal restores the node and explains the failure", async (
     response.request().method() === "DELETE"
     && new URL(response.url()).pathname === "/v1/canvas/11");
   await card.getByRole("button", { name: "활동 기록 삭제" }).click();
+  const confirmation = page.getByRole("alertdialog", { name: "활동 기록을 삭제할까요?" });
+  await confirmation.getByRole("button", { name: "기록 삭제" }).click();
   await failed;
 
   await expect(card).toBeVisible();
@@ -322,6 +349,8 @@ test("keyboard delete removes the selected activity and its canvas node", async 
     .catch(() => null);
 
   await page.keyboard.press("Delete");
+  const confirmation = page.getByRole("alertdialog", { name: "활동 기록을 삭제할까요?" });
+  await confirmation.getByRole("button", { name: "기록 삭제" }).click();
   const response = await deleted;
 
   expect({
