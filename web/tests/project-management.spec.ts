@@ -116,6 +116,53 @@ test("rail exposes every work location with unique path and state text", async (
   await expect(locations).not.toContainText("D:\\");
 });
 
+test("rail paginates long project and work location lists", async ({ page, api }) => {
+  for (let index = 0; index < 10; index += 1) {
+    api.state.projects.push({
+      ...api.state.projects[0]!,
+      id: api.state.nextProjectId++,
+      name: `프로젝트 ${index + 1}`,
+      origin_count: 0,
+      activity_count: 0,
+      needs_setup: false,
+      latest_activity_at_us: null,
+    });
+    api.state.origins.push({
+      ...api.state.origins[0]!,
+      id: 10 + index,
+      display_path: `D:\\work\\location-${index + 1}`,
+      default_project_id: null,
+      default_project_name: null,
+      activity_count: 0,
+      conversation_count: 0,
+    });
+  }
+  await page.goto("/");
+
+  const projects = page.getByRole("region", { name: "프로젝트" });
+  const projectPagination = projects.getByRole("navigation", {
+    name: "프로젝트 목록 페이지",
+  });
+  await expect(projects.getByRole("listitem")).toHaveCount(8);
+  await expect(projectPagination.getByText("1 / 2")).toBeVisible();
+  await projectPagination.getByRole("button", { name: "다음 프로젝트 목록" }).click();
+  await expect(projects.getByRole("listitem")).toHaveCount(4);
+  await expect(projects.getByRole("button", { name: /프로젝트 10/ })).toBeVisible();
+  await expect(projectPagination.getByRole("button", { name: "다음 프로젝트 목록" }))
+    .toBeDisabled();
+
+  const locationRegion = page.getByRole("region", { name: "작업 위치" });
+  const locations = locationRegion.getByRole("navigation", { name: "작업 위치" });
+  const originPagination = locationRegion.getByRole("navigation", {
+    name: "작업 위치 목록 페이지",
+  });
+  await expect(locations.getByRole("listitem")).toHaveCount(8);
+  await expect(originPagination.getByText("1 / 2")).toBeVisible();
+  await originPagination.getByRole("button", { name: "다음 작업 위치 목록" }).click();
+  await expect(locations.getByRole("listitem")).toHaveCount(4);
+  await expect(locations.getByRole("button", { name: /location-10/ })).toBeVisible();
+});
+
 test("rail orders stable filters without exposing paths and setup suggests basename", async ({ page, api }) => {
   api.state.origins[1]!.display_path = "D:\\work\\akra-hookers";
   api.state.origins[1]!.recommended_mode = "dedicated";
