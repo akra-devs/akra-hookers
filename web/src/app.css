@@ -457,6 +457,30 @@ button.command-control {
   font-size: 11px;
   line-height: 1.45;
 }
+
+.rail-pagination {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+}
+
+.rail-pagination__button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.rail-pagination__button:last-child { justify-self: end; }
+.rail-pagination__button:hover:not(:disabled) { background: #182124; color: var(--color-text); }
+.rail-pagination__button:disabled { cursor: not-allowed; opacity: .4; }
+.rail-pagination__status { color: var(--color-subtle); font: 550 10px var(--font-mono); }
+
 .prompt-summary-control__heading {
   display: grid;
   min-width: 0;

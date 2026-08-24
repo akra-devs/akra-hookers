@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   CodexCaptureTarget,
   CollectorIntegration,
@@ -14,6 +14,51 @@ import { PromptSummaryControl } from "./PromptSummaryControl";
 import { UiIcon } from "./UiIcon";
 
 export type ProjectFilter = "all" | "inbox" | `project:${number}`;
+
+const RAIL_PAGE_SIZE = 8;
+
+type RailPaginationProps = {
+  label: string;
+  page: number;
+  itemCount: number;
+  onPageChange: (page: number) => void;
+};
+
+function RailPagination({
+  label,
+  page,
+  itemCount,
+  onPageChange,
+}: RailPaginationProps) {
+  const pageCount = Math.ceil(itemCount / RAIL_PAGE_SIZE);
+  if (pageCount <= 1) return null;
+
+  return (
+    <nav className="rail-pagination" aria-label={label}>
+      <button
+        className="rail-pagination__button"
+        type="button"
+        aria-label={`이전 ${label}`}
+        disabled={page === 0}
+        onClick={() => onPageChange(page - 1)}
+      >
+        이전
+      </button>
+      <span className="rail-pagination__status" aria-live="polite">
+        {page + 1} / {pageCount}
+      </span>
+      <button
+        className="rail-pagination__button"
+        type="button"
+        aria-label={`다음 ${label}`}
+        disabled={page >= pageCount - 1}
+        onClick={() => onPageChange(page + 1)}
+      >
+        다음
+      </button>
+    </nav>
+  );
+}
 
 type ProjectRailProps = {
   nodeCount: number;
@@ -114,9 +159,21 @@ export function ProjectRail({
   onManageOrigin,
 }: ProjectRailProps) {
   const masterCapture = useRef<HTMLInputElement>(null);
+  const [projectPage, setProjectPage] = useState(0);
+  const [originPage, setOriginPage] = useState(0);
   const selectedProjectId = filter.startsWith("project:")
     ? Number(filter.slice("project:".length))
     : null;
+  const projectPageCount = Math.max(1, Math.ceil(projects.length / RAIL_PAGE_SIZE));
+  const originPageCount = Math.max(1, Math.ceil(origins.length / RAIL_PAGE_SIZE));
+  const visibleProjects = projects.slice(
+    projectPage * RAIL_PAGE_SIZE,
+    (projectPage + 1) * RAIL_PAGE_SIZE,
+  );
+  const visibleOrigins = origins.slice(
+    originPage * RAIL_PAGE_SIZE,
+    (originPage + 1) * RAIL_PAGE_SIZE,
+  );
   const originLabels = origins.map((origin) =>
     conciseOriginLabel(origin.display_path));
   const contextualLabels = origins.map((origin) =>
@@ -130,6 +187,21 @@ export function ProjectRail({
       masterCapture.current.indeterminate = captureIsPartial;
     }
   }, [captureIsPartial]);
+  useEffect(() => {
+    setProjectPage((current) => Math.min(current, projectPageCount - 1));
+  }, [projectPageCount]);
+  useEffect(() => {
+    setOriginPage((current) => Math.min(current, originPageCount - 1));
+  }, [originPageCount]);
+  useEffect(() => {
+    setProjectPage(0);
+  }, [hideEmptyProjects]);
+  useEffect(() => {
+    if (selectedProjectId === null) return;
+    const selectedIndex = projects.findIndex(({ id }) => id === selectedProjectId);
+    if (selectedIndex === -1) return;
+    setProjectPage(Math.floor(selectedIndex / RAIL_PAGE_SIZE));
+  }, [projects, selectedProjectId]);
 
   return (
     <aside className="rail" aria-label="Workspace navigation">
@@ -196,7 +268,7 @@ export function ProjectRail({
               선택한 기간에 결과가 있는 프로젝트가 없습니다.
             </li>
           )}
-          {projects.map((project) => {
+          {visibleProjects.map((project) => {
             const projectFilter = `project:${project.id}` as const;
             return (
               <li key={project.id}>
@@ -214,6 +286,12 @@ export function ProjectRail({
             );
           })}
         </ul>
+        <RailPagination
+          label="프로젝트 목록 페이지"
+          page={projectPage}
+          itemCount={projects.length}
+          onPageChange={setProjectPage}
+        />
       </section>
 
       <section className="rail-section" aria-label="작업 위치">
@@ -228,7 +306,8 @@ export function ProjectRail({
                 <span>Enable Codex capture and submit a prompt to discover your first location.</span>
               </li>
             )}
-            {origins.map((origin, index) => {
+            {visibleOrigins.map((origin, pageIndex) => {
+              const index = originPage * RAIL_PAGE_SIZE + pageIndex;
               const label = originLabels[index] ?? "작업 위치";
               const matchingLabels = originLabels.filter(
                 (candidate) => candidate === label,
@@ -272,6 +351,12 @@ export function ProjectRail({
             })}
           </ul>
         </nav>
+        <RailPagination
+          label="작업 위치 목록 페이지"
+          page={originPage}
+          itemCount={origins.length}
+          onPageChange={setOriginPage}
+        />
       </section>
 
       <section className="rail-section activity-visibility" aria-labelledby="activity-visibility-heading">
