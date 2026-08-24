@@ -435,6 +435,8 @@ test("one fixture session preserves durable canvas semantics through polling, fi
   await page.getByTestId("activity-node-1").click();
   const deleted = responseFor(page, "DELETE", "/v1/canvas/11");
   await page.keyboard.press("Backspace");
+  const confirmation = page.getByRole("alertdialog", { name: "활동 기록을 삭제할까요?" });
+  await confirmation.getByRole("button", { name: "기록 삭제" }).click();
   await deleted;
   const activitiesAfterDelete = activitiesBeforeDelete
     .filter(({ id }) => id !== 1)

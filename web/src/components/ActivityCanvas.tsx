@@ -26,11 +26,18 @@ import {
   ActivityNodeActionsContext,
   type ActivityFlowNode,
 } from "./ActivityNode";
+import { ActivityDeleteDialog } from "./ActivityDeleteDialog";
 import { useFitFlow } from "../useFitFlow";
 
 type DragState = {
   pointer: XYPosition;
   positions: Map<string, XYPosition>;
+};
+
+type DeleteTarget = {
+  nodeId: string;
+  activityId: number;
+  prompt: string;
 };
 
 function pointerPosition(event: MouseEvent | TouchEvent): XYPosition | null {
@@ -76,6 +83,7 @@ export function ActivityCanvas({
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [hiddenEdgeIds, setHiddenEdgeIds] = useState<string[]>([]);
   const [zoom, setZoom] = useState(1);
+  const [deleteQueue, setDeleteQueue] = useState<DeleteTarget[]>([]);
   const dragState = useRef<DragState | null>(null);
   const pendingNodeIds = useRef(new Set<string>());
   const pendingEdgeIds = useRef(new Set<string>());
@@ -96,7 +104,7 @@ export function ActivityCanvas({
   const persistedNode = useCallback((nodeId: string) =>
     canvasNodes.find(({ activity_event_id }) => `activity-${activity_event_id}` === nodeId),
   [canvasNodes]);
-  const removeNode = useCallback((nodeId: string) => {
+  const deleteNode = useCallback(async (nodeId: string) => {
     const canvasNode = persistedNode(nodeId);
     if (!client || !canvasNode || pendingNodeIds.current.has(nodeId)) return;
     if (openNodeTimer.current !== null) {
@@ -117,34 +125,32 @@ export function ActivityCanvas({
       nodes: nodes.filter((node) => node.id !== nodeId && node.selected),
     });
 
-    void client.deleteCanvasNode(canvasNode.id).then(
-      async () => {
-        try {
-          await onActivityDeleted(canvasNode.activity_event_id);
-        } catch {
-          onError("활동 기록은 삭제했지만 최신 화면을 불러오지 못했습니다.");
-        }
-      },
-      async (cause: unknown) => {
-        if (removedNode) {
-          setNodes((current) => {
-            if (current.some((node) => node.id === nodeId)) return current;
-            const restored = [...current];
-            restored.splice(Math.min(Math.max(removedIndex, 0), restored.length), 0, removedNode);
-            return restored;
-          });
-        }
-        setHiddenEdgeIds((current) => current.filter((id) => !connectedEdgeIds.includes(id)));
-        try {
-          await onAuthoritativeRefresh();
-        } catch {
-          // The local rollback keeps the card recoverable when refresh also fails.
-        }
-        onError(cause instanceof Error ? cause.message : "활동 기록을 삭제하지 못했습니다.");
-      },
-    ).finally(() => {
+    try {
+      await client.deleteCanvasNode(canvasNode.id);
+      try {
+        await onActivityDeleted(canvasNode.activity_event_id);
+      } catch {
+        onError("활동 기록은 삭제했지만 최신 화면을 불러오지 못했습니다.");
+      }
+    } catch (cause: unknown) {
+      if (removedNode) {
+        setNodes((current) => {
+          if (current.some((node) => node.id === nodeId)) return current;
+          const restored = [...current];
+          restored.splice(Math.min(Math.max(removedIndex, 0), restored.length), 0, removedNode);
+          return restored;
+        });
+      }
+      setHiddenEdgeIds((current) => current.filter((id) => !connectedEdgeIds.includes(id)));
+      try {
+        await onAuthoritativeRefresh();
+      } catch {
+        // The local rollback keeps the card recoverable when refresh also fails.
+      }
+      throw cause instanceof Error ? cause : new Error("활동 기록을 삭제하지 못했습니다.");
+    } finally {
       pendingNodeIds.current.delete(nodeId);
-    });
+    }
   }, [
     client,
     edges,
@@ -152,11 +158,28 @@ export function ActivityCanvas({
     onAuthoritativeRefresh,
     onActivityDeleted,
     onError,
-    onPersistedChange,
     onSelectionChange,
     persistedNode,
     setNodes,
   ]);
+  const requestRemoveNode = useCallback((nodeId: string) => {
+    const canvasNode = persistedNode(nodeId);
+    if (!client || !canvasNode || pendingNodeIds.current.has(nodeId)) return;
+    const node = nodes.find((current) => current.id === nodeId);
+    setDeleteQueue((current) => current.some((target) => target.nodeId === nodeId)
+      ? current
+      : [...current, {
+        nodeId,
+        activityId: canvasNode.activity_event_id,
+        prompt: node?.data.prompt ?? `기록 #${canvasNode.activity_event_id}`,
+      }]);
+  }, [client, nodes, persistedNode]);
+  const confirmNodeDelete = useCallback(async () => {
+    const target = deleteQueue[0];
+    if (!target) return;
+    await deleteNode(target.nodeId);
+    setDeleteQueue((current) => current.slice(1));
+  }, [deleteNode, deleteQueue]);
   const removeEdge = useCallback((edge: Edge) => {
     const edgeId = Number(edge.id.slice("edge-".length));
     if (!client || !Number.isInteger(edgeId) || pendingEdgeIds.current.has(edge.id)) return;
@@ -180,7 +203,7 @@ export function ActivityCanvas({
       pendingEdgeIds.current.delete(edge.id);
     });
   }, [client, onError, onPersistedChange]);
-  const nodeActions = useMemo(() => ({ removeNode }), [removeNode]);
+  const nodeActions = useMemo(() => ({ removeNode: requestRemoveNode }), [requestRemoveNode]);
   useEffect(() => () => {
     if (openNodeTimer.current !== null) clearTimeout(openNodeTimer.current);
   }, []);
@@ -224,7 +247,7 @@ export function ActivityCanvas({
             : changes,
         )}
         onNodesDelete={(deleted) => {
-          deleted.forEach((node) => removeNode(node.id));
+          deleted.forEach((node) => requestRemoveNode(node.id));
         }}
         onEdgesDelete={(deleted) => {
           deleted.forEach(removeEdge);
@@ -319,6 +342,14 @@ export function ActivityCanvas({
         </Panel>
       </ReactFlow>
       </ActivityNodeActionsContext.Provider>
+      {deleteQueue[0] && (
+        <ActivityDeleteDialog
+          activityId={deleteQueue[0].activityId}
+          prompt={deleteQueue[0].prompt}
+          onCancel={() => setDeleteQueue([])}
+          onConfirm={confirmNodeDelete}
+        />
+      )}
     </div>
   );
 }

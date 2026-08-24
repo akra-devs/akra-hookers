@@ -747,6 +747,8 @@ test("deleting a canvas node closes its detail and removes the activity from his
   detailPanel = await open(page, 2);
   const deleted = page.waitForResponse((candidate) => candidate.request().method() === "DELETE" && new URL(candidate.url()).pathname === "/v1/canvas/12");
   await page.keyboard.press("Backspace");
+  const confirmation = page.getByRole("alertdialog", { name: "활동 기록을 삭제할까요?" });
+  await confirmation.getByRole("button", { name: "기록 삭제" }).click();
   await deleted;
   await expect(panel(page)).toHaveCount(0);
   await expect(page.getByTestId("activity-node-2")).toHaveCount(0);
