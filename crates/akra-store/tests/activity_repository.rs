@@ -84,7 +84,7 @@ async fn conflicting_dedupe_insert_rolls_back_the_entire_record() {
 }
 
 #[tokio::test]
-async fn deleting_canvas_state_does_not_delete_activity() {
+async fn deleting_canvas_node_tombstones_its_activity() {
     let store = ActivityStore::in_memory().await.expect("database opens");
     store.migrate().await.expect("migrations apply");
     let activity_id = record(&store, "session-2", "turn-2", "keep this")
@@ -100,7 +100,11 @@ async fn deleting_canvas_state_does_not_delete_activity() {
         .await
         .expect("canvas node deletes");
 
-    assert_eq!(store.activity_count().await.expect("count succeeds"), 1);
+    assert_eq!(store.activity_count().await.expect("count succeeds"), 0);
+    assert!(matches!(
+        store.activity_detail(activity_id).await,
+        Err(StoreError::ActivityNotFound(id)) if id == activity_id
+    ));
 }
 
 #[tokio::test]

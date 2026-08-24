@@ -530,6 +530,7 @@ export function App() {
               onNodesChange={onNodesChange} onPositionCommit={commitNodePosition}
               onActivityOpen={openActivity} onError={setError}
               onPersistedChange={refreshCanvas}
+              onActivityDeleted={refreshAfterActivityDeletion}
               onAuthoritativeRefresh={refreshCanvasAuthoritatively}
               onSelectionChange={changeSelection}
             />

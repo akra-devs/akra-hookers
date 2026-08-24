@@ -2,10 +2,11 @@
 #[path = "support/origin_transition.rs"]
 mod support;
 
+use akra_store::StoreError;
 use support::{harness, record, working_directory};
 
 #[tokio::test]
-async fn deleting_a_canvas_node_sets_deleted_at_and_keeps_activity_history() {
+async fn deleting_a_canvas_node_tombstones_the_activity_and_projection() {
     let (directory, store, pool) = harness().await;
     let cwd = working_directory(&directory, "soft-delete");
     let first_activity = record(&store, &cwd, "session", "first", 1).await;
@@ -54,14 +55,18 @@ async fn deleting_a_canvas_node_sets_deleted_at_and_keeps_activity_history() {
         None
     );
     assert!(store.canvas_edges().await.expect("edges").is_empty());
-    assert!(
-        !store
-            .activity_detail(first_activity)
+    assert!(matches!(
+        store.activity_detail(first_activity).await,
+        Err(StoreError::ActivityNotFound(id)) if id == first_activity
+    ));
+    assert_eq!(store.activity_count().await.expect("activities"), 1);
+    let activity_deleted_at_us: Option<i64> =
+        sqlx::query_scalar("SELECT deleted_at_us FROM activity_events WHERE id = ?")
+            .bind(first_activity)
+            .fetch_one(&pool)
             .await
-            .expect("detail")
-            .on_canvas
-    );
-    assert_eq!(store.activity_count().await.expect("activities"), 2);
+            .expect("activity deleted_at_us");
+    assert!(activity_deleted_at_us.is_some());
 }
 
 #[tokio::test]

@@ -227,95 +227,7 @@ impl ActivityStore {
 
     pub async fn soft_delete_activity(&self, activity_id: i64) -> Result<(), StoreError> {
         let mut transaction = self.pool.begin().await?;
-        let exists: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM activity_events
-             WHERE id = ? AND deleted_at_us IS NULL",
-        )
-        .bind(activity_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if exists == 0 {
-            return Err(StoreError::ActivityNotFound(activity_id));
-        }
-        let deleted_at_us = now_us()?;
-        let work_ids = sqlx::query_scalar::<_, i64>(
-            "SELECT work_item_id FROM work_item_logs WHERE activity_event_id = ?",
-        )
-        .bind(activity_id)
-        .fetch_all(&mut *transaction)
-        .await?;
-        sqlx::query("DELETE FROM work_item_logs WHERE activity_event_id = ?")
-            .bind(activity_id)
-            .execute(&mut *transaction)
-            .await?;
-        sqlx::query("DELETE FROM activity_curation_states WHERE activity_event_id = ?")
-            .bind(activity_id)
-            .execute(&mut *transaction)
-            .await?;
-        sqlx::query("UPDATE activity_events SET deleted_at_us = ? WHERE id = ?")
-            .bind(deleted_at_us)
-            .bind(activity_id)
-            .execute(&mut *transaction)
-            .await?;
-        sqlx::query(
-            "UPDATE activity_result_summaries
-             SET state = 'skipped', source_text = NULL,
-                 summary_line_1 = NULL, summary_line_2 = NULL, summary_line_3 = NULL,
-                 lease_token = NULL, lease_expires_at_us = NULL,
-                 last_error = 'activity soft-deleted before summarization',
-                 updated_at_us = ?, completed_at_us = ?
-             WHERE activity_event_id = ?
-               AND state IN ('pending', 'running', 'retry_wait')",
-        )
-        .bind(deleted_at_us)
-        .bind(deleted_at_us)
-        .bind(activity_id)
-        .execute(&mut *transaction)
-        .await?;
-
-        let canvas_node_ids = sqlx::query_scalar::<_, i64>(
-            "SELECT id FROM canvas_nodes WHERE activity_event_id = ? AND deleted_at_us IS NULL",
-        )
-        .bind(activity_id)
-        .fetch_all(&mut *transaction)
-        .await?;
-        for node_id in canvas_node_ids {
-            sqlx::query("DELETE FROM canvas_edges WHERE source_node_id = ? OR target_node_id = ?")
-                .bind(node_id)
-                .bind(node_id)
-                .execute(&mut *transaction)
-                .await?;
-        }
-        sqlx::query(
-            "UPDATE canvas_nodes SET deleted_at_us = ?
-             WHERE activity_event_id = ? AND deleted_at_us IS NULL",
-        )
-        .bind(deleted_at_us)
-        .bind(activity_id)
-        .execute(&mut *transaction)
-        .await?;
-
-        let work_changed = !work_ids.is_empty();
-        for work_id in work_ids {
-            let remaining: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM work_item_logs WHERE work_item_id = ?")
-                    .bind(work_id)
-                    .fetch_one(&mut *transaction)
-                    .await?;
-            if remaining == 0 {
-                soft_delete_work_in(&mut transaction, work_id, deleted_at_us).await?;
-            } else {
-                sqlx::query("UPDATE work_items SET updated_at_us = ? WHERE id = ?")
-                    .bind(deleted_at_us)
-                    .bind(work_id)
-                    .execute(&mut *transaction)
-                    .await?;
-            }
-        }
-        if work_changed {
-            bump_work_revision(&mut transaction).await?;
-        }
-        bump_canvas_revision(&mut transaction).await?;
+        soft_delete_activity_in(&mut transaction, activity_id).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -1290,6 +1202,109 @@ async fn work_project(connection: &mut SqliteConnection, work_id: i64) -> Result
         .fetch_optional(&mut *connection)
         .await?
         .ok_or(StoreError::WorkNotFound(work_id))
+}
+
+/// Applies the complete activity deletion contract to an existing transaction.
+///
+/// Keeping the cleanup here lets every entry point (activity detail, canvas
+/// node, and future APIs) update the source row and all live projections in
+/// exactly the same transaction.
+pub(crate) async fn soft_delete_activity_in(
+    transaction: &mut Transaction<'_, Sqlite>,
+    activity_id: i64,
+) -> Result<(), StoreError> {
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM activity_events
+         WHERE id = ? AND deleted_at_us IS NULL",
+    )
+    .bind(activity_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if exists == 0 {
+        return Err(StoreError::ActivityNotFound(activity_id));
+    }
+    let deleted_at_us = now_us()?;
+    let work_ids = sqlx::query_scalar::<_, i64>(
+        "SELECT work_item_id FROM work_item_logs WHERE activity_event_id = ?",
+    )
+    .bind(activity_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    sqlx::query("DELETE FROM work_item_logs WHERE activity_event_id = ?")
+        .bind(activity_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("DELETE FROM activity_curation_states WHERE activity_event_id = ?")
+        .bind(activity_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query("UPDATE activity_events SET deleted_at_us = ? WHERE id = ?")
+        .bind(deleted_at_us)
+        .bind(activity_id)
+        .execute(&mut **transaction)
+        .await?;
+    sqlx::query(
+        "UPDATE activity_result_summaries
+         SET state = 'skipped', source_text = NULL,
+             summary_line_1 = NULL, summary_line_2 = NULL, summary_line_3 = NULL,
+             lease_token = NULL, lease_expires_at_us = NULL,
+             last_error = 'activity soft-deleted before summarization',
+             updated_at_us = ?, completed_at_us = ?
+         WHERE activity_event_id = ?
+           AND state IN ('pending', 'running', 'retry_wait')",
+    )
+    .bind(deleted_at_us)
+    .bind(deleted_at_us)
+    .bind(activity_id)
+    .execute(&mut **transaction)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM canvas_edges
+         WHERE source_node_id IN (
+             SELECT id FROM canvas_nodes
+             WHERE activity_event_id = ? AND deleted_at_us IS NULL
+         )
+            OR target_node_id IN (
+             SELECT id FROM canvas_nodes
+             WHERE activity_event_id = ? AND deleted_at_us IS NULL
+         )",
+    )
+    .bind(activity_id)
+    .bind(activity_id)
+    .execute(&mut **transaction)
+    .await?;
+    sqlx::query(
+        "UPDATE canvas_nodes SET deleted_at_us = ?
+         WHERE activity_event_id = ? AND deleted_at_us IS NULL",
+    )
+    .bind(deleted_at_us)
+    .bind(activity_id)
+    .execute(&mut **transaction)
+    .await?;
+
+    let work_changed = !work_ids.is_empty();
+    for work_id in work_ids {
+        let remaining: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM work_item_logs WHERE work_item_id = ?")
+                .bind(work_id)
+                .fetch_one(&mut **transaction)
+                .await?;
+        if remaining == 0 {
+            soft_delete_work_in(transaction, work_id, deleted_at_us).await?;
+        } else {
+            sqlx::query("UPDATE work_items SET updated_at_us = ? WHERE id = ?")
+                .bind(deleted_at_us)
+                .bind(work_id)
+                .execute(&mut **transaction)
+                .await?;
+        }
+    }
+    if work_changed {
+        bump_work_revision(transaction).await?;
+    }
+    bump_canvas_revision(transaction).await?;
+    Ok(())
 }
 
 async fn soft_delete_work_in(

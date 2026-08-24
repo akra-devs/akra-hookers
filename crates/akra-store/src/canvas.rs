@@ -1,6 +1,9 @@
 use sqlx::{Sqlite, Transaction};
 
-use crate::{ActivityStore, CanvasEdgeSummary, CanvasNodeSummary, StoreError};
+use crate::{
+    ActivityStore, CanvasEdgeSummary, CanvasNodeSummary, StoreError,
+    work_curation::soft_delete_activity_in,
+};
 
 impl ActivityStore {
     pub async fn canvas_nodes(&self) -> Result<Vec<CanvasNodeSummary>, StoreError> {
@@ -99,20 +102,19 @@ impl ActivityStore {
 
     pub async fn delete_canvas_node(&self, canvas_node_id: i64) -> Result<(), StoreError> {
         let mut transaction = self.pool.begin().await?;
-        sqlx::query("DELETE FROM canvas_edges WHERE source_node_id = ? OR target_node_id = ?")
-            .bind(canvas_node_id)
-            .bind(canvas_node_id)
-            .execute(&mut *transaction)
-            .await?;
-        sqlx::query(
-            "UPDATE canvas_nodes
-             SET deleted_at_us = CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER)
-             WHERE id = ? AND deleted_at_us IS NULL",
+        let activity_id = sqlx::query_scalar::<_, i64>(
+            "SELECT canvas_nodes.activity_event_id
+             FROM canvas_nodes
+             JOIN activity_events ON activity_events.id = canvas_nodes.activity_event_id
+             WHERE canvas_nodes.id = ?
+               AND canvas_nodes.deleted_at_us IS NULL
+               AND activity_events.deleted_at_us IS NULL",
         )
         .bind(canvas_node_id)
-        .execute(&mut *transaction)
-        .await?;
-        bump_canvas_revision(&mut transaction).await?;
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(StoreError::CanvasNodeNotFound(canvas_node_id))?;
+        soft_delete_activity_in(&mut transaction, activity_id).await?;
         transaction.commit().await?;
         Ok(())
     }

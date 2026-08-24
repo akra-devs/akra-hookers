@@ -43,16 +43,6 @@ async fn scopes_use_effective_projects_and_keep_global_conversation_numbers() {
         ))
         .await
         .expect("assign target");
-    let first_node: i64 =
-        sqlx::query_scalar("SELECT id FROM canvas_nodes WHERE activity_event_id = ?")
-            .bind(first)
-            .fetch_one(&pool)
-            .await
-            .expect("first node");
-    store
-        .delete_canvas_node(first_node)
-        .await
-        .expect("delete canvas-only state");
     assert_eq!(effective_project(&pool, first).await, Some(target));
     assert_eq!(effective_project(&pool, second).await, None);
     assert_eq!(effective_project(&pool, third).await, Some(target));
@@ -172,17 +162,6 @@ async fn mixed_time_provenance_orders_one_conversation_once_before_filtering() {
         ))
         .await
         .expect("unknown to Inbox");
-    let deleted_node: i64 =
-        sqlx::query_scalar("SELECT id FROM canvas_nodes WHERE activity_event_id = ?")
-            .bind(second)
-            .fetch_one(&pool)
-            .await
-            .expect("captured node");
-    store
-        .delete_canvas_node(deleted_node)
-        .await
-        .expect("delete node");
-
     let all = store
         .activity_summaries(ActivityScope::All)
         .await

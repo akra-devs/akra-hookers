@@ -51,6 +51,7 @@ type ActivityCanvasProps = {
   onPositionCommit: (activityId: number, position: { x: number; y: number }) => Promise<void>;
   onError: (message: string) => void;
   onPersistedChange: () => Promise<unknown>;
+  onActivityDeleted: (activityId: number) => Promise<unknown>;
   onAuthoritativeRefresh: () => Promise<unknown>;
   onSelectionChange: (selection: { nodes: ActivityFlowNode[] }) => void;
 };
@@ -67,6 +68,7 @@ export function ActivityCanvas({
   onPositionCommit,
   onError,
   onPersistedChange,
+  onActivityDeleted,
   onAuthoritativeRefresh,
   onSelectionChange,
 }: ActivityCanvasProps) {
@@ -118,9 +120,9 @@ export function ActivityCanvas({
     void client.deleteCanvasNode(canvasNode.id).then(
       async () => {
         try {
-          await onPersistedChange();
+          await onActivityDeleted(canvasNode.activity_event_id);
         } catch {
-          onError("활동은 제거했지만 최신 캔버스 상태를 불러오지 못했습니다.");
+          onError("활동 기록은 삭제했지만 최신 화면을 불러오지 못했습니다.");
         }
       },
       async (cause: unknown) => {
@@ -138,7 +140,7 @@ export function ActivityCanvas({
         } catch {
           // The local rollback keeps the card recoverable when refresh also fails.
         }
-        onError(cause instanceof Error ? cause.message : "캔버스에서 활동을 제거하지 못했습니다.");
+        onError(cause instanceof Error ? cause.message : "활동 기록을 삭제하지 못했습니다.");
       },
     ).finally(() => {
       pendingNodeIds.current.delete(nodeId);
@@ -148,6 +150,7 @@ export function ActivityCanvas({
     edges,
     nodes,
     onAuthoritativeRefresh,
+    onActivityDeleted,
     onError,
     onPersistedChange,
     onSelectionChange,

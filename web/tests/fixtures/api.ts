@@ -39,6 +39,39 @@ export class FixtureApi {
     return this.model.state;
   }
 
+  private deleteActivityState(activityId: number): boolean {
+    if (!this.state.details[activityId]) return false;
+    const removedNodeIds = new Set(
+      this.state.canvasNodes
+        .filter((node) => node.activity_event_id === activityId)
+        .map((node) => node.id),
+    );
+    this.state.activities = this.state.activities.filter((activity) => activity.id !== activityId);
+    delete this.state.details[activityId];
+    delete this.state.activityOrigins[activityId];
+    this.state.canvasNodes = this.state.canvasNodes.filter(
+      (node) => node.activity_event_id !== activityId,
+    );
+    this.state.canvasEdges = this.state.canvasEdges.filter(
+      (edge) => !removedNodeIds.has(edge.source_node_id) && !removedNodeIds.has(edge.target_node_id),
+    );
+    for (const [index, activity] of this.state.activities.entries()) {
+      activity.conversation_index = index + 1;
+      activity.conversation_total = this.state.activities.length;
+    }
+    for (const detail of Object.values(this.state.details)) {
+      detail.conversation = detail.conversation.filter((turn) => turn.id !== activityId);
+      detail.conversation_index = this.state.activities.findIndex(
+        (activity) => activity.id === detail.id,
+      ) + 1;
+      detail.conversation_total = Math.max(0, detail.conversation_total - 1);
+      detail.origin.activity_count = Math.max(0, detail.origin.activity_count - 1);
+    }
+    this.model.syncCanvasState();
+    this.canvasRevision += 1;
+    return true;
+  }
+
   deferNextDetail(activityId: number): { requested: Promise<void>; release: () => void } {
     let resolveRequested!: () => void;
     let resolveRelease!: () => void;
@@ -118,37 +151,9 @@ export class FixtureApi {
         : error(404, "not_found", "Activity was not found");
     }
     if (method === "DELETE" && activityId !== null) {
-      if (!this.state.details[activityId]) {
+      if (!this.deleteActivityState(activityId)) {
         return error(404, "not_found", "Activity was not found");
       }
-      const removedNodeIds = new Set(
-        this.state.canvasNodes
-          .filter((node) => node.activity_event_id === activityId)
-          .map((node) => node.id),
-      );
-      this.state.activities = this.state.activities.filter((activity) => activity.id !== activityId);
-      delete this.state.details[activityId];
-      delete this.state.activityOrigins[activityId];
-      this.state.canvasNodes = this.state.canvasNodes.filter(
-        (node) => node.activity_event_id !== activityId,
-      );
-      this.state.canvasEdges = this.state.canvasEdges.filter(
-        (edge) => !removedNodeIds.has(edge.source_node_id) && !removedNodeIds.has(edge.target_node_id),
-      );
-      for (const [index, activity] of this.state.activities.entries()) {
-        activity.conversation_index = index + 1;
-        activity.conversation_total = this.state.activities.length;
-      }
-      for (const detail of Object.values(this.state.details)) {
-        detail.conversation = detail.conversation.filter((turn) => turn.id !== activityId);
-        detail.conversation_index = this.state.activities.findIndex(
-          (activity) => activity.id === detail.id,
-        ) + 1;
-        detail.conversation_total = Math.max(0, detail.conversation_total - 1);
-        detail.origin.activity_count = Math.max(0, detail.origin.activity_count - 1);
-      }
-      this.model.syncCanvasState();
-      this.canvasRevision += 1;
       return { status: 204 };
     }
     if (path === "/v1/projects" && method === "GET") {
@@ -232,12 +237,10 @@ export class FixtureApi {
     }
     const canvasId = match(path, /^\/v1\/canvas\/(\d+)$/);
     if (canvasId !== null && method === "DELETE") {
-      this.state.canvasNodes = this.state.canvasNodes.filter((node) => node.id !== canvasId);
-      this.state.canvasEdges = this.state.canvasEdges.filter(
-        (edge) => edge.source_node_id !== canvasId && edge.target_node_id !== canvasId,
-      );
-      this.model.syncCanvasState();
-      this.canvasRevision += 1;
+      const node = this.state.canvasNodes.find(({ id }) => id === canvasId);
+      if (!node || !this.deleteActivityState(node.activity_event_id)) {
+        return error(404, "not_found", "Canvas node was not found");
+      }
       return { status: 204 };
     }
     if (canvasId !== null && method === "PATCH") {
