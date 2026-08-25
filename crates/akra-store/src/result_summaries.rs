@@ -121,7 +121,9 @@ impl ResultSummaryLines {
         Ok(Self { lines })
     }
 
-    pub(crate) fn compact_legacy(
+    /// Preserves all three structured lines while fitting them into the shared
+    /// character budget. Used only after one over-length model retry.
+    pub fn compact(
         line_1: impl Into<String>,
         line_2: impl Into<String>,
         line_3: impl Into<String>,
@@ -154,6 +156,14 @@ impl ResultSummaryLines {
             }
         }
         Self::try_new(lines[0].clone(), lines[1].clone(), lines[2].clone())
+    }
+
+    pub(crate) fn compact_legacy(
+        line_1: impl Into<String>,
+        line_2: impl Into<String>,
+        line_3: impl Into<String>,
+    ) -> Result<Self, ResultSummaryValidationError> {
+        Self::compact(line_1, line_2, line_3)
     }
 
     pub fn as_array(&self) -> &[String; 3] {
@@ -680,6 +690,44 @@ impl ActivityStore {
             ResultSummaryFailureDisposition::RetryScheduled
         } else {
             ResultSummaryFailureDisposition::Failed
+        })
+    }
+
+    /// Returns an in-flight summary to the queue without consuming a model
+    /// attempt. This is reserved for account-level circuit-breaker deferrals,
+    /// not model or output validation failures.
+    pub async fn defer_result_summary(
+        &self,
+        claim: &ResultSummaryClaim,
+        error: &str,
+        retry_at_us: i64,
+        deferred_at_us: i64,
+    ) -> Result<ResultSummaryFailureDisposition, StoreError> {
+        let error = sanitize_error(error);
+        let updated = sqlx::query(
+            "UPDATE activity_result_summaries
+             SET state = 'retry_wait', source_text = ?, next_attempt_at_us = ?,
+                 attempt_count = MAX(attempt_count - 1, 0),
+                 lease_token = NULL, lease_expires_at_us = NULL,
+                 last_error = ?, updated_at_us = ?, completed_at_us = NULL
+             WHERE provider = ? AND provider_session_id = ? AND provider_turn_id = ?
+               AND generation = ? AND state = 'running' AND lease_token = ?",
+        )
+        .bind(&claim.source_text)
+        .bind(retry_at_us)
+        .bind(error)
+        .bind(deferred_at_us)
+        .bind(&claim.provider)
+        .bind(&claim.provider_session_id)
+        .bind(&claim.provider_turn_id)
+        .bind(claim.generation)
+        .bind(&claim.lease_token)
+        .execute(&self.pool)
+        .await?;
+        Ok(if updated.rows_affected() == 1 {
+            ResultSummaryFailureDisposition::RetryScheduled
+        } else {
+            ResultSummaryFailureDisposition::Stale
         })
     }
 

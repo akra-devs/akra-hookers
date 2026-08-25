@@ -93,9 +93,11 @@ the summary child cannot recursively trigger Akra capture. Set
 
 The summary subprocess has one 60-second deadline covering stdin delivery, process
 completion, and bounded stdout/stderr draining. Deadline expiry kills and reaps the
-child. Existing two-hook Akra manifests are treated as installed during startup
-reconciliation, upgraded in place to the current three-hook contract, and never move
-the user's selected installation to another detected target.
+child. Each invocation uses Codex's JSON event stream and final-message output file;
+Akra stores the reported input, cached-input, output, and reasoning-output token counts
+locally for per-call usage diagnosis. Existing two-hook Akra manifests are treated as
+installed during startup reconciliation, upgraded in place to the current three-hook
+contract, and never move the user's selected installation to another detected target.
 
 여러 터미널에서 Codex에 지시한 작업을 로컬에 기록하고, 캔버스에서 다시 찾기 위한 도구입니다.
 
@@ -118,9 +120,11 @@ the user's selected installation to another detected target.
 
 ## 개인정보와 범위
 
-사용자 입력 프롬프트, 작업 위치와 활동 데이터는 기본적으로 로컬 SQLite와 로컬 spool에 저장합니다. 기본 런타임은 `127.0.0.1`에만 바인딩하며 텔레메트리나 Git 변경을 수행하지 않습니다. 사용자가 Collection destination에 외부 HTTPS collector와 access token을 명시적으로 저장한 경우에만, 위의 원격 수집 범위에 적은 데이터가 그 collector로 전송됩니다.
+사용자 입력 프롬프트, 작업 위치와 활동 데이터는 기본적으로 로컬 SQLite와 로컬 spool에 저장합니다. 기본 런타임은 `127.0.0.1`에만 바인딩하며 외부 텔레메트리를 전송하거나 Git 변경을 수행하지 않습니다. 사용자가 Collection destination에 외부 HTTPS collector와 access token을 명시적으로 저장한 경우에만, 위의 원격 수집 범위에 적은 데이터가 그 collector로 전송됩니다.
 
-결과 요약은 예외입니다. Codex의 최종 assistant 결과(`Stop.last_assistant_message`)만 해당 활동을 저장한 인증된 Codex summary runtime의 `codex exec --model gpt-5.3-codex-spark`에 전달합니다. 저장된 사용자 입력 프롬프트는 **결과 요약 요청**에 포함하지 않습니다. 원문 결과는 자동 재시도와 사용자가 명시적으로 누르는 `재생성`을 위해 로컬에 최대 24시간만 일시 보관됩니다. 요약 성공 시 즉시 삭제하며, 실패 상태여도 24시간이 지나면 다음 runtime recovery 또는 재생성 요청에서 먼저 삭제합니다. 따라서 이미 원문이 삭제된 과거 기록에는 재생성 버튼이 나타나지 않습니다. 장기 저장되는 결과 데이터는 정확히 3줄이며, 앞뒤 공백을 제거한 세 줄의 Unicode scalar 수 합계가 180자 이하인 경우만 허용됩니다. 줄 구분자는 합계에서 제외합니다. Spark를 사용할 수 없거나 인증·네트워크·출력 검증에 실패하면 다른 모델로 대체하지 않고 요약 상태를 실패로 표시합니다.
+결과 요약은 예외입니다. Codex의 최종 assistant 결과(`Stop.last_assistant_message`)만 해당 활동을 저장한 인증된 Codex summary runtime의 `codex exec --model gpt-5.3-codex-spark`에 전달합니다. 저장된 사용자 입력 프롬프트는 **결과 요약 요청**에 포함하지 않습니다. 이 최종 결과가 8,000 Unicode scalar를 넘으면 앞부분과 끝부분을 보존하는 결정론적 축약본만 Spark에 전달하며, 수집 원문 자체는 바꾸지 않습니다. 원문 결과는 자동 재시도와 사용자가 명시적으로 누르는 `재생성`을 위해 로컬에 최대 24시간만 일시 보관됩니다. 요약 성공 시 즉시 삭제하며, 실패 상태여도 24시간이 지나면 다음 runtime recovery 또는 재생성 요청에서 먼저 삭제합니다. 따라서 이미 원문이 삭제된 과거 기록에는 재생성 버튼이 나타나지 않습니다. 장기 저장되는 결과 데이터는 정확히 3줄이며, 앞뒤 공백을 제거한 세 줄의 Unicode scalar 수 합계가 180자 이하인 경우만 허용됩니다. 줄 구분자는 합계에서 제외합니다. 길이만 초과한 출력은 Spark에 한 번 더 요청한 뒤에도 초과하면 로컬에서 180자로 축약합니다. quota 제한이 감지되면 같은 모델 호출을 1시간 중단하며, 이 대기 전환은 요약 재시도 횟수를 소비하지 않습니다. Spark를 사용할 수 없거나 인증·네트워크·그 밖의 출력 검증에 실패하면 다른 모델로 대체하지 않고 요약 상태를 실패로 표시합니다.
+
+모든 Spark 호출은 `codex exec --json --output-last-message`로 실행합니다. JSON 이벤트의 완료 usage에서 입력, 캐시 입력, 출력, reasoning 출력 토큰을 호출별로 로컬 SQLite에 저장하며, 앱 외부로 별도 전송하지 않습니다. 최종 요약 본문은 stdout 전체가 아니라 Codex가 기록한 final-message 파일에서만 읽습니다.
 
 문맥 기반 프롬프트 요약은 별도 opt-in입니다. Smart mode에서는 현재 user request의
 결정론적 projection과, 필요할 때 같은 session의 바로 이전 user activity에 이미

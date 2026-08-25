@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::BTreeSet,
     ffi::{OsStr, OsString},
     path::Path,
@@ -8,12 +9,14 @@ use std::{
 };
 
 use akra_store::{
-    ActivityStore, CURATION_MODEL, CurationModelInput, CurationProposalGroup,
-    MAX_PROMPT_SUMMARY_CHARS, MAX_PROMPT_SUMMARY_INPUT_CHARS, MAX_RESULT_SUMMARY_CHARS,
-    MAX_WORK_TITLE_CHARS, PROMPT_SUMMARY_MODEL, PromptSummaryClaim, PromptSummaryErrorCode,
-    PromptSummaryText, RESULT_SUMMARY_MODEL, ResultSummaryClaim, ResultSummaryLines,
+    ActivityStore, CURATION_MODEL, CodexExecCallRecord, CodexExecOperation, CodexExecStatus,
+    CodexTokenUsage, CurationModelInput, CurationProposalGroup, MAX_PROMPT_SUMMARY_CHARS,
+    MAX_PROMPT_SUMMARY_INPUT_CHARS, MAX_RESULT_SUMMARY_CHARS, MAX_WORK_TITLE_CHARS,
+    PROMPT_SUMMARY_MODEL, PromptSummaryClaim, PromptSummaryErrorCode, PromptSummaryText,
+    RESULT_SUMMARY_MODEL, ResultSummaryClaim, ResultSummaryLines,
 };
 use serde::Deserialize;
+use serde_json::Value;
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -26,9 +29,13 @@ use crate::codex_targets::{CodexRuntimeDescriptor, CodexTargetRegistry};
 pub const SUMMARY_CHILD_ENV: &str = "AKRA_HOOKERS_SUMMARY_CHILD";
 const SUMMARY_TIMEOUT: Duration = Duration::from_secs(60);
 const SUMMARY_LEASE_US: i64 = 90 * 1_000_000;
-const MAX_RESULT_BYTES: usize = 128 * 1024;
+const MAX_RESULT_SUMMARY_INPUT_CHARS: usize = 8_000;
+const RESULT_SUMMARY_TAIL_CHARS: usize = 2_000;
+const RESULT_SUMMARY_OMISSION_MARKER: &str = "\n[… 중간 내용 생략 …]\n";
 const MAX_PROCESS_OUTPUT_BYTES: usize = 256 * 1024;
+const MAX_FINAL_OUTPUT_BYTES: u64 = 64 * 1024;
 const MAX_CURATION_INPUT_BYTES: usize = 64 * 1024;
+const QUOTA_CIRCUIT_COOLDOWN_US: i64 = 60 * 60 * 1_000_000;
 
 const OUTPUT_SCHEMA: &str = r#"{
   "type": "object",
@@ -100,25 +107,29 @@ struct CommandSpec {
 #[derive(Debug)]
 pub struct CodexExecSummarizer {
     targets: Arc<CodexTargetRegistry>,
+    store: Arc<ActivityStore>,
     timeout: Duration,
 }
 
 #[derive(Debug)]
 pub struct CodexPromptSummarizer {
     targets: Arc<CodexTargetRegistry>,
+    store: Arc<ActivityStore>,
     timeout: Duration,
 }
 
 #[derive(Debug)]
 pub struct CodexWorkCurator {
     targets: Arc<CodexTargetRegistry>,
+    store: Arc<ActivityStore>,
     timeout: Duration,
 }
 
 impl CodexExecSummarizer {
-    pub fn new(targets: Arc<CodexTargetRegistry>) -> Self {
+    pub fn new(targets: Arc<CodexTargetRegistry>, store: Arc<ActivityStore>) -> Self {
         Self {
             targets,
+            store,
             timeout: SUMMARY_TIMEOUT,
         }
     }
@@ -127,10 +138,8 @@ impl CodexExecSummarizer {
         &self,
         claim: &ResultSummaryClaim,
     ) -> Result<ResultSummaryLines, SummarizationError> {
-        let source = claim.source_text();
-        if source.len() > MAX_RESULT_BYTES {
-            return Err(SummarizationError::ResultTooLarge(source.len()));
-        }
+        let source_chars = claim.source_text().chars().count();
+        let source = bounded_result_source(claim.source_text());
         if claim.summary_model() != RESULT_SUMMARY_MODEL {
             return Err(SummarizationError::UnexpectedModel(
                 claim.summary_model().to_owned(),
@@ -139,6 +148,7 @@ impl CodexExecSummarizer {
 
         let workspace = tempfile::tempdir()?;
         let schema_path = workspace.path().join("result-summary.schema.json");
+        let final_output_path = workspace.path().join("result-summary.json");
         std::fs::write(&schema_path, OUTPUT_SCHEMA)?;
         let runtime = self
             .targets
@@ -152,37 +162,51 @@ impl CodexExecSummarizer {
                 )
             })?;
         let spec = command_spec(&runtime)?;
-        let (schema_arg, cwd_arg) = runtime_paths(&spec, &schema_path, workspace.path())?;
+        let (schema_arg, final_output_arg, cwd_arg) =
+            runtime_paths(&spec, &schema_path, &final_output_path, workspace.path())?;
         let mut command = Command::new(&spec.program);
         command.args(&spec.prefix_args);
         command.envs(spec.environment.iter().cloned());
-        append_exec_args(&mut command, claim.summary_model(), &schema_arg, &cwd_arg);
+        append_exec_args(
+            &mut command,
+            claim.summary_model(),
+            &schema_arg,
+            &final_output_arg,
+            &cwd_arg,
+        );
         command
             .env(SUMMARY_CHILD_ENV, "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let prompt = summary_prompt(source, claim.attempt_number());
-        let output = execute_process(command, prompt.as_bytes(), self.timeout).await?;
-        let (stdout, stdout_exceeded) = output.stdout;
-        let (_, stderr_exceeded) = output.stderr;
-        if stdout_exceeded || stderr_exceeded {
-            return Err(SummarizationError::OutputTooLarge);
-        }
-        if !output.status.success() {
-            return Err(SummarizationError::CommandFailed(
-                output.status.code().unwrap_or(-1),
-            ));
-        }
-        parse_summary_output(&stdout)
+        let prompt = summary_prompt(&source, claim.attempt_number());
+        execute_codex_call(
+            &self.store,
+            command,
+            prompt.as_bytes(),
+            self.timeout,
+            &final_output_path,
+            CodexCallMetadata {
+                operation: CodexExecOperation::ResultSummary,
+                activity_event_id: Some(claim.activity_event_id()),
+                model: claim.summary_model().to_owned(),
+                capture_target: claim.capture_target().map(ToOwned::to_owned),
+                attempt_number: claim.attempt_number(),
+                source_chars,
+                submitted_source_chars: source.chars().count(),
+            },
+            |output| parse_summary_output_with_fallback(output, claim.attempt_number()),
+        )
+        .await
     }
 }
 
 impl CodexPromptSummarizer {
-    pub fn new(targets: Arc<CodexTargetRegistry>) -> Self {
+    pub fn new(targets: Arc<CodexTargetRegistry>, store: Arc<ActivityStore>) -> Self {
         Self {
             targets,
+            store,
             timeout: SUMMARY_TIMEOUT,
         }
     }
@@ -204,6 +228,7 @@ impl CodexPromptSummarizer {
 
         let workspace = tempfile::tempdir()?;
         let schema_path = workspace.path().join("prompt-summary.schema.json");
+        let final_output_path = workspace.path().join("prompt-summary.json");
         std::fs::write(&schema_path, PROMPT_OUTPUT_SCHEMA)?;
         let runtime = self
             .targets
@@ -217,11 +242,18 @@ impl CodexPromptSummarizer {
                 )
             })?;
         let spec = command_spec(&runtime)?;
-        let (schema_arg, cwd_arg) = runtime_paths(&spec, &schema_path, workspace.path())?;
+        let (schema_arg, final_output_arg, cwd_arg) =
+            runtime_paths(&spec, &schema_path, &final_output_path, workspace.path())?;
         let mut command = Command::new(&spec.program);
         command.args(&spec.prefix_args);
         command.envs(spec.environment.iter().cloned());
-        append_exec_args(&mut command, claim.summary_model(), &schema_arg, &cwd_arg);
+        append_exec_args(
+            &mut command,
+            claim.summary_model(),
+            &schema_arg,
+            &final_output_arg,
+            &cwd_arg,
+        );
         command
             .env(SUMMARY_CHILD_ENV, "1")
             .stdin(Stdio::piped())
@@ -234,25 +266,32 @@ impl CodexPromptSummarizer {
             claim.previous_failure_code(),
             claim.attempt_number(),
         );
-        let output = execute_process(command, prompt.as_bytes(), self.timeout).await?;
-        let (stdout, stdout_exceeded) = output.stdout;
-        let (_, stderr_exceeded) = output.stderr;
-        if stdout_exceeded || stderr_exceeded {
-            return Err(SummarizationError::OutputTooLarge);
-        }
-        if !output.status.success() {
-            return Err(SummarizationError::CommandFailed(
-                output.status.code().unwrap_or(-1),
-            ));
-        }
-        parse_prompt_summary_output(&stdout)
+        execute_codex_call(
+            &self.store,
+            command,
+            prompt.as_bytes(),
+            self.timeout,
+            &final_output_path,
+            CodexCallMetadata {
+                operation: CodexExecOperation::PromptSummary,
+                activity_event_id: Some(claim.activity_event_id()),
+                model: claim.summary_model().to_owned(),
+                capture_target: claim.capture_target().map(ToOwned::to_owned),
+                attempt_number: claim.attempt_number(),
+                source_chars: claim.projected_prompt().chars().count(),
+                submitted_source_chars: claim.projected_prompt().chars().count(),
+            },
+            parse_prompt_summary_output,
+        )
+        .await
     }
 }
 
 impl CodexWorkCurator {
-    pub fn new(targets: Arc<CodexTargetRegistry>) -> Self {
+    pub fn new(targets: Arc<CodexTargetRegistry>, store: Arc<ActivityStore>) -> Self {
         Self {
             targets,
+            store,
             timeout: SUMMARY_TIMEOUT,
         }
     }
@@ -267,17 +306,25 @@ impl CodexWorkCurator {
         }
         let workspace = tempfile::tempdir()?;
         let schema_path = workspace.path().join("work-curation.schema.json");
+        let final_output_path = workspace.path().join("work-curation.json");
         std::fs::write(&schema_path, CURATION_OUTPUT_SCHEMA)?;
         let runtime = self
             .targets
             .summary_runtime(None)
             .ok_or_else(|| SummarizationError::RuntimeUnavailable("collector/default".into()))?;
         let spec = command_spec(&runtime)?;
-        let (schema_arg, cwd_arg) = runtime_paths(&spec, &schema_path, workspace.path())?;
+        let (schema_arg, final_output_arg, cwd_arg) =
+            runtime_paths(&spec, &schema_path, &final_output_path, workspace.path())?;
         let mut command = Command::new(&spec.program);
         command.args(&spec.prefix_args);
         command.envs(spec.environment.iter().cloned());
-        append_exec_args(&mut command, CURATION_MODEL, &schema_arg, &cwd_arg);
+        append_exec_args(
+            &mut command,
+            CURATION_MODEL,
+            &schema_arg,
+            &final_output_arg,
+            &cwd_arg,
+        );
         command
             .env(SUMMARY_CHILD_ENV, "1")
             .stdin(Stdio::piped())
@@ -285,18 +332,24 @@ impl CodexWorkCurator {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let prompt = curation_prompt(&serialized);
-        let output = execute_process(command, prompt.as_bytes(), self.timeout).await?;
-        let (stdout, stdout_exceeded) = output.stdout;
-        let (_, stderr_exceeded) = output.stderr;
-        if stdout_exceeded || stderr_exceeded {
-            return Err(SummarizationError::OutputTooLarge);
-        }
-        if !output.status.success() {
-            return Err(SummarizationError::CommandFailed(
-                output.status.code().unwrap_or(-1),
-            ));
-        }
-        parse_curation_output(&stdout, input)
+        execute_codex_call(
+            &self.store,
+            command,
+            prompt.as_bytes(),
+            self.timeout,
+            &final_output_path,
+            CodexCallMetadata {
+                operation: CodexExecOperation::WorkCuration,
+                activity_event_id: None,
+                model: CURATION_MODEL.to_owned(),
+                capture_target: None,
+                attempt_number: 1,
+                source_chars: serialized.chars().count(),
+                submitted_source_chars: serialized.chars().count(),
+            },
+            |output| parse_curation_output(output, input),
+        )
+        .await
     }
 }
 
@@ -337,6 +390,45 @@ fn parse_summary_output(output: &[u8]) -> Result<ResultSummaryLines, Summarizati
         parsed.line2,
         parsed.line3,
     )?)
+}
+
+fn parse_summary_output_with_fallback(
+    output: &[u8],
+    attempt_number: i64,
+) -> Result<ResultSummaryLines, SummarizationError> {
+    if attempt_number < 2 {
+        return parse_summary_output(output);
+    }
+    let parsed: StructuredSummary = serde_json::from_slice(output)?;
+    match ResultSummaryLines::try_new(&parsed.line1, &parsed.line2, &parsed.line3) {
+        Ok(lines) => Ok(lines),
+        Err(akra_store::ResultSummaryValidationError::SummaryTooLong(_)) if attempt_number >= 2 => {
+            Ok(ResultSummaryLines::compact(
+                parsed.line1,
+                parsed.line2,
+                parsed.line3,
+            )?)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn bounded_result_source(source: &str) -> Cow<'_, str> {
+    let source_chars = source.chars().count();
+    if source_chars <= MAX_RESULT_SUMMARY_INPUT_CHARS {
+        return Cow::Borrowed(source);
+    }
+    let marker_chars = RESULT_SUMMARY_OMISSION_MARKER.chars().count();
+    let head_chars = MAX_RESULT_SUMMARY_INPUT_CHARS
+        .saturating_sub(RESULT_SUMMARY_TAIL_CHARS)
+        .saturating_sub(marker_chars);
+    let tail_start = source_chars.saturating_sub(RESULT_SUMMARY_TAIL_CHARS);
+    let mut bounded = String::with_capacity(MAX_RESULT_SUMMARY_INPUT_CHARS * 3);
+    bounded.extend(source.chars().take(head_chars));
+    bounded.push_str(RESULT_SUMMARY_OMISSION_MARKER);
+    bounded.extend(source.chars().skip(tail_start));
+    debug_assert_eq!(bounded.chars().count(), MAX_RESULT_SUMMARY_INPUT_CHARS);
+    Cow::Owned(bounded)
 }
 
 fn parse_prompt_summary_output(output: &[u8]) -> Result<PromptSummaryText, SummarizationError> {
@@ -421,8 +513,8 @@ fn invalid_curation(message: &str) -> SummarizationError {
 
 pub fn spawn_worker(store: Arc<ActivityStore>, targets: Arc<CodexTargetRegistry>) {
     tokio::spawn(async move {
-        let result_summarizer = CodexExecSummarizer::new(Arc::clone(&targets));
-        let prompt_summarizer = CodexPromptSummarizer::new(targets);
+        let result_summarizer = CodexExecSummarizer::new(Arc::clone(&targets), Arc::clone(&store));
+        let prompt_summarizer = CodexPromptSummarizer::new(targets, Arc::clone(&store));
         let mut prefer_prompt = false;
         let mut interval = tokio::time::interval(Duration::from_millis(500));
         loop {
@@ -457,6 +549,13 @@ async fn process_one_result(
     summarizer: &CodexExecSummarizer,
 ) -> Result<bool, WorkerError> {
     let claim_at_us = now_us()?;
+    if store
+        .active_codex_quota_retry_at(RESULT_SUMMARY_MODEL, claim_at_us)
+        .await?
+        .is_some()
+    {
+        return Ok(false);
+    }
     let Some(claim) = store
         .claim_result_summary(claim_at_us, SUMMARY_LEASE_US)
         .await?
@@ -471,14 +570,20 @@ async fn process_one_result(
         }
         Err(error) => {
             let failed_at_us = now_us()?;
-            let retry_at_us = if error.is_retryable() {
-                failed_at_us.checked_add(retry_delay_us(claim.attempt_number()))
+            if let Some(retry_at_us) = error.quota_retry_at_us() {
+                store
+                    .defer_result_summary(&claim, &error.to_string(), retry_at_us, failed_at_us)
+                    .await?;
             } else {
-                None
-            };
-            store
-                .fail_result_summary(&claim, &error.to_string(), retry_at_us, failed_at_us)
-                .await?;
+                let retry_at_us = if error.is_retryable() {
+                    failed_at_us.checked_add(retry_delay_us(claim.attempt_number()))
+                } else {
+                    None
+                };
+                store
+                    .fail_result_summary(&claim, &error.to_string(), retry_at_us, failed_at_us)
+                    .await?;
+            }
         }
     }
     Ok(true)
@@ -489,6 +594,13 @@ async fn process_one_prompt(
     summarizer: &CodexPromptSummarizer,
 ) -> Result<bool, WorkerError> {
     let claim_at_us = now_us()?;
+    if store
+        .active_codex_quota_retry_at(PROMPT_SUMMARY_MODEL, claim_at_us)
+        .await?
+        .is_some()
+    {
+        return Ok(false);
+    }
     let Some(claim) = store
         .claim_prompt_summary(claim_at_us, SUMMARY_LEASE_US)
         .await?
@@ -503,17 +615,357 @@ async fn process_one_prompt(
         }
         Err(error) => {
             let failed_at_us = now_us()?;
-            let retry_at_us = if error.is_retryable() {
-                failed_at_us.checked_add(prompt_retry_delay_us(claim.attempt_number()))
+            if let Some(retry_at_us) = error.quota_retry_at_us() {
+                store
+                    .defer_prompt_summary(
+                        &claim,
+                        retry_at_us,
+                        PromptSummaryErrorCode::Runtime,
+                        failed_at_us,
+                    )
+                    .await?;
             } else {
-                None
-            };
-            store
-                .fail_prompt_summary(&claim, retry_at_us, prompt_error_code(&error), failed_at_us)
-                .await?;
+                let retry_at_us = if error.is_retryable() {
+                    failed_at_us.checked_add(prompt_retry_delay_us(claim.attempt_number()))
+                } else {
+                    None
+                };
+                store
+                    .fail_prompt_summary(
+                        &claim,
+                        retry_at_us,
+                        prompt_error_code(&error),
+                        failed_at_us,
+                    )
+                    .await?;
+            }
         }
     }
     Ok(true)
+}
+
+#[derive(Debug)]
+struct CodexCallMetadata {
+    operation: CodexExecOperation,
+    activity_event_id: Option<i64>,
+    model: String,
+    capture_target: Option<String>,
+    attempt_number: i64,
+    source_chars: usize,
+    submitted_source_chars: usize,
+}
+
+#[derive(Debug, Default)]
+struct CodexExecEvents {
+    thread_id: Option<String>,
+    usage: Option<CodexTokenUsage>,
+    error_code: Option<String>,
+    error_message: Option<String>,
+    quota_limited: bool,
+}
+
+async fn execute_codex_call<T>(
+    store: &ActivityStore,
+    command: Command,
+    prompt: &[u8],
+    timeout: Duration,
+    final_output_path: &Path,
+    metadata: CodexCallMetadata,
+    parse_final: impl FnOnce(&[u8]) -> Result<T, SummarizationError>,
+) -> Result<T, SummarizationError> {
+    let started_at_us = now_us().map_err(SummarizationError::Clock)?;
+    if let Some(retry_at_us) = store
+        .active_codex_quota_retry_at(&metadata.model, started_at_us)
+        .await
+        .map_err(|error| SummarizationError::UsageStore(error.to_string()))?
+    {
+        return Err(SummarizationError::QuotaCircuitOpen { retry_at_us });
+    }
+    let prompt_chars = String::from_utf8_lossy(prompt).chars().count();
+    let process = execute_process(command, prompt, timeout).await;
+    let completed_at_us = now_us().map_err(SummarizationError::Clock)?;
+    let output = match process {
+        Ok(output) => output,
+        Err(error) => {
+            let status = if matches!(error, SummarizationError::Timeout) {
+                CodexExecStatus::TimedOut
+            } else {
+                CodexExecStatus::Failed
+            };
+            record_codex_call_best_effort(
+                store,
+                CodexExecCallRecord {
+                    operation: metadata.operation,
+                    activity_event_id: metadata.activity_event_id,
+                    model: metadata.model,
+                    capture_target: metadata.capture_target,
+                    attempt_number: metadata.attempt_number,
+                    source_chars: chars_i64(metadata.source_chars),
+                    submitted_source_chars: chars_i64(metadata.submitted_source_chars),
+                    prompt_chars: chars_i64(prompt_chars),
+                    started_at_us,
+                    completed_at_us,
+                    status,
+                    exit_code: None,
+                    thread_id: None,
+                    usage: None,
+                    error_code: Some(summarization_error_code(&error).to_owned()),
+                    error_message: Some(error.to_string()),
+                    quota_retry_at_us: None,
+                },
+            )
+            .await;
+            return Err(error);
+        }
+    };
+
+    let exit_code = output.status.code();
+    let (stdout, stdout_exceeded) = output.stdout;
+    let (stderr, stderr_exceeded) = output.stderr;
+    let stderr_text = String::from_utf8_lossy(&stderr).trim().to_owned();
+    let (events, event_error) = match parse_exec_events(&stdout) {
+        Ok(events) => (events, None),
+        Err(error) => (CodexExecEvents::default(), Some(error)),
+    };
+    let quota_limited = events.quota_limited
+        || (!output.status.success()
+            && (text_indicates_quota(&String::from_utf8_lossy(&stdout))
+                || text_indicates_quota(&stderr_text)));
+    let result = if quota_limited {
+        let retry_at_us = completed_at_us.saturating_add(QUOTA_CIRCUIT_COOLDOWN_US);
+        let message = events
+            .error_message
+            .clone()
+            .filter(|message| !message.trim().is_empty())
+            .or_else(|| (!stderr_text.is_empty()).then_some(stderr_text.clone()))
+            .unwrap_or_else(|| "Codex usage limit exceeded".to_owned());
+        Err(SummarizationError::QuotaLimited {
+            retry_at_us,
+            message,
+        })
+    } else if stdout_exceeded || stderr_exceeded {
+        Err(SummarizationError::OutputTooLarge)
+    } else if !output.status.success() {
+        Err(SummarizationError::CommandFailed(exit_code.unwrap_or(-1)))
+    } else if let Some(error) = event_error {
+        Err(error)
+    } else {
+        read_final_output(final_output_path).and_then(|output| parse_final(&output))
+    };
+
+    let (status, quota_retry_at_us) = match &result {
+        Ok(_) => (CodexExecStatus::Succeeded, None),
+        Err(SummarizationError::Timeout) => (CodexExecStatus::TimedOut, None),
+        Err(SummarizationError::QuotaLimited { retry_at_us, .. }) => {
+            (CodexExecStatus::QuotaLimited, Some(*retry_at_us))
+        }
+        Err(_) => (CodexExecStatus::Failed, None),
+    };
+    let error = result.as_ref().err();
+    let error_code = if status == CodexExecStatus::QuotaLimited {
+        events
+            .error_code
+            .clone()
+            .or_else(|| Some("UsageLimitExceeded".to_owned()))
+    } else if let Some(error) = error {
+        Some(summarization_error_code(error).to_owned())
+    } else if events.usage.is_none() {
+        Some("usage_missing".to_owned())
+    } else {
+        None
+    };
+    let error_message = error
+        .map(ToString::to_string)
+        .or_else(|| events.error_message.clone())
+        .or_else(|| {
+            (events.usage.is_none() && result.is_ok())
+                .then_some("turn.completed did not include token usage".to_owned())
+        });
+    record_codex_call_best_effort(
+        store,
+        CodexExecCallRecord {
+            operation: metadata.operation,
+            activity_event_id: metadata.activity_event_id,
+            model: metadata.model,
+            capture_target: metadata.capture_target,
+            attempt_number: metadata.attempt_number,
+            source_chars: chars_i64(metadata.source_chars),
+            submitted_source_chars: chars_i64(metadata.submitted_source_chars),
+            prompt_chars: chars_i64(prompt_chars),
+            started_at_us,
+            completed_at_us,
+            status,
+            exit_code,
+            thread_id: events.thread_id,
+            usage: events.usage,
+            error_code,
+            error_message,
+            quota_retry_at_us,
+        },
+    )
+    .await;
+    result
+}
+
+async fn record_codex_call_best_effort(store: &ActivityStore, record: CodexExecCallRecord) {
+    if let Err(error) = store.record_codex_exec_call(&record).await {
+        eprintln!("unable to record Codex token usage: {error}");
+    }
+}
+
+fn parse_exec_events(output: &[u8]) -> Result<CodexExecEvents, SummarizationError> {
+    let mut events = CodexExecEvents::default();
+    for line in output.split(|byte| *byte == b'\n') {
+        let line = line.trim_ascii();
+        if line.is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_slice(line)?;
+        match value.get("type").and_then(Value::as_str) {
+            Some("thread.started") => {
+                events.thread_id = value
+                    .get("thread_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
+            }
+            Some("turn.completed") => {
+                if let Some(usage) = value.get("usage") {
+                    events.usage = Some(parse_token_usage(usage)?);
+                }
+            }
+            Some("turn.failed" | "error") => {
+                events.quota_limited |= json_indicates_quota(&value);
+                events.error_code = events.error_code.or_else(|| find_error_code(&value));
+                events.error_message = events
+                    .error_message
+                    .or_else(|| find_named_string(&value, &["message", "detail"]));
+            }
+            _ => {}
+        }
+    }
+    Ok(events)
+}
+
+fn parse_token_usage(value: &Value) -> Result<CodexTokenUsage, SummarizationError> {
+    Ok(CodexTokenUsage {
+        input_tokens: token_field(value, "input_tokens")?,
+        cached_input_tokens: optional_token_field(value, "cached_input_tokens")?,
+        output_tokens: token_field(value, "output_tokens")?,
+        reasoning_output_tokens: optional_token_field(value, "reasoning_output_tokens")?,
+    })
+}
+
+fn token_field(value: &Value, field: &str) -> Result<i64, SummarizationError> {
+    let token = value
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| SummarizationError::InvalidEventStream(format!("missing {field}")))?;
+    i64::try_from(token)
+        .map_err(|_| SummarizationError::InvalidEventStream(format!("{field} is too large")))
+}
+
+fn optional_token_field(value: &Value, field: &str) -> Result<i64, SummarizationError> {
+    match value.get(field) {
+        None => Ok(0),
+        Some(_) => token_field(value, field),
+    }
+}
+
+fn find_error_code(value: &Value) -> Option<String> {
+    let Value::Object(object) = value else {
+        return None;
+    };
+    for key in ["codexErrorInfo", "codex_error_info", "code"] {
+        if let Some(candidate) = object.get(key) {
+            if let Some(value) = candidate.as_str() {
+                return Some(value.to_owned());
+            }
+            if let Some(key) = candidate
+                .as_object()
+                .and_then(|object| object.keys().next())
+            {
+                return Some(key.to_owned());
+            }
+        }
+    }
+    object.values().find_map(find_error_code)
+}
+
+fn find_named_string(value: &Value, names: &[&str]) -> Option<String> {
+    let Value::Object(object) = value else {
+        return None;
+    };
+    for name in names {
+        if let Some(value) = object.get(*name).and_then(Value::as_str) {
+            return Some(value.to_owned());
+        }
+    }
+    object
+        .values()
+        .find_map(|value| find_named_string(value, names))
+}
+
+fn json_indicates_quota(value: &Value) -> bool {
+    match value {
+        Value::String(value) => text_indicates_quota(value),
+        Value::Array(values) => values.iter().any(json_indicates_quota),
+        Value::Object(values) => values
+            .iter()
+            .any(|(key, value)| text_indicates_quota(key) || json_indicates_quota(value)),
+        _ => false,
+    }
+}
+
+fn text_indicates_quota(value: &str) -> bool {
+    let lowercase = value.to_ascii_lowercase();
+    let compact = lowercase
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .collect::<String>();
+    compact.contains("usagelimitexceeded")
+        || lowercase.contains("usage limit")
+        || lowercase.contains("quota exceeded")
+        || lowercase.contains("quota has been exceeded")
+        || value.contains("사용량 한도")
+}
+
+fn read_final_output(path: &Path) -> Result<Vec<u8>, SummarizationError> {
+    if std::fs::metadata(path)?.len() > MAX_FINAL_OUTPUT_BYTES {
+        return Err(SummarizationError::OutputTooLarge);
+    }
+    Ok(std::fs::read(path)?)
+}
+
+fn chars_i64(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn summarization_error_code(error: &SummarizationError) -> &'static str {
+    match error {
+        SummarizationError::QuotaLimited { .. } => "usage_limit_exceeded",
+        SummarizationError::QuotaCircuitOpen { .. } => "quota_circuit_open",
+        SummarizationError::Timeout => "timeout",
+        SummarizationError::CommandFailed(_) => "command_failed",
+        SummarizationError::OutputTooLarge => "output_too_large",
+        SummarizationError::Json(_) | SummarizationError::InvalidEventStream(_) => "invalid_json",
+        SummarizationError::InvalidLines(_) | SummarizationError::InvalidPromptText(_) => {
+            "invalid_output"
+        }
+        SummarizationError::InvalidCurationOutput(_) => "invalid_curation_output",
+        SummarizationError::UnexpectedModel(_) => "unexpected_model",
+        SummarizationError::RuntimeUnavailable(_)
+        | SummarizationError::InvalidWslDistro(_)
+        | SummarizationError::PromptTooLarge(_)
+        | SummarizationError::CurationInputTooLarge(_)
+        | SummarizationError::MissingStdin
+        | SummarizationError::MissingStdout
+        | SummarizationError::MissingStderr
+        | SummarizationError::InvalidRuntimePath
+        | SummarizationError::Io(_)
+        | SummarizationError::Join(_)
+        | SummarizationError::Clock(_)
+        | SummarizationError::UsageStore(_) => "runtime",
+    }
 }
 
 #[derive(Debug)]
@@ -628,7 +1080,13 @@ where
     Ok((retained, exceeded))
 }
 
-fn append_exec_args(command: &mut Command, model: &str, schema: &OsStr, cwd: &OsStr) {
+fn append_exec_args(
+    command: &mut Command,
+    model: &str,
+    schema: &OsStr,
+    final_output: &OsStr,
+    cwd: &OsStr,
+) {
     command
         .arg("exec")
         .args(["--model", model])
@@ -645,8 +1103,11 @@ fn append_exec_args(command: &mut Command, model: &str, schema: &OsStr, cwd: &Os
         .args(["--color", "never"])
         .args(["-c", "tools.web_search=false"])
         .args(["-c", "model_reasoning_effort=\"low\""])
+        .arg("--json")
         .arg("--output-schema")
         .arg(schema)
+        .arg("--output-last-message")
+        .arg(final_output)
         .arg("--cd")
         .arg(cwd)
         .arg("-");
@@ -796,14 +1257,23 @@ fn command_spec(runtime: &CodexRuntimeDescriptor) -> Result<CommandSpec, Summari
 fn runtime_paths(
     spec: &CommandSpec,
     schema: &Path,
+    final_output: &Path,
     cwd: &Path,
-) -> Result<(OsString, OsString), SummarizationError> {
+) -> Result<(OsString, OsString, OsString), SummarizationError> {
     if !spec.wsl_paths {
-        return Ok((schema.as_os_str().to_owned(), cwd.as_os_str().to_owned()));
+        return Ok((
+            schema.as_os_str().to_owned(),
+            final_output.as_os_str().to_owned(),
+            cwd.as_os_str().to_owned(),
+        ));
     }
     #[cfg(windows)]
     {
-        Ok((windows_path_to_wsl(schema)?, windows_path_to_wsl(cwd)?))
+        Ok((
+            windows_path_to_wsl(schema)?,
+            windows_path_to_wsl(final_output)?,
+            windows_path_to_wsl(cwd)?,
+        ))
     }
     #[cfg(not(windows))]
     {
@@ -859,6 +1329,7 @@ fn prompt_error_code(error: &SummarizationError) -> PromptSummaryErrorCode {
         ) => PromptSummaryErrorCode::OutputTooLong(*characters),
         SummarizationError::InvalidPromptText(_)
         | SummarizationError::Json(_)
+        | SummarizationError::InvalidEventStream(_)
         | SummarizationError::OutputTooLarge
         | SummarizationError::CommandFailed(_) => PromptSummaryErrorCode::InvalidOutput,
         _ => PromptSummaryErrorCode::Runtime,
@@ -876,8 +1347,6 @@ pub enum SummarizationError {
     RuntimeUnavailable(String),
     #[error("invalid WSL distribution: {0}")]
     InvalidWslDistro(String),
-    #[error("result exceeds the {MAX_RESULT_BYTES}-byte summary limit: {0}")]
-    ResultTooLarge(usize),
     #[error("prompt exceeds the 8000-character summary input limit: {0}")]
     PromptTooLarge(usize),
     #[error("curation input exceeds the {MAX_CURATION_INPUT_BYTES}-byte limit: {0}")]
@@ -896,12 +1365,18 @@ pub enum SummarizationError {
     InvalidRuntimePath,
     #[error("Codex Spark timed out")]
     Timeout,
+    #[error("Codex Spark quota circuit is open until {retry_at_us}")]
+    QuotaCircuitOpen { retry_at_us: i64 },
+    #[error("Codex Spark usage limit exceeded: {message}")]
+    QuotaLimited { retry_at_us: i64, message: String },
     #[error("Codex Spark output exceeded the bounded buffer")]
     OutputTooLarge,
     #[error("Codex Spark exited unsuccessfully with code {0}")]
     CommandFailed(i32),
     #[error("Codex Spark returned invalid structured JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("Codex Spark returned an invalid JSON event stream: {0}")]
+    InvalidEventStream(String),
     #[error("Codex Spark returned invalid summary lines: {0}")]
     InvalidLines(#[from] akra_store::ResultSummaryValidationError),
     #[error("Codex Spark returned an invalid prompt summary: {0}")]
@@ -910,6 +1385,10 @@ pub enum SummarizationError {
     InvalidCurationOutput(String),
     #[error("summary output reader failed: {0}")]
     Join(#[from] tokio::task::JoinError),
+    #[error("system clock is before the Unix epoch: {0}")]
+    Clock(std::time::SystemTimeError),
+    #[error("unable to access Codex usage telemetry: {0}")]
+    UsageStore(String),
 }
 
 impl SummarizationError {
@@ -918,12 +1397,20 @@ impl SummarizationError {
             self,
             Self::RuntimeUnavailable(_)
                 | Self::InvalidWslDistro(_)
-                | Self::ResultTooLarge(_)
                 | Self::PromptTooLarge(_)
                 | Self::CurationInputTooLarge(_)
                 | Self::UnexpectedModel(_)
                 | Self::InvalidRuntimePath
         )
+    }
+
+    const fn quota_retry_at_us(&self) -> Option<i64> {
+        match self {
+            Self::QuotaCircuitOpen { retry_at_us } | Self::QuotaLimited { retry_at_us, .. } => {
+                Some(*retry_at_us)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -942,9 +1429,11 @@ mod tests {
     use crate::codex_targets::CodexRuntimeDescriptor;
 
     use super::{
-        SUMMARY_CHILD_ENV, SummarizationError, append_exec_args, command_spec, curation_prompt,
-        execute_process, parse_curation_output, parse_prompt_summary_output, parse_summary_output,
-        prompt_error_code, prompt_summary_prompt, summary_prompt, validate_distro,
+        MAX_RESULT_SUMMARY_INPUT_CHARS, SUMMARY_CHILD_ENV, SummarizationError, append_exec_args,
+        bounded_result_source, command_spec, curation_prompt, execute_process,
+        parse_curation_output, parse_exec_events, parse_prompt_summary_output,
+        parse_summary_output, parse_summary_output_with_fallback, prompt_error_code,
+        prompt_summary_prompt, summary_prompt, validate_distro,
     };
 
     fn curation_input() -> akra_store::CurationModelInput {
@@ -982,6 +1471,7 @@ mod tests {
             &mut command,
             akra_store::RESULT_SUMMARY_MODEL,
             Path::new("schema.json").as_os_str(),
+            Path::new("final.json").as_os_str(),
             Path::new("empty").as_os_str(),
         );
         command.env(SUMMARY_CHILD_ENV, "1");
@@ -999,7 +1489,10 @@ mod tests {
             "plugins",
             "multi_agent",
             "tools.web_search=false",
+            "--json",
             "schema.json",
+            "--output-last-message",
+            "final.json",
         ] {
             assert!(debug.contains(expected), "missing {expected}: {debug}");
         }
@@ -1020,6 +1513,52 @@ mod tests {
         let prompt = summary_prompt("verified result", 2);
         assert!(prompt.contains("이전 생성은 출력 검증을 통과하지 못했습니다"));
         assert!(prompt.contains(&akra_store::MAX_RESULT_SUMMARY_CHARS.to_string()));
+    }
+
+    #[test]
+    fn oversized_result_input_keeps_the_head_and_tail_inside_the_exact_budget() {
+        let source = format!("{}{}", "앞".repeat(5_000), "뒤".repeat(5_000));
+        let bounded = bounded_result_source(&source);
+        assert_eq!(bounded.chars().count(), MAX_RESULT_SUMMARY_INPUT_CHARS);
+        assert!(bounded.starts_with("앞앞앞"));
+        assert!(bounded.contains("중간 내용 생략"));
+        assert!(bounded.ends_with("뒤뒤뒤"));
+    }
+
+    #[test]
+    fn json_event_stream_captures_per_call_tokens_and_quota_errors() {
+        let completed = br#"{"type":"thread.started","thread_id":"thread-1"}
+{"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122,"reasoning_output_tokens":7}}
+"#;
+        let events = parse_exec_events(completed).expect("completed stream");
+        assert_eq!(events.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(
+            events.usage,
+            Some(akra_store::CodexTokenUsage {
+                input_tokens: 24_763,
+                cached_input_tokens: 24_448,
+                output_tokens: 122,
+                reasoning_output_tokens: 7,
+            })
+        );
+        assert!(!events.quota_limited);
+
+        let successful_quota_text = br#"{"type":"item.completed","item":{"type":"agent_message","text":"resolved the quota exceeded issue"}}
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":20}}
+"#;
+        let events = parse_exec_events(successful_quota_text).expect("successful stream");
+        assert!(!events.quota_limited);
+
+        let quota = br#"{"type":"error","error":{"message":"Usage limit exceeded","codexErrorInfo":"UsageLimitExceeded"}}
+{"type":"turn.failed"}
+"#;
+        let events = parse_exec_events(quota).expect("quota stream");
+        assert!(events.quota_limited);
+        assert_eq!(events.error_code.as_deref(), Some("UsageLimitExceeded"));
+        assert_eq!(
+            events.error_message.as_deref(),
+            Some("Usage limit exceeded")
+        );
     }
 
     #[test]
@@ -1096,6 +1635,33 @@ mod tests {
                 akra_store::ResultSummaryValidationError::SummaryTooLong(181)
             ))
         ));
+    }
+
+    #[test]
+    fn overlength_result_retries_once_then_compacts_locally_to_180_chars() {
+        let output = serde_json::to_vec(&serde_json::json!({
+            "line1": "가".repeat(90),
+            "line2": "나".repeat(90),
+            "line3": "다".repeat(90),
+        }))
+        .expect("JSON");
+        assert!(matches!(
+            parse_summary_output_with_fallback(&output, 1),
+            Err(SummarizationError::InvalidLines(
+                akra_store::ResultSummaryValidationError::SummaryTooLong(270)
+            ))
+        ));
+
+        let compacted = parse_summary_output_with_fallback(&output, 2).expect("local fallback");
+        assert_eq!(
+            compacted
+                .as_array()
+                .iter()
+                .map(|line| line.chars().count())
+                .sum::<usize>(),
+            akra_store::MAX_RESULT_SUMMARY_CHARS
+        );
+        assert!(compacted.as_array().iter().all(|line| line.ends_with('…')));
     }
 
     #[test]

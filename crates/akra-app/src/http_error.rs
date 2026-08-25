@@ -92,6 +92,7 @@ impl ApiError {
             }
             akra_store::StoreError::Sqlite(_)
             | akra_store::StoreError::Invariant(_)
+            | akra_store::StoreError::InvalidCodexExecCall(_)
             | akra_store::StoreError::InvalidResultSummaryLease
             | akra_store::StoreError::InvalidResultSummary(_)
             | akra_store::StoreError::InvalidPromptSummaryLease

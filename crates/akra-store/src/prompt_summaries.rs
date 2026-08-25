@@ -614,6 +614,38 @@ impl ActivityStore {
         })
     }
 
+    /// Returns an in-flight prompt summary to the queue without consuming a
+    /// model attempt when an account-level quota circuit is open.
+    pub async fn defer_prompt_summary(
+        &self,
+        claim: &PromptSummaryClaim,
+        retry_at_us: i64,
+        code: PromptSummaryErrorCode,
+        deferred_at_us: i64,
+    ) -> Result<PromptSummaryFailureDisposition, StoreError> {
+        let updated = sqlx::query(
+            "UPDATE activity_prompt_summaries
+             SET state = 'retry_wait', attempt_count = MAX(attempt_count - 1, 0),
+                 lease_token = NULL, lease_expires_at_us = NULL,
+                 next_attempt_at_us = ?, last_error_code = ?, updated_at_us = ?
+             WHERE activity_event_id = ? AND generation = ?
+               AND state = 'running' AND lease_token = ?",
+        )
+        .bind(retry_at_us)
+        .bind(code.storage_code())
+        .bind(deferred_at_us)
+        .bind(claim.activity_event_id)
+        .bind(claim.generation)
+        .bind(&claim.lease_token)
+        .execute(&self.pool)
+        .await?;
+        Ok(if updated.rows_affected() == 1 {
+            PromptSummaryFailureDisposition::RetryScheduled
+        } else {
+            PromptSummaryFailureDisposition::Stale
+        })
+    }
+
     pub async fn prompt_summary(
         &self,
         activity_event_id: i64,

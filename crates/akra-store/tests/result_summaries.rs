@@ -353,6 +353,42 @@ async fn terminal_failure_keeps_a_bounded_manual_regeneration_window() {
 }
 
 #[tokio::test]
+async fn quota_deferral_does_not_consume_a_result_summary_attempt() {
+    let store = migrated_store().await;
+    record(&store, "quota-defer", ActivityKind::User).await;
+    store
+        .capture_result(result("quota-defer", "result awaiting quota", 10))
+        .await
+        .expect("capture");
+    let first = store
+        .claim_result_summary(10, 10)
+        .await
+        .expect("claim")
+        .expect("first claim");
+    assert_eq!(first.attempt_number(), 1);
+    assert_eq!(
+        store
+            .defer_result_summary(&first, "usage limit exceeded", 100, 11)
+            .await
+            .expect("defer"),
+        ResultSummaryFailureDisposition::RetryScheduled
+    );
+    assert!(
+        store
+            .claim_result_summary(99, 10)
+            .await
+            .expect("early claim")
+            .is_none()
+    );
+    let retried = store
+        .claim_result_summary(100, 10)
+        .await
+        .expect("claim")
+        .expect("deferred claim");
+    assert_eq!(retried.attempt_number(), 1);
+}
+
+#[tokio::test]
 async fn manual_regeneration_refuses_missing_or_expired_result_source() {
     let store = migrated_store().await;
     let missing_id = record(&store, "missing-regeneration", ActivityKind::User).await;
