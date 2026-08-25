@@ -233,14 +233,48 @@ test("a period changes nodes and navigation counts together, then can hide empty
     position_y: 3_120,
   });
 
+  const filteredDrag = page.getByTestId("activity-node-2").locator("..");
+  const filteredDragBox = await filteredDrag.boundingBox();
+  expect(filteredDragBox).not.toBeNull();
+  if (!filteredDragBox) throw new Error("Filtered activity card must be measurable");
+  const filteredPositionPatch = page.waitForRequest((request) =>
+    request.method() === "PATCH"
+      && new URL(request.url()).pathname === "/v1/canvas/12",
+  );
+  await page.mouse.move(
+    filteredDragBox.x + filteredDragBox.width / 2,
+    filteredDragBox.y + filteredDragBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    filteredDragBox.x + filteredDragBox.width / 2 + 80,
+    filteredDragBox.y + filteredDragBox.height / 2 + 60,
+    { steps: 5 },
+  );
+  await page.mouse.up();
+  const filteredPatch = await filteredPositionPatch;
+  const filteredPosition = filteredPatch.postDataJSON() as {
+    position_x: number;
+    position_y: number;
+  };
+  expect(filteredPosition.position_x).toBeGreaterThan(4_080);
+  expect(filteredPosition.position_y).toBeGreaterThan(3_120);
+  expect(api.state.canvasNodes[1]).toMatchObject(filteredPosition);
+
   await page.getByLabel("기간 필터").selectOption("all");
   await expect.poll(async () => {
     const [first, second] = await Promise.all([
       flowNodePosition(page, 1),
       flowNodePosition(page, 2),
     ]);
-    return { x: second.x - first.x, y: second.y - first.y };
-  }).toEqual({ x: 4_000, y: 3_000 });
+    return {
+      x: Number((second.x - first.x).toFixed(2)),
+      y: Number((second.y - first.y).toFixed(2)),
+    };
+  }).toEqual({
+    x: Number((filteredPosition.position_x - api.state.canvasNodes[0]!.position_x).toFixed(2)),
+    y: Number((filteredPosition.position_y - api.state.canvasNodes[0]!.position_y).toFixed(2)),
+  });
 
   await page.getByLabel("기간 필터").selectOption("day");
   await expect(page.getByTestId("activity-node-4")).toBeVisible();

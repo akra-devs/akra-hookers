@@ -2,7 +2,11 @@ import { MarkerType } from "@xyflow/react";
 import { describe, expect, it } from "vitest";
 
 import type { ActivitySummary } from "./api";
-import { toCanvasNodes, toVisibleEdges } from "./canvas";
+import {
+  toCanvasNodes,
+  toPersistedCanvasPosition,
+  toVisibleEdges,
+} from "./canvas";
 
 function activity(
   id: number,
@@ -116,6 +120,25 @@ describe("toCanvasNodes", () => {
       { x: 736, y: 504 },
     ]);
     expect(canvasNodes[2]).toMatchObject({ position_x: 4_096, position_y: 2_200 });
+  });
+
+  it("translates a filtered drag back into durable canvas coordinates", () => {
+    const persisted = { id: 12, activity_event_id: 2, position_x: 4_096, position_y: 2_200 };
+    const displayed = toCanvasNodes(
+      [activity(1), activity(2)],
+      [
+        { id: 11, activity_event_id: 1, position_x: 64, position_y: 64 },
+        persisted,
+      ],
+      "compact-filtered",
+    )[1];
+
+    expect(displayed?.position).toEqual({ x: 400, y: 284 });
+    expect(toPersistedCanvasPosition(
+      { x: 480, y: 344 },
+      persisted,
+      displayed,
+    )).toEqual({ x: 4_176, y: 2_260 });
   });
 
   it("does not recreate an activity whose removable canvas node is absent", () => {
