@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use sqlx::{Sqlite, Transaction};
 
 use crate::{
@@ -10,42 +12,94 @@ pub(crate) const CANVAS_ORIGIN_Y: f64 = 64.0;
 const CANVAS_HORIZONTAL_STEP: f64 = 336.0;
 const CANVAS_VERTICAL_STEP: f64 = 220.0;
 
-pub(crate) fn next_compact_canvas_position(occupied: &[(f64, f64)]) -> (f64, f64) {
-    let mut grid_x = 0_i64;
-    let mut grid_y = 0_i64;
-    let mut direction_x = 1_i64;
-    let mut direction_y = 0_i64;
-    let mut segment_length = 1_usize;
-    let mut segment_steps = 0_usize;
-    let mut completed_segments = 0_usize;
+pub(crate) struct CompactCanvasAllocator {
+    blocked: HashSet<(i64, i64)>,
+    grid_x: i64,
+    grid_y: i64,
+    direction_x: i64,
+    direction_y: i64,
+    segment_length: usize,
+    segment_steps: usize,
+    completed_segments: usize,
+}
 
-    loop {
-        let candidate = (
-            CANVAS_ORIGIN_X + grid_x as f64 * CANVAS_HORIZONTAL_STEP,
-            CANVAS_ORIGIN_Y + grid_y as f64 * CANVAS_VERTICAL_STEP,
-        );
-        let is_clear = occupied.iter().all(|position| {
-            (position.0 - candidate.0).abs() >= CANVAS_HORIZONTAL_STEP
-                || (position.1 - candidate.1).abs() >= CANVAS_VERTICAL_STEP
-        });
-        if is_clear {
-            return candidate;
+impl CompactCanvasAllocator {
+    pub(crate) fn new(occupied: &[(f64, f64)]) -> Self {
+        let mut allocator = Self {
+            blocked: HashSet::with_capacity(occupied.len().saturating_mul(4)),
+            grid_x: 0,
+            grid_y: 0,
+            direction_x: 1,
+            direction_y: 0,
+            segment_length: 1,
+            segment_steps: 0,
+            completed_segments: 0,
+        };
+        for &(position_x, position_y) in occupied {
+            allocator.block_position(position_x, position_y);
         }
+        allocator
+    }
 
-        grid_x += direction_x;
-        grid_y += direction_y;
-        segment_steps += 1;
-        if segment_steps == segment_length {
-            segment_steps = 0;
-            let previous_x = direction_x;
-            direction_x = -direction_y;
-            direction_y = previous_x;
-            completed_segments += 1;
-            if completed_segments.is_multiple_of(2) {
-                segment_length += 1;
+    fn block_position(&mut self, position_x: f64, position_y: f64) {
+        let Some(x_indices) =
+            blocking_grid_indices(position_x, CANVAS_ORIGIN_X, CANVAS_HORIZONTAL_STEP)
+        else {
+            return;
+        };
+        let Some(y_indices) =
+            blocking_grid_indices(position_y, CANVAS_ORIGIN_Y, CANVAS_VERTICAL_STEP)
+        else {
+            return;
+        };
+        for grid_x in x_indices.into_iter().flatten() {
+            for grid_y in y_indices.into_iter().flatten() {
+                self.blocked.insert((grid_x, grid_y));
             }
         }
     }
+
+    pub(crate) fn next_position(&mut self) -> (f64, f64) {
+        loop {
+            let candidate_grid = (self.grid_x, self.grid_y);
+            self.advance();
+            if self.blocked.insert(candidate_grid) {
+                return (
+                    CANVAS_ORIGIN_X + candidate_grid.0 as f64 * CANVAS_HORIZONTAL_STEP,
+                    CANVAS_ORIGIN_Y + candidate_grid.1 as f64 * CANVAS_VERTICAL_STEP,
+                );
+            }
+        }
+    }
+
+    fn advance(&mut self) {
+        self.grid_x += self.direction_x;
+        self.grid_y += self.direction_y;
+        self.segment_steps += 1;
+        if self.segment_steps == self.segment_length {
+            self.segment_steps = 0;
+            let previous_x = self.direction_x;
+            self.direction_x = -self.direction_y;
+            self.direction_y = previous_x;
+            self.completed_segments += 1;
+            if self.completed_segments.is_multiple_of(2) {
+                self.segment_length += 1;
+            }
+        }
+    }
+}
+
+fn blocking_grid_indices(position: f64, origin: f64, step: f64) -> Option<[Option<i64>; 2]> {
+    if !position.is_finite() {
+        return None;
+    }
+    let grid_position = (position - origin) / step;
+    if grid_position < i64::MIN as f64 || grid_position > i64::MAX as f64 {
+        return None;
+    }
+    let lower = grid_position.floor() as i64;
+    let upper = grid_position.ceil() as i64;
+    Some([Some(lower), (upper != lower).then_some(upper)])
 }
 
 async fn active_canvas_positions(
@@ -101,7 +155,7 @@ pub(crate) async fn create_canvas_node_in(
 ) -> Result<i64, StoreError> {
     ensure_activity_exists(transaction, activity_event_id).await?;
     let occupied = active_canvas_positions(transaction).await?;
-    let (position_x, position_y) = next_compact_canvas_position(&occupied);
+    let (position_x, position_y) = CompactCanvasAllocator::new(&occupied).next_position();
     let node_id =
         insert_canvas_node_at(transaction, activity_event_id, position_x, position_y).await?;
     bump_canvas_revision(transaction).await?;
@@ -316,4 +370,25 @@ pub(crate) async fn bump_canvas_revision(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CompactCanvasAllocator;
+
+    #[test]
+    fn compact_allocator_assigns_large_layout_in_one_spiral_pass() {
+        let mut allocator = CompactCanvasAllocator::new(&[]);
+        let positions = (0..10_000)
+            .map(|_| {
+                let (position_x, position_y) = allocator.next_position();
+                (position_x.to_bits(), position_y.to_bits())
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(positions.len(), 10_000);
+        assert!(positions.contains(&(64.0_f64.to_bits(), 64.0_f64.to_bits())));
+        assert!(positions.contains(&(400.0_f64.to_bits(), 64.0_f64.to_bits())));
+        assert!(positions.contains(&(400.0_f64.to_bits(), 284.0_f64.to_bits())));
+    }
 }
