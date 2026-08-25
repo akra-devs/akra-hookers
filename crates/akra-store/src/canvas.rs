@@ -5,6 +5,109 @@ use crate::{
     work_curation::soft_delete_activity_in,
 };
 
+pub(crate) const CANVAS_ORIGIN_X: f64 = 64.0;
+pub(crate) const CANVAS_ORIGIN_Y: f64 = 64.0;
+const CANVAS_HORIZONTAL_STEP: f64 = 336.0;
+const CANVAS_VERTICAL_STEP: f64 = 220.0;
+
+pub(crate) fn next_compact_canvas_position(occupied: &[(f64, f64)]) -> (f64, f64) {
+    let mut grid_x = 0_i64;
+    let mut grid_y = 0_i64;
+    let mut direction_x = 1_i64;
+    let mut direction_y = 0_i64;
+    let mut segment_length = 1_usize;
+    let mut segment_steps = 0_usize;
+    let mut completed_segments = 0_usize;
+
+    loop {
+        let candidate = (
+            CANVAS_ORIGIN_X + grid_x as f64 * CANVAS_HORIZONTAL_STEP,
+            CANVAS_ORIGIN_Y + grid_y as f64 * CANVAS_VERTICAL_STEP,
+        );
+        let is_clear = occupied.iter().all(|position| {
+            (position.0 - candidate.0).abs() >= CANVAS_HORIZONTAL_STEP
+                || (position.1 - candidate.1).abs() >= CANVAS_VERTICAL_STEP
+        });
+        if is_clear {
+            return candidate;
+        }
+
+        grid_x += direction_x;
+        grid_y += direction_y;
+        segment_steps += 1;
+        if segment_steps == segment_length {
+            segment_steps = 0;
+            let previous_x = direction_x;
+            direction_x = -direction_y;
+            direction_y = previous_x;
+            completed_segments += 1;
+            if completed_segments.is_multiple_of(2) {
+                segment_length += 1;
+            }
+        }
+    }
+}
+
+async fn active_canvas_positions(
+    transaction: &mut Transaction<'_, Sqlite>,
+) -> Result<Vec<(f64, f64)>, StoreError> {
+    Ok(sqlx::query_as(
+        "SELECT canvas_nodes.position_x, canvas_nodes.position_y
+         FROM canvas_nodes
+         JOIN activity_events ON activity_events.id = canvas_nodes.activity_event_id
+         WHERE canvas_nodes.deleted_at_us IS NULL
+           AND activity_events.deleted_at_us IS NULL",
+    )
+    .fetch_all(&mut **transaction)
+    .await?)
+}
+
+async fn ensure_activity_exists(
+    transaction: &mut Transaction<'_, Sqlite>,
+    activity_event_id: i64,
+) -> Result<(), StoreError> {
+    let activity_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM activity_events WHERE id = ? AND deleted_at_us IS NULL",
+    )
+    .bind(activity_event_id)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if activity_exists == 0 {
+        return Err(StoreError::ActivityNotFound(activity_event_id));
+    }
+    Ok(())
+}
+
+async fn insert_canvas_node_at(
+    transaction: &mut Transaction<'_, Sqlite>,
+    activity_event_id: i64,
+    position_x: f64,
+    position_y: f64,
+) -> Result<i64, StoreError> {
+    let result = sqlx::query(
+        "INSERT INTO canvas_nodes (activity_event_id, position_x, position_y) VALUES (?, ?, ?)",
+    )
+    .bind(activity_event_id)
+    .bind(position_x)
+    .bind(position_y)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.last_insert_rowid())
+}
+
+pub(crate) async fn create_canvas_node_in(
+    transaction: &mut Transaction<'_, Sqlite>,
+    activity_event_id: i64,
+) -> Result<i64, StoreError> {
+    ensure_activity_exists(transaction, activity_event_id).await?;
+    let occupied = active_canvas_positions(transaction).await?;
+    let (position_x, position_y) = next_compact_canvas_position(&occupied);
+    let node_id =
+        insert_canvas_node_at(transaction, activity_event_id, position_x, position_y).await?;
+    bump_canvas_revision(transaction).await?;
+    Ok(node_id)
+}
+
 impl ActivityStore {
     pub async fn canvas_nodes(&self) -> Result<Vec<CanvasNodeSummary>, StoreError> {
         Ok(sqlx::query_as::<_, (i64, i64, f64, f64)>(
@@ -31,8 +134,10 @@ impl ActivityStore {
     }
 
     pub async fn create_canvas_node(&self, activity_event_id: i64) -> Result<i64, StoreError> {
-        self.create_canvas_node_at(activity_event_id, 64.0, 64.0)
-            .await
+        let mut transaction = self.pool.begin().await?;
+        let node_id = create_canvas_node_in(&mut transaction, activity_event_id).await?;
+        transaction.commit().await?;
+        Ok(node_id)
     }
 
     pub async fn create_canvas_node_at(
@@ -42,26 +147,13 @@ impl ActivityStore {
         position_y: f64,
     ) -> Result<i64, StoreError> {
         let mut transaction = self.pool.begin().await?;
-        let activity_exists: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM activity_events WHERE id = ? AND deleted_at_us IS NULL",
-        )
-        .bind(activity_event_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if activity_exists == 0 {
-            return Err(StoreError::ActivityNotFound(activity_event_id));
-        }
-        let result = sqlx::query(
-            "INSERT INTO canvas_nodes (activity_event_id, position_x, position_y) VALUES (?, ?, ?)",
-        )
-        .bind(activity_event_id)
-        .bind(position_x)
-        .bind(position_y)
-        .execute(&mut *transaction)
-        .await?;
+        ensure_activity_exists(&mut transaction, activity_event_id).await?;
+        let node_id =
+            insert_canvas_node_at(&mut transaction, activity_event_id, position_x, position_y)
+                .await?;
         bump_canvas_revision(&mut transaction).await?;
         transaction.commit().await?;
-        Ok(result.last_insert_rowid())
+        Ok(node_id)
     }
 
     pub async fn canvas_position(

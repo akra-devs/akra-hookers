@@ -70,6 +70,20 @@ async fn activities_scopes_omit_detail_metadata_and_keep_global_numbering() {
     assert_position(project, first, 2, 3);
     assert_position(project, second, 1, 3);
     assert_position(inbox, legacy, 3, 3);
+    assert!(find(all, second)["previous_conversation_activity_id"].is_null());
+    assert_eq!(
+        find(all, first)["previous_conversation_activity_id"],
+        second
+    );
+    assert_eq!(
+        find(all, legacy)["previous_conversation_activity_id"],
+        first
+    );
+    assert_eq!(
+        find(inbox, legacy)["previous_conversation_activity_id"],
+        first,
+        "scope filtering must not rewrite the conversation predecessor"
+    );
     assert_eq!(find(all, first)["time"]["provenance"], "captured");
     assert_eq!(
         find(all, first)["time"]["value"],
@@ -81,7 +95,7 @@ async fn activities_scopes_omit_detail_metadata_and_keep_global_numbering() {
     assert!(find(all, legacy)["project"].is_null());
     for activity in all {
         let object = activity.as_object().expect("summary");
-        assert_eq!(object.len(), 10);
+        assert_eq!(object.len(), 11);
         assert_eq!(object["activity_kind"], "user");
         assert_eq!(object["result_summary_status"], "unavailable");
         assert_eq!(object["prompt_summary"]["status"], "ready");

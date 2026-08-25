@@ -25,6 +25,31 @@ async fn duplicate_ingress_creates_one_immutable_activity() {
 }
 
 #[tokio::test]
+async fn new_activities_receive_compact_non_overlapping_canvas_positions() {
+    let store = ActivityStore::in_memory().await.expect("database opens");
+    store.migrate().await.expect("migrations apply");
+    let first = record(&store, "layout-session", "turn-1", "first")
+        .await
+        .expect("first event");
+    let second = record(&store, "layout-session", "turn-2", "second")
+        .await
+        .expect("second event");
+    let third = record(&store, "layout-session", "turn-3", "third")
+        .await
+        .expect("third event");
+
+    let positions = store
+        .canvas_nodes()
+        .await
+        .expect("canvas nodes")
+        .into_iter()
+        .filter(|node| [first, second, third].contains(&node.activity_event_id))
+        .map(|node| (node.position_x, node.position_y))
+        .collect::<Vec<_>>();
+    assert_eq!(positions, vec![(64.0, 64.0), (400.0, 64.0), (400.0, 284.0)]);
+}
+
+#[tokio::test]
 async fn conflicting_dedupe_insert_rolls_back_the_entire_record() {
     let directory = TempDir::new().expect("database directory");
     let database = directory.path().join("store.sqlite");

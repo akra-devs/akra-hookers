@@ -282,11 +282,7 @@ impl ActivityStore {
             .execute(&mut *transaction)
             .await?;
         }
-        sqlx::query("INSERT INTO canvas_nodes (activity_event_id) VALUES (?)")
-            .bind(id)
-            .execute(&mut *transaction)
-            .await?;
-        crate::canvas::bump_canvas_revision(&mut transaction).await?;
+        crate::canvas::create_canvas_node_in(&mut transaction, id).await?;
         transaction.commit().await?;
         Ok(id)
     }

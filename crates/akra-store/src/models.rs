@@ -9,6 +9,7 @@ pub struct ActivitySummary {
     pub prompt: String,
     pub project: Option<ActivityProjectSummary>,
     pub time: ActivityTimeSummary,
+    pub previous_conversation_activity_id: Option<i64>,
     pub conversation_index: i64,
     pub conversation_total: i64,
     pub result_summary_status: ResultSummaryStatus,

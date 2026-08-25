@@ -94,7 +94,7 @@ export function ActivityCanvas({
     .filter((edge) => !hiddenEdgeIds.includes(edge.id))
     .map((edge) => ({
       ...edge,
-      selected: edge.id === selectedEdgeId,
+      selected: edge.selectable !== false && edge.id === selectedEdgeId,
     }));
   useEffect(() => {
     setHiddenEdgeIds((current) => current.filter(
@@ -181,6 +181,7 @@ export function ActivityCanvas({
     setDeleteQueue((current) => current.slice(1));
   }, [deleteNode, deleteQueue]);
   const removeEdge = useCallback((edge: Edge) => {
+    if (edge.deletable === false) return;
     const edgeId = Number(edge.id.slice("edge-".length));
     if (!client || !Number.isInteger(edgeId) || pendingEdgeIds.current.has(edge.id)) return;
 
@@ -309,7 +310,9 @@ export function ActivityCanvas({
             });
         }}
         onNodeClick={(_, node) => openNode(node.data.activityId)}
-        onEdgeClick={(_, edge) => setSelectedEdgeId(edge.id)}
+        onEdgeClick={(_, edge) => {
+          if (edge.selectable !== false) setSelectedEdgeId(edge.id);
+        }}
         onEdgeDoubleClick={(event, edge) => {
           event.stopPropagation();
           removeEdge(edge);

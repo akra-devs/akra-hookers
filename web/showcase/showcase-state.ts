@@ -262,6 +262,9 @@ export function createShowcaseState(nowMs = Date.now()): FixtureState {
       prompt: seed.rawPrompt,
       project,
       time: activityTime(seed.capturedAtMs),
+      previous_conversation_activity_id: conversation
+        .slice(0, conversation.findIndex(({ id }) => id === seed.id))
+        .at(-1)?.id ?? null,
       conversation_index: conversation.findIndex(({ id }) => id === seed.id) + 1,
       conversation_total: conversation.length,
       result_summary_status: seed.result.status,

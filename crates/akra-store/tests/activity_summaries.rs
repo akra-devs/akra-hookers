@@ -1,6 +1,6 @@
 use akra_store::{
-    ActivityAssignmentCommand, ActivityScope, ActivityTimeProvenance, AssignmentDestination,
-    FutureRouteAction, OriginRoutingCommand,
+    ActivityAssignmentCommand, ActivityOrder, ActivityScope, ActivityTimeProvenance,
+    AssignmentDestination, FutureRouteAction, OriginRoutingCommand,
 };
 
 #[path = "support/activity_summaries.rs"]
@@ -12,6 +12,33 @@ use support::{
     assignment_count, effective_project, harness, immutable_snapshot, origin_and_project, record,
     working_directory,
 };
+
+#[tokio::test]
+async fn chronological_predecessors_never_cross_conversations() {
+    let (directory, store, _) = harness().await;
+    let cwd = working_directory(&directory, "sequence-partitions");
+    let first_a = record(&store, &cwd, "conversation-a", "first a", 1).await;
+    let first_b = record(&store, &cwd, "conversation-b", "first b", 2).await;
+    let second_a = record(&store, &cwd, "conversation-a", "second a", 3).await;
+
+    let summaries = store
+        .activity_summaries_indexed_page(ActivityScope::All, None, i64::MAX, ActivityOrder::Oldest)
+        .await
+        .expect("summaries");
+
+    assert_eq!(
+        find(&summaries, first_a).previous_conversation_activity_id,
+        None
+    );
+    assert_eq!(
+        find(&summaries, first_b).previous_conversation_activity_id,
+        None
+    );
+    assert_eq!(
+        find(&summaries, second_a).previous_conversation_activity_id,
+        Some(first_a)
+    );
+}
 
 #[tokio::test]
 async fn scopes_use_effective_projects_and_keep_global_conversation_numbers() {
@@ -61,10 +88,41 @@ async fn scopes_use_effective_projects_and_keep_global_conversation_numbers() {
         .activity_summaries(ActivityScope::Inbox)
         .await
         .expect("Inbox");
+    let indexed = store
+        .activity_summaries_indexed_page(ActivityScope::All, None, i64::MAX, ActivityOrder::Newest)
+        .await
+        .expect("indexed summaries");
+    let indexed_project = store
+        .activity_summaries_indexed_page(
+            ActivityScope::Project(target),
+            None,
+            i64::MAX,
+            ActivityOrder::Newest,
+        )
+        .await
+        .expect("indexed project summaries");
 
     assert_eq!(
         all.iter().map(|summary| summary.id).collect::<Vec<_>>(),
         vec![first, second, third]
+    );
+    assert_eq!(find(&all, first).previous_conversation_activity_id, None);
+    assert_eq!(
+        find(&all, second).previous_conversation_activity_id,
+        Some(first)
+    );
+    assert_eq!(
+        find(&all, third).previous_conversation_activity_id,
+        Some(second)
+    );
+    assert_eq!(
+        find(&indexed, third).previous_conversation_activity_id,
+        Some(second)
+    );
+    assert_eq!(
+        find(&indexed_project, third).previous_conversation_activity_id,
+        Some(second),
+        "the canonical predecessor is retained even when it is outside the current scope"
     );
     assert_eq!(
         project
@@ -109,6 +167,7 @@ async fn scopes_use_effective_projects_and_keep_global_conversation_numbers() {
             "conversation_index",
             "conversation_total",
             "id",
+            "previous_conversation_activity_id",
             "project",
             "prompt",
             "prompt_summary",
