@@ -1248,7 +1248,7 @@ pub(crate) async fn soft_delete_activity_in(
          SET state = 'skipped', source_text = NULL,
              summary_line_1 = NULL, summary_line_2 = NULL, summary_line_3 = NULL,
              lease_token = NULL, lease_expires_at_us = NULL,
-             last_error = 'activity soft-deleted before summarization',
+             last_error = 'activity soft-deleted before summarization', last_error_code = NULL,
              updated_at_us = ?, completed_at_us = ?
          WHERE activity_event_id = ?
            AND state IN ('pending', 'running', 'retry_wait')",

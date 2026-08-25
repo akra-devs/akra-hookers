@@ -111,19 +111,16 @@ async fn result_can_arrive_before_or_after_its_user_prompt() {
 }
 
 #[tokio::test]
-async fn an_unlinked_result_is_scrubbed_after_the_bounded_retention_window() {
+async fn retention_sweep_scrubs_an_unlinked_result_without_claiming_model_work() {
     let store = migrated_store().await;
     store
         .capture_result(result("orphan", "unmatched result", 1))
         .await
         .expect("capture");
-    assert!(
-        store
-            .claim_result_summary(MAX_RESULT_SOURCE_RETENTION_US + 2, 50)
-            .await
-            .expect("sweep")
-            .is_none()
-    );
+    store
+        .sweep_result_summary_retention(MAX_RESULT_SOURCE_RETENTION_US + 2)
+        .await
+        .expect("sweep");
 
     let activity_id = record(&store, "orphan", ActivityKind::User).await;
     let summary = store
@@ -256,7 +253,13 @@ async fn terminal_failure_keeps_a_bounded_manual_regeneration_window() {
     assert_eq!(first.attempt_number(), 1);
     assert_eq!(
         store
-            .fail_result_summary(&first, "temporary\nerror", Some(30), 20)
+            .fail_result_summary(
+                &first,
+                "temporary\nerror",
+                akra_store::ResultSummaryErrorCode::InvalidOutput,
+                Some(30),
+                20,
+            )
             .await
             .expect("retry"),
         ResultSummaryFailureDisposition::RetryScheduled
@@ -275,8 +278,18 @@ async fn terminal_failure_keeps_a_bounded_manual_regeneration_window() {
         .expect("second claim");
     assert_eq!(second.attempt_number(), 2);
     assert_eq!(
+        second.previous_failure_code(),
+        Some(akra_store::ResultSummaryErrorCode::InvalidOutput)
+    );
+    assert_eq!(
         store
-            .fail_result_summary(&second, "temporary again", Some(50), 31)
+            .fail_result_summary(
+                &second,
+                "temporary again",
+                akra_store::ResultSummaryErrorCode::InvalidOutput,
+                Some(50),
+                31,
+            )
             .await
             .expect("second retry"),
         ResultSummaryFailureDisposition::RetryScheduled
@@ -288,8 +301,18 @@ async fn terminal_failure_keeps_a_bounded_manual_regeneration_window() {
         .expect("third claim");
     assert_eq!(third.attempt_number(), 3);
     assert_eq!(
+        third.previous_failure_code(),
+        Some(akra_store::ResultSummaryErrorCode::InvalidOutput)
+    );
+    assert_eq!(
         store
-            .fail_result_summary(&third, "permanent error", Some(70), 51)
+            .fail_result_summary(
+                &third,
+                "permanent error",
+                akra_store::ResultSummaryErrorCode::InvalidOutput,
+                Some(70),
+                51,
+            )
             .await
             .expect("bounded terminal failure"),
         ResultSummaryFailureDisposition::Failed,
@@ -368,7 +391,13 @@ async fn quota_deferral_does_not_consume_a_result_summary_attempt() {
     assert_eq!(first.attempt_number(), 1);
     assert_eq!(
         store
-            .defer_result_summary(&first, "usage limit exceeded", 100, 11)
+            .defer_result_summary(
+                &first,
+                "usage limit exceeded",
+                akra_store::ResultSummaryErrorCode::QuotaLimited,
+                100,
+                11,
+            )
             .await
             .expect("defer"),
         ResultSummaryFailureDisposition::RetryScheduled
@@ -386,6 +415,10 @@ async fn quota_deferral_does_not_consume_a_result_summary_attempt() {
         .expect("claim")
         .expect("deferred claim");
     assert_eq!(retried.attempt_number(), 1);
+    assert_eq!(
+        retried.previous_failure_code(),
+        Some(akra_store::ResultSummaryErrorCode::QuotaLimited)
+    );
 }
 
 #[tokio::test]
@@ -411,7 +444,13 @@ async fn manual_regeneration_refuses_missing_or_expired_result_source() {
         .expect("claim")
         .expect("summary claim");
     store
-        .fail_result_summary(&claim, "terminal", None, 2)
+        .fail_result_summary(
+            &claim,
+            "terminal",
+            akra_store::ResultSummaryErrorCode::Runtime,
+            None,
+            2,
+        )
         .await
         .expect("terminal failure");
     assert_eq!(
@@ -460,6 +499,10 @@ async fn an_expired_lease_is_reclaimed_and_the_old_worker_becomes_stale() {
         .expect("claim at expiry")
         .expect("reclaimed claim");
     assert_eq!(reclaimed.attempt_number(), 2);
+    assert_eq!(
+        reclaimed.previous_failure_code(),
+        Some(akra_store::ResultSummaryErrorCode::Runtime)
+    );
     assert!(
         !store
             .complete_result_summary(&old_claim, &lines("old 1", "old 2", "old 3"), 21)

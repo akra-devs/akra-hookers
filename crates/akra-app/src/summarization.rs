@@ -13,7 +13,7 @@ use akra_store::{
     CodexTokenUsage, CurationModelInput, CurationProposalGroup, MAX_PROMPT_SUMMARY_CHARS,
     MAX_PROMPT_SUMMARY_INPUT_CHARS, MAX_RESULT_SUMMARY_CHARS, MAX_WORK_TITLE_CHARS,
     PROMPT_SUMMARY_MODEL, PromptSummaryClaim, PromptSummaryErrorCode, PromptSummaryText,
-    RESULT_SUMMARY_MODEL, ResultSummaryClaim, ResultSummaryLines,
+    RESULT_SUMMARY_MODEL, ResultSummaryClaim, ResultSummaryErrorCode, ResultSummaryLines,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -196,7 +196,7 @@ impl CodexExecSummarizer {
                 source_chars,
                 submitted_source_chars: source.chars().count(),
             },
-            |output| parse_summary_output_with_fallback(output, claim.attempt_number()),
+            |output| parse_summary_output_with_fallback(output, claim.previous_failure_code()),
         )
         .await
     }
@@ -394,21 +394,17 @@ fn parse_summary_output(output: &[u8]) -> Result<ResultSummaryLines, Summarizati
 
 fn parse_summary_output_with_fallback(
     output: &[u8],
-    attempt_number: i64,
+    previous_failure_code: Option<ResultSummaryErrorCode>,
 ) -> Result<ResultSummaryLines, SummarizationError> {
-    if attempt_number < 2 {
+    if previous_failure_code != Some(ResultSummaryErrorCode::OutputTooLong) {
         return parse_summary_output(output);
     }
     let parsed: StructuredSummary = serde_json::from_slice(output)?;
     match ResultSummaryLines::try_new(&parsed.line1, &parsed.line2, &parsed.line3) {
         Ok(lines) => Ok(lines),
-        Err(akra_store::ResultSummaryValidationError::SummaryTooLong(_)) if attempt_number >= 2 => {
-            Ok(ResultSummaryLines::compact(
-                parsed.line1,
-                parsed.line2,
-                parsed.line3,
-            )?)
-        }
+        Err(akra_store::ResultSummaryValidationError::SummaryTooLong(_)) => Ok(
+            ResultSummaryLines::compact(parsed.line1, parsed.line2, parsed.line3)?,
+        ),
         Err(error) => Err(error.into()),
     }
 }
@@ -554,6 +550,7 @@ async fn process_one_result(
         .await?
         .is_some()
     {
+        store.sweep_result_summary_retention(claim_at_us).await?;
         return Ok(false);
     }
     let Some(claim) = store
@@ -572,7 +569,13 @@ async fn process_one_result(
             let failed_at_us = now_us()?;
             if let Some(retry_at_us) = error.quota_retry_at_us() {
                 store
-                    .defer_result_summary(&claim, &error.to_string(), retry_at_us, failed_at_us)
+                    .defer_result_summary(
+                        &claim,
+                        &error.to_string(),
+                        ResultSummaryErrorCode::QuotaLimited,
+                        retry_at_us,
+                        failed_at_us,
+                    )
                     .await?;
             } else {
                 let retry_at_us = if error.is_retryable() {
@@ -581,7 +584,13 @@ async fn process_one_result(
                     None
                 };
                 store
-                    .fail_result_summary(&claim, &error.to_string(), retry_at_us, failed_at_us)
+                    .fail_result_summary(
+                        &claim,
+                        &error.to_string(),
+                        result_error_code(&error),
+                        retry_at_us,
+                        failed_at_us,
+                    )
                     .await?;
             }
         }
@@ -1336,6 +1345,24 @@ fn prompt_error_code(error: &SummarizationError) -> PromptSummaryErrorCode {
     }
 }
 
+fn result_error_code(error: &SummarizationError) -> ResultSummaryErrorCode {
+    match error {
+        SummarizationError::InvalidLines(
+            akra_store::ResultSummaryValidationError::SummaryTooLong(_),
+        ) => ResultSummaryErrorCode::OutputTooLong,
+        SummarizationError::Timeout => ResultSummaryErrorCode::Timeout,
+        SummarizationError::QuotaCircuitOpen { .. } | SummarizationError::QuotaLimited { .. } => {
+            ResultSummaryErrorCode::QuotaLimited
+        }
+        SummarizationError::Json(_)
+        | SummarizationError::InvalidEventStream(_)
+        | SummarizationError::InvalidLines(_)
+        | SummarizationError::OutputTooLarge
+        | SummarizationError::CommandFailed(_) => ResultSummaryErrorCode::InvalidOutput,
+        _ => ResultSummaryErrorCode::Runtime,
+    }
+}
+
 fn now_us() -> Result<i64, std::time::SystemTimeError> {
     let elapsed = SystemTime::now().duration_since(UNIX_EPOCH)?;
     Ok(i64::try_from(elapsed.as_micros()).unwrap_or(i64::MAX))
@@ -1429,9 +1456,9 @@ mod tests {
     use crate::codex_targets::CodexRuntimeDescriptor;
 
     use super::{
-        MAX_RESULT_SUMMARY_INPUT_CHARS, SUMMARY_CHILD_ENV, SummarizationError, append_exec_args,
-        bounded_result_source, command_spec, curation_prompt, execute_process,
-        parse_curation_output, parse_exec_events, parse_prompt_summary_output,
+        MAX_RESULT_SUMMARY_INPUT_CHARS, ResultSummaryErrorCode, SUMMARY_CHILD_ENV,
+        SummarizationError, append_exec_args, bounded_result_source, command_spec, curation_prompt,
+        execute_process, parse_curation_output, parse_exec_events, parse_prompt_summary_output,
         parse_summary_output, parse_summary_output_with_fallback, prompt_error_code,
         prompt_summary_prompt, summary_prompt, validate_distro,
     };
@@ -1646,13 +1673,24 @@ mod tests {
         }))
         .expect("JSON");
         assert!(matches!(
-            parse_summary_output_with_fallback(&output, 1),
+            parse_summary_output_with_fallback(&output, None),
             Err(SummarizationError::InvalidLines(
                 akra_store::ResultSummaryValidationError::SummaryTooLong(270)
             ))
         ));
 
-        let compacted = parse_summary_output_with_fallback(&output, 2).expect("local fallback");
+        assert!(matches!(
+            parse_summary_output_with_fallback(&output, Some(ResultSummaryErrorCode::Timeout)),
+            Err(SummarizationError::InvalidLines(
+                akra_store::ResultSummaryValidationError::SummaryTooLong(270)
+            ))
+        ));
+
+        let compacted = parse_summary_output_with_fallback(
+            &output,
+            Some(ResultSummaryErrorCode::OutputTooLong),
+        )
+        .expect("local fallback");
         assert_eq!(
             compacted
                 .as_array()

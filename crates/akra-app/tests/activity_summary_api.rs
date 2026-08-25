@@ -401,7 +401,13 @@ async fn failed_result_summary_can_only_be_regenerated_while_its_source_is_retai
     assert_eq!(
         harness
             .store
-            .fail_result_summary(&claim, "invalid output", None, captured_at_us + 3)
+            .fail_result_summary(
+                &claim,
+                "invalid output",
+                akra_store::ResultSummaryErrorCode::InvalidOutput,
+                None,
+                captured_at_us + 3,
+            )
             .await
             .expect("terminal failure"),
         ResultSummaryFailureDisposition::Failed

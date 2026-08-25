@@ -24,6 +24,7 @@ mod migration_v13;
 mod migration_v14;
 mod migration_v15;
 mod migration_v16;
+mod migration_v17;
 mod migration_v2;
 mod migration_v3;
 mod migration_v4;
@@ -71,8 +72,8 @@ pub use prompt_summaries::{
 pub use result_summaries::{
     MAX_RESULT_SOURCE_RETENTION_US, MAX_RESULT_SUMMARY_ATTEMPTS, MAX_RESULT_SUMMARY_CHARS,
     RESULT_SUMMARY_MODEL, RecordResult, ResultCaptureOutcome, ResultSummary, ResultSummaryClaim,
-    ResultSummaryFailureDisposition, ResultSummaryLines, ResultSummaryRegenerationOutcome,
-    ResultSummaryState, ResultSummaryValidationError,
+    ResultSummaryErrorCode, ResultSummaryFailureDisposition, ResultSummaryLines,
+    ResultSummaryRegenerationOutcome, ResultSummaryState, ResultSummaryValidationError,
 };
 pub use work_curation::{
     CURATION_MODEL, CurationLogFilter, CurationModelInput, CurationModelLog, CurationModelWork,
