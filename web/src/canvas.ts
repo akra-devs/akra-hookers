@@ -3,6 +3,11 @@ import { MarkerType, type Edge } from "@xyflow/react";
 import type { ActivitySummary, CanvasEdge, CanvasNode } from "./api";
 import type { ActivityFlowNode } from "./components/ActivityNode";
 
+const FILTERED_HORIZONTAL_GAP = 336;
+const FILTERED_VERTICAL_GAP = 220;
+
+export type CanvasPositionLayout = "persisted" | "compact-filtered";
+
 export type ActivityNodeData = {
   activityId: number;
   project: ActivitySummary["project"];
@@ -19,11 +24,12 @@ export type ActivityNodeData = {
 export function toCanvasNodes(
   activities: ActivitySummary[],
   canvasNodes: CanvasNode[],
+  positionLayout: CanvasPositionLayout = "persisted",
 ): ActivityFlowNode[] {
   const canvasByActivity = new Map(
     canvasNodes.map((node) => [node.activity_event_id, node]),
   );
-  return activities.flatMap((activity) => {
+  const nodes: ActivityFlowNode[] = activities.flatMap((activity) => {
     const canvasNode = canvasByActivity.get(activity.id);
     if (!canvasNode) {
       return [];
@@ -45,6 +51,44 @@ export function toCanvasNodes(
         promptSummary: activity.prompt_summary,
       },
     }];
+  });
+  return positionLayout === "compact-filtered"
+    ? compactPositionGaps(nodes)
+    : nodes;
+}
+
+function compactAxis(values: number[], maximumGap: number): Map<number, number> {
+  const sorted = [...new Set(values.filter(Number.isFinite))].sort((a, b) => a - b);
+  const compacted = new Map<number, number>();
+  const first = sorted[0];
+  if (first === undefined) return compacted;
+  compacted.set(first, first);
+  let previousSource = first;
+  let previousCompacted = first;
+  for (const value of sorted.slice(1)) {
+    previousCompacted += Math.min(value - previousSource, maximumGap);
+    compacted.set(value, previousCompacted);
+    previousSource = value;
+  }
+  return compacted;
+}
+
+function compactPositionGaps(nodes: ActivityFlowNode[]): ActivityFlowNode[] {
+  if (nodes.length < 2) return nodes;
+  const compactedX = compactAxis(
+    nodes.map(({ position }) => position.x),
+    FILTERED_HORIZONTAL_GAP,
+  );
+  const compactedY = compactAxis(
+    nodes.map(({ position }) => position.y),
+    FILTERED_VERTICAL_GAP,
+  );
+  return nodes.map((node) => {
+    const x = compactedX.get(node.position.x) ?? node.position.x;
+    const y = compactedY.get(node.position.y) ?? node.position.y;
+    return x === node.position.x && y === node.position.y
+      ? node
+      : { ...node, position: { x, y } };
   });
 }
 

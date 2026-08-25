@@ -97,6 +97,27 @@ describe("toCanvasNodes", () => {
     expect(nodes[0]?.position).toEqual({ x: 120, y: 220 });
   });
 
+  it("compacts only excessive gaps for a period-filtered canvas", () => {
+    const canvasNodes = [
+      { id: 11, activity_event_id: 1, position_x: 64, position_y: 64 },
+      { id: 12, activity_event_id: 2, position_x: 400, position_y: 284 },
+      { id: 13, activity_event_id: 3, position_x: 4_096, position_y: 2_200 },
+    ];
+
+    const nodes = toCanvasNodes(
+      [activity(1), activity(2), activity(3)],
+      canvasNodes,
+      "compact-filtered",
+    );
+
+    expect(nodes.map(({ position }) => position)).toEqual([
+      { x: 64, y: 64 },
+      { x: 400, y: 284 },
+      { x: 736, y: 504 },
+    ]);
+    expect(canvasNodes[2]).toMatchObject({ position_x: 4_096, position_y: 2_200 });
+  });
+
   it("does not recreate an activity whose removable canvas node is absent", () => {
     const nodes = toCanvasNodes(
       [{
