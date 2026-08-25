@@ -1,6 +1,6 @@
 use sqlx::{Sqlite, Transaction};
 
-use crate::canvas::{CANVAS_ORIGIN_X, CANVAS_ORIGIN_Y, next_compact_canvas_position};
+use crate::canvas::{CANVAS_ORIGIN_X, CANVAS_ORIGIN_Y, CompactCanvasAllocator};
 
 /// Spreads untouched legacy canvas nodes that all inherited the same origin.
 pub(crate) async fn apply(transaction: &mut Transaction<'_, Sqlite>) -> Result<(), sqlx::Error> {
@@ -39,16 +39,16 @@ pub(crate) async fn apply(transaction: &mut Transaction<'_, Sqlite>) -> Result<(
     if !legacy_node_ids.is_empty() {
         occupied.push((CANVAS_ORIGIN_X, CANVAS_ORIGIN_Y));
     }
+    let mut allocator = CompactCanvasAllocator::new(&occupied);
     let mut moved = 0_usize;
     for node_id in legacy_node_ids.into_iter().skip(1) {
-        let (position_x, position_y) = next_compact_canvas_position(&occupied);
+        let (position_x, position_y) = allocator.next_position();
         sqlx::query("UPDATE canvas_nodes SET position_x = ?, position_y = ? WHERE id = ?")
             .bind(position_x)
             .bind(position_y)
             .bind(node_id)
             .execute(&mut **transaction)
             .await?;
-        occupied.push((position_x, position_y));
         moved += 1;
     }
 
