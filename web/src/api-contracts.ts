@@ -32,6 +32,7 @@ export type ActivitySummary = {
   prompt: string;
   project: ActivityProject | null;
   time: ActivityTime;
+  previous_conversation_activity_id: number | null;
   conversation_index: number;
   conversation_total: number;
   result_summary_status: ResultSummaryStatus;

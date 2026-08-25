@@ -25,6 +25,7 @@ test("activity cards show context hierarchy and truthful time states", async ({ 
     prompt: "시간 정보가 없는 작업",
     project: null,
     time: { value: null, provenance: "unknown" },
+    previous_conversation_activity_id: null,
     conversation_index: 1,
     conversation_total: 1,
     result_summary_status: "unavailable",
@@ -109,6 +110,55 @@ test("two custom card handles persist exactly one edge", async ({ page, api }) =
 
   expect(api.state.canvasEdges).toHaveLength(1);
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
+});
+
+test("conversation requests receive non-editable directional edges in order", async ({ page, api }) => {
+  api.state.canvasEdges = [];
+  api.state.activities[0]!.previous_conversation_activity_id = null;
+  api.state.activities[0]!.conversation_total = 3;
+  api.state.activities[1]!.previous_conversation_activity_id = 1;
+  api.state.activities[1]!.conversation_total = 3;
+  api.state.activities.push({
+    ...structuredClone(api.state.activities[1]!),
+    id: 3,
+    prompt: "세 번째 요청",
+    previous_conversation_activity_id: 2,
+    conversation_index: 3,
+  });
+  api.state.canvasNodes.push({
+    id: 13,
+    activity_event_id: 3,
+    position_x: 420,
+    position_y: 440,
+  });
+  let edgeMutationRequests = 0;
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === "/v1/canvas/edges" && request.method() === "POST") {
+      edgeMutationRequests += 1;
+    }
+    if (pathname.startsWith("/v1/canvas/edges/") && request.method() === "DELETE") {
+      edgeMutationRequests += 1;
+    }
+  });
+
+  await page.goto("/");
+
+  const firstToSecond = page.getByTestId("rf__edge-sequence-1-2");
+  const secondToThird = page.getByTestId("rf__edge-sequence-2-3");
+  await expect(firstToSecond).toBeVisible();
+  await expect(secondToThird).toBeVisible();
+  await expect(page.locator(".activity-sequence-edge")).toHaveCount(2);
+  await expect(firstToSecond.locator(".react-flow__edge-path")).toHaveAttribute(
+    "marker-end",
+    /type=arrowclosed/,
+  );
+
+  await firstToSecond.locator(".react-flow__edge-interaction").dblclick({ force: true });
+  await page.keyboard.press("Delete");
+  await expect(page.locator(".activity-sequence-edge")).toHaveCount(2);
+  expect(api.state.canvasEdges).toEqual([]);
+  expect(edgeMutationRequests).toBe(0);
 });
 
 test("selecting a custom card creates no edge", async ({ page, api }) => {

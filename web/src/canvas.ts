@@ -1,4 +1,4 @@
-import type { Edge } from "@xyflow/react";
+import { MarkerType, type Edge } from "@xyflow/react";
 
 import type { ActivitySummary, CanvasEdge, CanvasNode } from "./api";
 import type { ActivityFlowNode } from "./components/ActivityNode";
@@ -54,14 +54,47 @@ export function toVisibleEdges(
   persistedEdges: CanvasEdge[],
 ): Edge[] {
   const visibleActivityIds = new Set(activities.map(({ id }) => id));
+  const idByActivity = new Map(
+    canvasNodes
+      .filter(({ activity_event_id }) => visibleActivityIds.has(activity_event_id))
+      .map(({ activity_event_id }) => [activity_event_id, `activity-${activity_event_id}`]),
+  );
   const idByCanvasNode = new Map(
     canvasNodes
       .filter(({ activity_event_id }) => visibleActivityIds.has(activity_event_id))
       .map(({ id, activity_event_id }) => [id, `activity-${activity_event_id}`]),
   );
-  return persistedEdges.flatMap((edge) => {
+  const manualEdges = persistedEdges.flatMap((edge) => {
     const source = idByCanvasNode.get(edge.source_node_id);
     const target = idByCanvasNode.get(edge.target_node_id);
     return source && target ? [{ id: `edge-${edge.id}`, source, target }] : [];
   });
+  const manualPairs = new Set(
+    manualEdges.map(({ source, target }) => `${source}->${target}`),
+  );
+  const sequenceEdges: Edge[] = activities.flatMap((activity) => {
+    const previousId = activity.previous_conversation_activity_id;
+    if (previousId === null) return [];
+    const source = idByActivity.get(previousId);
+    const target = idByActivity.get(activity.id);
+    if (!source || !target || manualPairs.has(`${source}->${target}`)) return [];
+    return [{
+      id: `sequence-${previousId}-${activity.id}`,
+      source,
+      target,
+      type: "smoothstep",
+      className: "activity-sequence-edge",
+      selectable: false,
+      deletable: false,
+      focusable: false,
+      ariaLabel: "요청 순서 연결",
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: "#8fc7a1",
+        width: 14,
+        height: 14,
+      },
+    }];
+  });
+  return [...sequenceEdges, ...manualEdges];
 }

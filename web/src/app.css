@@ -992,6 +992,11 @@ button.command-control {
   stroke: #667a81;
   stroke-width: 1.15;
 }
+.react-flow__edge.activity-sequence-edge .react-flow__edge-path {
+  stroke: var(--color-accent);
+  stroke-width: 1.2;
+  opacity: .78;
+}
 .react-flow__edge.selected .react-flow__edge-path { stroke: var(--color-accent); stroke-width: 1.5; }
 .react-flow__connection-path { stroke: var(--color-accent); stroke-width: 1.25; }
 

@@ -92,6 +92,7 @@ type SummaryRow = (
     Option<String>,
     Option<i64>,
     Option<i64>,
+    Option<i64>,
     i64,
     i64,
     String,
@@ -188,6 +189,10 @@ impl ActivityStore {
              ),
              numbered AS (
                  SELECT classified.*,
+                        LAG(id) OVER (
+                            PARTITION BY provider, provider_session_id
+                            ORDER BY time_class, ordered_at_us, id
+                        ) AS previous_conversation_activity_id,
                         ROW_NUMBER() OVER (
                             PARTITION BY provider, provider_session_id
                             ORDER BY time_class, ordered_at_us, id
@@ -203,8 +208,9 @@ impl ActivityStore {
                  WHERE id = ?
              )
              SELECT id, provider, activity_kind, prompt, effective_project_id, project_name,
-                    captured_at_us, first_recorded_at_us,
-                    conversation_index, conversation_total,
+                     captured_at_us, first_recorded_at_us,
+                     previous_conversation_activity_id,
+                     conversation_index, conversation_total,
                     COALESCE(
                         (
                             SELECT state FROM activity_result_summaries
@@ -387,24 +393,33 @@ impl ActivityStore {
                    ON activity_project_assignments.activity_event_id = activity_events.id
                  WHERE activity_events.deleted_at_us IS NULL
              ),
-             page AS MATERIALIZED (
-                 SELECT effective.*
+             sequenced AS MATERIALIZED (
+                 SELECT effective.*,
+                        LAG(id) OVER (
+                            PARTITION BY provider, provider_session_id
+                            ORDER BY
+                                COALESCE(captured_at_us, first_recorded_at_us) IS NULL,
+                                COALESCE(captured_at_us, first_recorded_at_us),
+                                id
+                        ) AS previous_conversation_activity_id
                  FROM effective
+                 WHERE effective.activity_kind = 'user'
+                    OR (?6 = 1 AND effective.activity_kind = 'subagent')
+                    OR (?7 = 1 AND effective.activity_kind = 'internal')
+             ),
+             page AS MATERIALIZED (
+                 SELECT sequenced.*
+                 FROM sequenced
                  WHERE (
                         (?2 = 'all')
                      OR (?2 = 'inbox' AND effective_project_id IS NULL)
                      OR (?2 = 'project' AND effective_project_id = ?3)
                  )
                  AND (
-                        effective.activity_kind = 'user'
-                     OR (?6 = 1 AND effective.activity_kind = 'subagent')
-                     OR (?7 = 1 AND effective.activity_kind = 'internal')
-                 )
-                 AND (
                      ?8 IS NULL
                      OR COALESCE(
-                         effective.captured_at_us,
-                         effective.first_recorded_at_us
+                         sequenced.captured_at_us,
+                         sequenced.first_recorded_at_us
                      ) >= ?8
                  )
                  AND (
@@ -417,18 +432,18 @@ impl ActivityStore {
                                  (
                                      cursor.global_sequence IS NOT NULL
                                      AND (
-                                         effective.global_sequence IS NULL
-                                         OR effective.global_sequence > cursor.global_sequence
+                                         sequenced.global_sequence IS NULL
+                                         OR sequenced.global_sequence > cursor.global_sequence
                                          OR (
-                                             effective.global_sequence = cursor.global_sequence
-                                             AND effective.id > cursor.id
+                                             sequenced.global_sequence = cursor.global_sequence
+                                             AND sequenced.id > cursor.id
                                          )
                                      )
                                  )
                                  OR (
                                      cursor.global_sequence IS NULL
-                                     AND effective.global_sequence IS NULL
-                                     AND effective.id > cursor.id
+                                     AND sequenced.global_sequence IS NULL
+                                     AND sequenced.id > cursor.id
                                  )
                              )
                          )
@@ -438,18 +453,18 @@ impl ActivityStore {
                                  (
                                      cursor.global_sequence IS NOT NULL
                                      AND (
-                                         effective.global_sequence IS NULL
-                                         OR effective.global_sequence < cursor.global_sequence
+                                         sequenced.global_sequence IS NULL
+                                         OR sequenced.global_sequence < cursor.global_sequence
                                          OR (
-                                             effective.global_sequence = cursor.global_sequence
-                                             AND effective.id < cursor.id
+                                             sequenced.global_sequence = cursor.global_sequence
+                                             AND sequenced.id < cursor.id
                                          )
                                      )
                                  )
                                  OR (
                                      cursor.global_sequence IS NULL
-                                     AND effective.global_sequence IS NULL
-                                     AND effective.id < cursor.id
+                                     AND sequenced.global_sequence IS NULL
+                                     AND sequenced.id < cursor.id
                                  )
                              )
                          )
@@ -463,9 +478,10 @@ impl ActivityStore {
                  LIMIT ?5
              )
              SELECT page.id, page.provider, page.activity_kind, page.prompt,
-                    page.effective_project_id, projects.name,
-                    page.captured_at_us, page.first_recorded_at_us,
-                    (
+                     page.effective_project_id, projects.name,
+                     page.captured_at_us, page.first_recorded_at_us,
+                     page.previous_conversation_activity_id,
+                     (
                         SELECT COUNT(*) FROM activity_events AS turn
                          WHERE turn.provider = page.provider
                            AND turn.provider_session_id = page.provider_session_id
@@ -660,6 +676,7 @@ fn summary_from_row(row: SummaryRow) -> Result<ActivitySummary, StoreError> {
         project_name,
         captured_at_us,
         first_recorded_at_us,
+        previous_conversation_activity_id,
         conversation_index,
         conversation_total,
         result_summary_state,
@@ -678,6 +695,7 @@ fn summary_from_row(row: SummaryRow) -> Result<ActivitySummary, StoreError> {
         prompt: prompt_preview(&prompt),
         project,
         time: activity_time(captured_at_us, first_recorded_at_us)?,
+        previous_conversation_activity_id,
         conversation_index,
         conversation_total,
         result_summary_status: result_summary_status(&result_summary_state)?,
