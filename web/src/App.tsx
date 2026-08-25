@@ -81,7 +81,7 @@ export function App() {
     : undefined;
   const {
     activities, allCount, inboxCount, projects, origins, provider, canvas,
-    nodes, setNodes, edges, onNodesChange, commitNodePosition,
+    nodes, setNodes, canvasFitViewKey, edges, onNodesChange, commitNodePosition,
     selectedActivityIds, setSelectedActivityIds, assignmentDetails,
     refreshProjectContext, refreshCanvas, refreshCanvasAuthoritatively,
     refreshAfterActivityDeletion,
@@ -527,6 +527,7 @@ export function App() {
             <ActivityCanvas
               client={client} canvasNodes={canvas.data ?? []}
               nodes={nodes} setNodes={setNodes} edges={edges} nodeTypes={nodeTypes}
+              fitViewKey={canvasFitViewKey}
               onNodesChange={onNodesChange} onPositionCommit={commitNodePosition}
               onActivityOpen={openActivity} onError={setError}
               onPersistedChange={refreshCanvas}

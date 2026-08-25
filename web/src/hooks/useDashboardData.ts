@@ -54,6 +54,7 @@ export function useDashboardData(
   activityPeriod: ActivityPeriod,
 ) {
   const [nodes, setNodes] = useState<ActivityFlowNode[]>([]);
+  const [canvasFitViewKey, setCanvasFitViewKey] = useState("pending");
   const [selectedActivityIds, setSelectedActivityIds] = useState<number[]>([]);
   const dirtyPositions = useRef(new Map<number, number>());
   const revision = useRef(0);
@@ -161,6 +162,14 @@ export function useDashboardData(
       isActivityKindVisible(activity.activity_kind, activityVisibility)),
     [activityVisibility, allActivityItems],
   );
+  const mapCanvasNodes = useCallback(
+    (currentCanvasNodes: Parameters<typeof toCanvasNodes>[1]) => toCanvasNodes(
+      activityItems,
+      currentCanvasNodes,
+      activityPeriod === "all" ? "persisted" : "compact-filtered",
+    ),
+    [activityItems, activityPeriod],
+  );
   const hasOlderActivities = olderActivitiesHaveMore
     ?? activities.data?.length === ACTIVITY_PAGE_SIZE;
   const loadOlderActivities = useCallback(async () => {
@@ -243,7 +252,7 @@ export function useDashboardData(
 
   useEffect(() => {
     if (!activities.data || !canvas.data) return;
-    const fresh = toCanvasNodes(activityItems, canvas.data);
+    const fresh = mapCanvasNodes(canvas.data);
     const visible = new Set(fresh.map(({ data }) => data.activityId));
     for (const activityId of dirtyPositions.current.keys()) {
       if (!visible.has(activityId)) dirtyPositions.current.delete(activityId);
@@ -253,11 +262,14 @@ export function useDashboardData(
       fresh,
       new Set(dirtyPositions.current.keys()),
     ));
+    setCanvasFitViewKey(
+      `${activityPeriod}:${fresh.map(({ id }) => id).sort().join(":")}`,
+    );
     setSelectedActivityIds((current) => {
       const retained = current.filter((id) => visible.has(id));
       return retained.length === current.length ? current : retained;
     });
-  }, [activities.data, activityItems, canvas.data]);
+  }, [activities.data, activityPeriod, canvas.data, mapCanvasNodes]);
 
   const edges = useMemo(() => {
     const fresh = activities.data && canvas.data && persistedEdges.data
@@ -301,11 +313,11 @@ export function useDashboardData(
     if (activities.data && result.data) {
       setNodes((current) => reconcileNodes(
         current,
-        toCanvasNodes(activityItems, result.data!),
+        mapCanvasNodes(result.data!),
         new Set(),
       ));
     }
-  }, [activities.data, activityItems, canvas, persistedEdges]);
+  }, [activities.data, canvas, mapCanvasNodes, persistedEdges]);
   const refreshAfterActivityDeletion = useCallback(async (activityId: number) => {
     setSelectedActivityIds((current) => current.filter((id) => id !== activityId));
     setOlderActivities([]);
@@ -361,7 +373,7 @@ export function useDashboardData(
         if (activities.data && result.data) {
           setNodes((current) => reconcileNodes(
             current,
-            toCanvasNodes(activityItems, result.data!),
+            mapCanvasNodes(result.data!),
             new Set(),
           ));
         }
@@ -372,7 +384,7 @@ export function useDashboardData(
           if (activities.data && result.data) {
             setNodes((current) => reconcileNodes(
               current,
-              toCanvasNodes(activityItems, result.data!),
+              mapCanvasNodes(result.data!),
               new Set(),
             ));
           }
@@ -386,7 +398,7 @@ export function useDashboardData(
     });
     positionQueues.current.set(activityId, queued);
     return queued;
-  }, [activities.data, activityItems, canvas, client]);
+  }, [activities.data, canvas, client, mapCanvasNodes]);
 
   const bootstrapQueries = [
     activities,
@@ -429,7 +441,7 @@ export function useDashboardData(
 
   return {
     activities, allCount, inboxCount, projects, origins, provider, canvas,
-    nodes, setNodes, edges, onNodesChange, commitNodePosition,
+    nodes, setNodes, canvasFitViewKey, edges, onNodesChange, commitNodePosition,
     selectedActivityIds, setSelectedActivityIds, assignmentDetails,
     refreshProjectContext, refreshCanvas, refreshCanvasAuthoritatively,
     refreshAfterActivityDeletion,

@@ -113,6 +113,28 @@ async function connect(page: Page, sourceId: number, targetId: number) {
   await created;
 }
 
+async function flowNodePosition(page: Page, activityId: number) {
+  return page.locator(
+    `.react-flow__node:has([data-testid="activity-node-${activityId}"])`,
+  ).evaluate((element) => {
+    const matrix = new DOMMatrix(getComputedStyle(element).transform);
+    return { x: matrix.m41, y: matrix.m42 };
+  });
+}
+
+async function flowNodesIntersectStage(page: Page, activityIds: number[]) {
+  const stage = await page.locator(".flow-stage").boundingBox();
+  if (!stage) return false;
+  const boxes = await Promise.all(activityIds.map((activityId) => page.locator(
+    `.react-flow__node:has([data-testid="activity-node-${activityId}"])`,
+  ).boundingBox()));
+  return boxes.every((box) => box
+    && box.x < stage.x + stage.width
+    && box.x + box.width > stage.x
+    && box.y < stage.y + stage.height
+    && box.y + box.height > stage.y);
+}
+
 test("Todo 17 exposes the dashboard data coordinator without relying on an import failure", () => {
   const hook = fileURLToPath(new URL("../src/hooks/useDashboardData.ts", import.meta.url));
   const app = fileURLToPath(new URL("../src/App.tsx", import.meta.url));
@@ -152,6 +174,10 @@ test("a period changes nodes and navigation counts together, then can hide empty
   for (const activity of api.state.activities) {
     activity.time = { value: new Date(now).toISOString(), provenance: "captured" };
   }
+  api.state.canvasNodes[0]!.position_x = 80;
+  api.state.canvasNodes[0]!.position_y = 120;
+  api.state.canvasNodes[1]!.position_x = 4_080;
+  api.state.canvasNodes[1]!.position_y = 3_120;
   const lateYesterday = structuredClone(api.state.activities[0]!);
   lateYesterday.id = 4;
   lateYesterday.prompt = "자정 직전의 24시간 내 활동";
@@ -194,6 +220,27 @@ test("a period changes nodes and navigation counts together, then can hide empty
   await expect(page.getByTestId("activity-node-4")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /All activity/ })).toContainText("2");
   await expect(page.getByRole("button", { name: /^기존 프로젝트 \d+$/ })).toContainText("1");
+  await expect.poll(async () => {
+    const [first, second] = await Promise.all([
+      flowNodePosition(page, 1),
+      flowNodePosition(page, 2),
+    ]);
+    return { x: second.x - first.x, y: second.y - first.y };
+  }).toEqual({ x: 336, y: 220 });
+  await expect.poll(() => flowNodesIntersectStage(page, [1, 2])).toBe(true);
+  expect(api.state.canvasNodes[1]).toMatchObject({
+    position_x: 4_080,
+    position_y: 3_120,
+  });
+
+  await page.getByLabel("기간 필터").selectOption("all");
+  await expect.poll(async () => {
+    const [first, second] = await Promise.all([
+      flowNodePosition(page, 1),
+      flowNodePosition(page, 2),
+    ]);
+    return { x: second.x - first.x, y: second.y - first.y };
+  }).toEqual({ x: 4_000, y: 3_000 });
 
   await page.getByLabel("기간 필터").selectOption("day");
   await expect(page.getByTestId("activity-node-4")).toBeVisible();

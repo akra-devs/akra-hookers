@@ -54,6 +54,7 @@ type ActivityCanvasProps = {
   onNodesChange: (changes: NodeChange<ActivityFlowNode>[]) => void;
   edges: Edge[];
   nodeTypes: NodeTypes;
+  fitViewKey: string;
   onActivityOpen: (activityId: number) => void;
   onPositionCommit: (activityId: number, position: { x: number; y: number }) => Promise<void>;
   onError: (message: string) => void;
@@ -71,6 +72,7 @@ export function ActivityCanvas({
   onNodesChange,
   edges,
   nodeTypes,
+  fitViewKey,
   onActivityOpen,
   onPositionCommit,
   onError,
@@ -88,7 +90,7 @@ export function ActivityCanvas({
   const pendingNodeIds = useRef(new Set<string>());
   const pendingEdgeIds = useRef(new Set<string>());
   const openNodeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fitKey = nodes.map(({ id }) => id).sort().join(":");
+  const fitKey = `${fitViewKey}:${nodes.map(({ id }) => id).sort().join(":")}`;
   const flowStageRef = useFitFlow(flow, fitKey);
   const displayedEdges = edges
     .filter((edge) => !hiddenEdgeIds.includes(edge.id))
