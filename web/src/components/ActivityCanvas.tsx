@@ -27,11 +27,14 @@ import {
   type ActivityFlowNode,
 } from "./ActivityNode";
 import { ActivityDeleteDialog } from "./ActivityDeleteDialog";
+import { displayedToPersistedCanvasOffset } from "../canvas";
 import { useFitFlow } from "../useFitFlow";
 
 type DragState = {
   pointer: XYPosition;
   positions: Map<string, XYPosition>;
+  activityIds: Map<string, number>;
+  displayedToPersistedOffsets: Map<string, XYPosition>;
 };
 
 type DeleteTarget = {
@@ -56,7 +59,11 @@ type ActivityCanvasProps = {
   nodeTypes: NodeTypes;
   fitViewKey: string;
   onActivityOpen: (activityId: number) => void;
-  onPositionCommit: (activityId: number, position: { x: number; y: number }) => Promise<void>;
+  onPositionCommit: (
+    activityId: number,
+    position: XYPosition,
+    displayedToPersistedOffset?: XYPosition,
+  ) => Promise<void>;
   onError: (message: string) => void;
   onPersistedChange: () => Promise<unknown>;
   onActivityDeleted: (activityId: number) => Promise<unknown>;
@@ -255,9 +262,30 @@ export function ActivityCanvas({
         onEdgesDelete={(deleted) => {
           deleted.forEach(removeEdge);
         }}
-        onNodeDragStart={(event) => {
+        onNodeDragStart={(event, _, draggedNodes) => {
           const pointer = pointerPosition(event);
-          dragState.current = pointer ? { pointer, positions: new Map() } : null;
+          if (!pointer) {
+            dragState.current = null;
+            return;
+          }
+          const activityIds = new Map<string, number>();
+          const displayedToPersistedOffsets = new Map<string, XYPosition>();
+          for (const draggedNode of draggedNodes) {
+            activityIds.set(draggedNode.id, draggedNode.data.activityId);
+            const canvasNode = persistedNode(draggedNode.id);
+            if (canvasNode) {
+              displayedToPersistedOffsets.set(
+                draggedNode.id,
+                displayedToPersistedCanvasOffset(canvasNode, draggedNode),
+              );
+            }
+          }
+          dragState.current = {
+            pointer,
+            positions: new Map(),
+            activityIds,
+            displayedToPersistedOffsets,
+          };
         }}
         onNodeDrag={(event, _, draggedNodes) => {
           const current = dragState.current;
@@ -277,7 +305,8 @@ export function ActivityCanvas({
           })));
         }}
         onNodeDragStop={() => {
-          const accepted = dragState.current?.positions;
+          const current = dragState.current;
+          const accepted = current?.positions;
           dragState.current = null;
           if (!accepted?.size) return;
           onNodesChange(Array.from(accepted, ([id, position]) => ({
@@ -286,15 +315,15 @@ export function ActivityCanvas({
             position,
             dragging: false,
           })));
-          const activityIds = new Map(nodes.map((currentNode) => [
-            currentNode.id,
-            currentNode.data.activityId,
-          ]));
           const commits = Array.from(accepted, ([id, position]) => {
-            const activityId = activityIds.get(id);
+            const activityId = current?.activityIds.get(id);
             return activityId === undefined
               ? Promise.reject(new Error(`Missing activity for dragged node ${id}`))
-              : onPositionCommit(activityId, position);
+              : onPositionCommit(
+                activityId,
+                position,
+                current?.displayedToPersistedOffsets.get(id),
+              );
           });
           void Promise.all(commits)
             .catch((cause: unknown) => {
