@@ -100,6 +100,40 @@ impl ResultSummaryState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResultSummaryErrorCode {
+    OutputTooLong,
+    Timeout,
+    InvalidOutput,
+    Runtime,
+    QuotaLimited,
+}
+
+impl ResultSummaryErrorCode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::OutputTooLong => "output_too_long",
+            Self::Timeout => "timeout",
+            Self::InvalidOutput => "invalid_output",
+            Self::Runtime => "runtime",
+            Self::QuotaLimited => "quota_limited",
+        }
+    }
+
+    fn from_storage(value: &str) -> Result<Self, StoreError> {
+        match value {
+            "output_too_long" => Ok(Self::OutputTooLong),
+            "timeout" => Ok(Self::Timeout),
+            "invalid_output" => Ok(Self::InvalidOutput),
+            "runtime" => Ok(Self::Runtime),
+            "quota_limited" => Ok(Self::QuotaLimited),
+            _ => Err(StoreError::Invariant(format!(
+                "invalid result summary error code: {value}"
+            ))),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ResultSummaryLines {
     lines: [String; 3],
@@ -243,6 +277,7 @@ pub struct ResultSummaryClaim {
     generation: i64,
     lease_token: String,
     attempt_number: i64,
+    previous_failure_code: Option<ResultSummaryErrorCode>,
     summary_model: String,
     capture_target: Option<String>,
     capture_client: Option<String>,
@@ -259,6 +294,7 @@ impl fmt::Debug for ResultSummaryClaim {
             .field("source_text_bytes", &self.source_text.len())
             .field("generation", &self.generation)
             .field("attempt_number", &self.attempt_number)
+            .field("previous_failure_code", &self.previous_failure_code)
             .field("summary_model", &self.summary_model)
             .field("capture_target", &self.capture_target)
             .field("capture_client", &self.capture_client)
@@ -277,6 +313,10 @@ impl ResultSummaryClaim {
 
     pub const fn attempt_number(&self) -> i64 {
         self.attempt_number
+    }
+
+    pub const fn previous_failure_code(&self) -> Option<ResultSummaryErrorCode> {
+        self.previous_failure_code
     }
 
     pub fn summary_model(&self) -> &str {
@@ -427,6 +467,7 @@ impl ActivityStore {
                  summary_line_2 = NULL,
                  summary_line_3 = NULL,
                  last_error = NULL,
+                 last_error_code = NULL,
                  capture_target = excluded.capture_target,
                  capture_client = excluded.capture_client,
                  captured_at_us = excluded.captured_at_us,
@@ -461,6 +502,15 @@ impl ActivityStore {
         Ok(outcome)
     }
 
+    /// Enforces the raw-result retention boundary independently of whether a
+    /// model call can currently be claimed.
+    pub async fn sweep_result_summary_retention(&self, now_us: i64) -> Result<(), StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        sweep_result_summary_retention(&mut transaction, now_us).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
     pub async fn claim_result_summary(
         &self,
         now_us: i64,
@@ -471,50 +521,15 @@ impl ActivityStore {
             .filter(|_| lease_duration_us > 0)
             .ok_or(StoreError::InvalidResultSummaryLease)?;
         let mut transaction = self.pool.begin().await?;
-
-        let retention_cutoff_us = now_us.saturating_sub(MAX_RESULT_SOURCE_RETENTION_US);
-        sqlx::query(
-            "UPDATE activity_result_summaries
-             SET state = 'failed', source_text = NULL, lease_token = NULL,
-                 lease_expires_at_us = NULL,
-                 last_error = 'result expired before summary completion',
-                 updated_at_us = ?, completed_at_us = ?
-             WHERE source_text IS NOT NULL AND captured_at_us <= ?
-               AND (
-                   state IN ('pending', 'retry_wait', 'failed')
-                   OR (state = 'running' AND lease_expires_at_us <= ?)
-               )",
-        )
-        .bind(now_us)
-        .bind(now_us)
-        .bind(retention_cutoff_us)
-        .bind(now_us)
-        .execute(&mut *transaction)
-        .await?;
-
-        // A worker that repeatedly dies cannot retain raw assistant output forever.
-        sqlx::query(
-            "UPDATE activity_result_summaries
-             SET state = 'failed', source_text = NULL, lease_token = NULL,
-                 lease_expires_at_us = NULL,
-                 last_error = 'summary worker lease expired after maximum attempts',
-                 updated_at_us = ?, completed_at_us = ?
-             WHERE state = 'running' AND lease_expires_at_us <= ?
-               AND attempt_count >= ?",
-        )
-        .bind(now_us)
-        .bind(now_us)
-        .bind(now_us)
-        .bind(MAX_RESULT_SUMMARY_ATTEMPTS)
-        .execute(&mut *transaction)
-        .await?;
+        sweep_result_summary_retention(&mut transaction, now_us).await?;
 
         let candidate = sqlx::query(
             "SELECT summaries.provider, summaries.provider_session_id,
                     summaries.provider_turn_id, summaries.activity_event_id,
                     summaries.source_text, summaries.generation,
-                    summaries.attempt_count, summaries.summary_model,
-                    summaries.capture_target, summaries.capture_client
+                    summaries.state, summaries.attempt_count, summaries.summary_model,
+                    summaries.capture_target, summaries.capture_client,
+                    summaries.last_error_code
              FROM activity_result_summaries AS summaries
              JOIN activity_events AS activities
                ON activities.id = summaries.activity_event_id
@@ -547,6 +562,15 @@ impl ActivityStore {
         let provider_session_id: String = candidate.try_get("provider_session_id")?;
         let provider_turn_id: String = candidate.try_get("provider_turn_id")?;
         let generation: i64 = candidate.try_get("generation")?;
+        let previous_failure_code = if candidate.try_get::<String, _>("state")? == "running" {
+            Some(ResultSummaryErrorCode::Runtime)
+        } else {
+            candidate
+                .try_get::<Option<String>, _>("last_error_code")?
+                .as_deref()
+                .map(ResultSummaryErrorCode::from_storage)
+                .transpose()?
+        };
         let lease_token: String = sqlx::query_scalar("SELECT lower(hex(randomblob(16)))")
             .fetch_one(&mut *transaction)
             .await?;
@@ -586,6 +610,7 @@ impl ActivityStore {
             generation,
             lease_token,
             attempt_number: candidate.try_get::<i64, _>("attempt_count")? + 1,
+            previous_failure_code,
             summary_model: candidate.try_get("summary_model")?,
             capture_target: candidate.try_get("capture_target")?,
             capture_client: candidate.try_get("capture_client")?,
@@ -605,7 +630,8 @@ impl ActivityStore {
              SET state = 'succeeded', source_text = NULL,
                  lease_token = NULL, lease_expires_at_us = NULL,
                  summary_line_1 = ?, summary_line_2 = ?, summary_line_3 = ?,
-                 last_error = NULL, updated_at_us = ?, completed_at_us = ?
+                 last_error = NULL, last_error_code = NULL,
+                 updated_at_us = ?, completed_at_us = ?
              WHERE provider = ? AND provider_session_id = ? AND provider_turn_id = ?
                AND generation = ? AND state = 'running' AND lease_token = ?",
         )
@@ -638,6 +664,7 @@ impl ActivityStore {
         &self,
         claim: &ResultSummaryClaim,
         error: &str,
+        error_code: ResultSummaryErrorCode,
         retry_at_us: Option<i64>,
         failed_at_us: i64,
     ) -> Result<ResultSummaryFailureDisposition, StoreError> {
@@ -656,7 +683,8 @@ impl ActivityStore {
             "UPDATE activity_result_summaries
              SET state = ?, source_text = ?, next_attempt_at_us = ?,
                  lease_token = NULL, lease_expires_at_us = NULL,
-                 last_error = ?, updated_at_us = ?, completed_at_us = ?
+                 last_error = ?, last_error_code = ?,
+                 updated_at_us = ?, completed_at_us = ?
              WHERE provider = ? AND provider_session_id = ? AND provider_turn_id = ?
                AND generation = ? AND state = 'running' AND lease_token = ?",
         )
@@ -664,6 +692,7 @@ impl ActivityStore {
         .bind(retained_source)
         .bind(next_attempt_at_us)
         .bind(error)
+        .bind(error_code.as_str())
         .bind(failed_at_us)
         .bind(completed_at_us)
         .bind(&claim.provider)
@@ -700,6 +729,7 @@ impl ActivityStore {
         &self,
         claim: &ResultSummaryClaim,
         error: &str,
+        error_code: ResultSummaryErrorCode,
         retry_at_us: i64,
         deferred_at_us: i64,
     ) -> Result<ResultSummaryFailureDisposition, StoreError> {
@@ -709,13 +739,15 @@ impl ActivityStore {
              SET state = 'retry_wait', source_text = ?, next_attempt_at_us = ?,
                  attempt_count = MAX(attempt_count - 1, 0),
                  lease_token = NULL, lease_expires_at_us = NULL,
-                 last_error = ?, updated_at_us = ?, completed_at_us = NULL
+                 last_error = ?, last_error_code = ?,
+                 updated_at_us = ?, completed_at_us = NULL
              WHERE provider = ? AND provider_session_id = ? AND provider_turn_id = ?
                AND generation = ? AND state = 'running' AND lease_token = ?",
         )
         .bind(&claim.source_text)
         .bind(retry_at_us)
         .bind(error)
+        .bind(error_code.as_str())
         .bind(deferred_at_us)
         .bind(&claim.provider)
         .bind(&claim.provider_session_id)
@@ -771,6 +803,7 @@ impl ActivityStore {
             sqlx::query(
                 "UPDATE activity_result_summaries
                  SET source_text = NULL, lease_token = NULL, lease_expires_at_us = NULL,
+                     last_error_code = NULL,
                      last_error = 'result expired before manual regeneration',
                      updated_at_us = ?, completed_at_us = ?
                  WHERE activity_event_id = ?",
@@ -794,7 +827,8 @@ impl ActivityStore {
              SET state = 'pending', generation = generation + 1, attempt_count = 0,
                  next_attempt_at_us = 0, lease_token = NULL, lease_expires_at_us = NULL,
                  summary_model = ?, summary_line_1 = NULL, summary_line_2 = NULL,
-                 summary_line_3 = NULL, last_error = NULL, updated_at_us = ?,
+                 summary_line_3 = NULL, last_error = NULL, last_error_code = NULL,
+                 updated_at_us = ?,
                  completed_at_us = NULL
              WHERE activity_event_id = ? AND state = 'failed' AND source_text IS NOT NULL",
         )
@@ -891,6 +925,49 @@ pub(crate) async fn link_activity(
         .execute(&mut **transaction)
         .await?;
     }
+    Ok(())
+}
+
+async fn sweep_result_summary_retention(
+    transaction: &mut Transaction<'_, Sqlite>,
+    now_us: i64,
+) -> Result<(), StoreError> {
+    let retention_cutoff_us = now_us.saturating_sub(MAX_RESULT_SOURCE_RETENTION_US);
+    sqlx::query(
+        "UPDATE activity_result_summaries
+         SET state = 'failed', source_text = NULL, lease_token = NULL,
+             lease_expires_at_us = NULL, last_error_code = NULL,
+             last_error = 'result expired before summary completion',
+             updated_at_us = ?, completed_at_us = ?
+         WHERE source_text IS NOT NULL AND captured_at_us <= ?
+           AND (
+               state IN ('pending', 'retry_wait', 'failed')
+               OR (state = 'running' AND lease_expires_at_us <= ?)
+           )",
+    )
+    .bind(now_us)
+    .bind(now_us)
+    .bind(retention_cutoff_us)
+    .bind(now_us)
+    .execute(&mut **transaction)
+    .await?;
+
+    // A worker that repeatedly dies cannot retain raw assistant output forever.
+    sqlx::query(
+        "UPDATE activity_result_summaries
+         SET state = 'failed', source_text = NULL, lease_token = NULL,
+             lease_expires_at_us = NULL, last_error_code = NULL,
+             last_error = 'summary worker lease expired after maximum attempts',
+             updated_at_us = ?, completed_at_us = ?
+         WHERE state = 'running' AND lease_expires_at_us <= ?
+           AND attempt_count >= ?",
+    )
+    .bind(now_us)
+    .bind(now_us)
+    .bind(now_us)
+    .bind(MAX_RESULT_SUMMARY_ATTEMPTS)
+    .execute(&mut **transaction)
+    .await?;
     Ok(())
 }
 
