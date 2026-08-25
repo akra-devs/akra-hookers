@@ -14,6 +14,7 @@ mod activity_deletions;
 mod activity_details;
 mod canvas;
 mod capture_sources;
+mod codex_exec;
 mod ingest;
 mod migration;
 mod migration_v10;
@@ -22,6 +23,7 @@ mod migration_v12;
 mod migration_v13;
 mod migration_v14;
 mod migration_v15;
+mod migration_v16;
 mod migration_v2;
 mod migration_v3;
 mod migration_v4;
@@ -47,6 +49,7 @@ pub use activity_assignments::{
     MAX_ACTIVITY_ASSIGNMENT_BATCH,
 };
 pub use capture_sources::CaptureClientObservation;
+pub use codex_exec::{CodexExecCallRecord, CodexExecOperation, CodexExecStatus, CodexTokenUsage};
 pub use ingest::RecordActivity;
 pub use models::{
     ActivityConversationTurn, ActivityDetail, ActivityOriginDetail, ActivityProjectSummary,
@@ -133,6 +136,8 @@ pub enum StoreError {
     InvalidActivityAssignment(String),
     #[error("invalid work curation: {0}")]
     InvalidCuration(String),
+    #[error("invalid Codex exec call record: {0}")]
+    InvalidCodexExecCall(String),
     #[error("a project cannot be merged into itself")]
     SameProjectMerge,
     #[error("store invariant violated: {0}")]

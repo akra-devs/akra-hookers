@@ -154,7 +154,7 @@ pub(crate) async fn create_proposal(
                 "A local Codex runtime is required to organize selected logs.",
             )
         })?;
-    let curator = CodexWorkCurator::new(targets);
+    let curator = CodexWorkCurator::new(targets, Arc::clone(&state.store));
     let groups = curator
         .propose(preparation.input())
         .await
@@ -325,6 +325,12 @@ fn curation_error(error: SummarizationError) -> ApiError {
             ApiError::service_unavailable(
                 "curation_output_invalid",
                 "Codex Spark returned an invalid grouping. Try again or select fewer logs.",
+            )
+        }
+        SummarizationError::QuotaCircuitOpen { .. } | SummarizationError::QuotaLimited { .. } => {
+            ApiError::service_unavailable(
+                "codex_quota_limited",
+                "Codex usage is temporarily exhausted. Try again after the quota circuit reopens.",
             )
         }
         _ => ApiError::service_unavailable(

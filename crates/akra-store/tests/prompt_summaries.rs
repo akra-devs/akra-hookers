@@ -390,6 +390,42 @@ async fn prompt_summary_failures_retry_once_then_become_terminal() {
 }
 
 #[tokio::test]
+async fn quota_deferral_does_not_consume_a_prompt_summary_attempt() {
+    let store = migrated_store().await;
+    store
+        .set_prompt_summary_policy("codex", PromptSummaryPolicy::Smart)
+        .await
+        .expect("enable smart summaries");
+    record(&store, "quota-defer", &"가".repeat(300), 10).await;
+    let first = store
+        .claim_prompt_summary(10, 10)
+        .await
+        .expect("claim")
+        .expect("first claim");
+    assert_eq!(first.attempt_number(), 1);
+    assert_eq!(
+        store
+            .defer_prompt_summary(&first, 100, akra_store::PromptSummaryErrorCode::Runtime, 11,)
+            .await
+            .expect("defer"),
+        PromptSummaryFailureDisposition::RetryScheduled
+    );
+    assert!(
+        store
+            .claim_prompt_summary(99, 10)
+            .await
+            .expect("early claim")
+            .is_none()
+    );
+    let retried = store
+        .claim_prompt_summary(100, 10)
+        .await
+        .expect("claim")
+        .expect("deferred claim");
+    assert_eq!(retried.attempt_number(), 1);
+}
+
+#[tokio::test]
 async fn a_matching_standalone_input_reuses_a_verified_summary_without_another_claim() {
     let store = migrated_store().await;
     store
