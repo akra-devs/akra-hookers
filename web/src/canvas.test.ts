@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ActivitySummary } from "./api";
 import {
+  displayedToPersistedCanvasOffset,
   toCanvasNodes,
   toPersistedCanvasPosition,
   toVisibleEdges,
@@ -138,6 +139,20 @@ describe("toCanvasNodes", () => {
       { x: 480, y: 344 },
       persisted,
       displayed,
+    )).toEqual({ x: 4_176, y: 2_260 });
+  });
+
+  it("keeps the drag-start offset when a filtered layout changes mid-drag", () => {
+    const persisted = { id: 12, activity_event_id: 2, position_x: 4_096, position_y: 2_200 };
+    const dragStartDisplayed = { position: { x: 400, y: 284 } };
+    const latestDisplayed = { position: { x: 736, y: 504 } };
+    const dragStartOffset = displayedToPersistedCanvasOffset(persisted, dragStartDisplayed);
+
+    expect(toPersistedCanvasPosition(
+      { x: 480, y: 344 },
+      persisted,
+      latestDisplayed,
+      dragStartOffset,
     )).toEqual({ x: 4_176, y: 2_260 });
   });
 

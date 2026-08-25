@@ -57,15 +57,28 @@ export function toCanvasNodes(
     : nodes;
 }
 
+export function displayedToPersistedCanvasOffset(
+  canvasNode: CanvasNode,
+  displayedNode: Pick<ActivityFlowNode, "position"> | undefined,
+): XYPosition {
+  if (!displayedNode) return { x: 0, y: 0 };
+  return {
+    x: canvasNode.position_x - displayedNode.position.x,
+    y: canvasNode.position_y - displayedNode.position.y,
+  };
+}
+
 export function toPersistedCanvasPosition(
   position: XYPosition,
   canvasNode: CanvasNode,
   displayedNode: Pick<ActivityFlowNode, "position"> | undefined,
+  displayedToPersistedOffset?: XYPosition,
 ): XYPosition {
-  if (!displayedNode) return position;
+  const offset = displayedToPersistedOffset
+    ?? displayedToPersistedCanvasOffset(canvasNode, displayedNode);
   return {
-    x: position.x + canvasNode.position_x - displayedNode.position.x,
-    y: position.y + canvasNode.position_y - displayedNode.position.y,
+    x: position.x + offset.x,
+    y: position.y + offset.y,
   };
 }
 

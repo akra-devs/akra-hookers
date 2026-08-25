@@ -361,7 +361,11 @@ export function useDashboardData(
     ));
   }, []);
 
-  const commitNodePosition = useCallback((activityId: number, position: XYPosition) => {
+  const commitNodePosition = useCallback((
+    activityId: number,
+    position: XYPosition,
+    displayedToPersistedOffset?: XYPosition,
+  ) => {
     const currentRevision = dirtyPositions.current.get(activityId) ?? ++revision.current;
     dirtyPositions.current.set(activityId, currentRevision);
     const previous = positionQueues.current.get(activityId) ?? Promise.resolve();
@@ -375,6 +379,7 @@ export function useDashboardData(
         position,
         canvasNode,
         displayedNode,
+        displayedToPersistedOffset,
       );
       try {
         await client.updateCanvasPosition(canvasNode.id, persistedPosition);
