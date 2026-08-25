@@ -9,7 +9,11 @@ import {
   isActivityKindVisible,
   type ActivityVisibility,
 } from "../activity-visibility";
-import { toCanvasNodes, toVisibleEdges } from "../canvas";
+import {
+  toCanvasNodes,
+  toPersistedCanvasPosition,
+  toVisibleEdges,
+} from "../canvas";
 import type { ActivityFlowNode } from "../components/ActivityNode";
 
 const ACTIVITY_PAGE_SIZE = 100;
@@ -365,8 +369,15 @@ export function useDashboardData(
     queued = previous.catch(() => undefined).then(async () => {
       const canvasNode = canvas.data?.find((node) => node.activity_event_id === activityId);
       if (!client || !canvasNode) return;
+      const displayedNode = mapCanvasNodes(canvas.data ?? [])
+        .find((node) => node.data.activityId === activityId);
+      const persistedPosition = toPersistedCanvasPosition(
+        position,
+        canvasNode,
+        displayedNode,
+      );
       try {
-        await client.updateCanvasPosition(canvasNode.id, position);
+        await client.updateCanvasPosition(canvasNode.id, persistedPosition);
         const result = await canvas.refetch();
         if (dirtyPositions.current.get(activityId) !== currentRevision) return;
         dirtyPositions.current.delete(activityId);

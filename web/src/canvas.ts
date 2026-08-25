@@ -1,4 +1,4 @@
-import { MarkerType, type Edge } from "@xyflow/react";
+import { MarkerType, type Edge, type XYPosition } from "@xyflow/react";
 
 import type { ActivitySummary, CanvasEdge, CanvasNode } from "./api";
 import type { ActivityFlowNode } from "./components/ActivityNode";
@@ -55,6 +55,18 @@ export function toCanvasNodes(
   return positionLayout === "compact-filtered"
     ? compactPositionGaps(nodes)
     : nodes;
+}
+
+export function toPersistedCanvasPosition(
+  position: XYPosition,
+  canvasNode: CanvasNode,
+  displayedNode: Pick<ActivityFlowNode, "position"> | undefined,
+): XYPosition {
+  if (!displayedNode) return position;
+  return {
+    x: position.x + canvasNode.position_x - displayedNode.position.x,
+    y: position.y + canvasNode.position_y - displayedNode.position.y,
+  };
 }
 
 function compactAxis(values: number[], maximumGap: number): Map<number, number> {
